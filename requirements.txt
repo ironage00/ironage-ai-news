@@ -1,0 +1,47 @@
+# IRONAGE AI Analytics System v4.0
+# 필수 Python 패키지
+
+# 웹 스크래핑 및 RSS
+feedparser==6.0.10
+requests==2.31.0
+urllib3==2.0.7
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# 날짜 처리
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Google API
+google-api-python-client==2.108.0
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+
+# AI
+openai>=1.12.0
+anthropic>=0.18.0           # Claude API
+google-generativeai>=0.3.0  # Gemini API
+
+# 데이터베이스
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9      # PostgreSQL (Supabase) 연결
+python-dotenv==1.0.0        # 로컬 .env 파일 로드
+
+# 데이터 처리
+pandas>=2.0.0
+openpyxl==3.1.2
+
+# 웹 대시보드
+streamlit>=1.28.0
+streamlit-option-menu==0.3.6
+plotly>=5.18.0
+
+# 이메일
+# (내장 모듈: smtplib, email)
+
+# 지식 그래프 (Phase 3)
+networkx>=3.0
+pyvis>=0.3.2
+
+# 기타
+Pillow>=10.0.0

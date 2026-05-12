@@ -1,0 +1,22 @@
+# 환경변수 / 시크릿
+.env
+data/config.json
+credentials.json
+token.json
+ironage-sa.json
+
+# 데이터
+data/news.db
+data/logs/
+data/reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
