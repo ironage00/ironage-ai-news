@@ -85,9 +85,14 @@ st.set_page_config(
 )
 
 # ===== Google OAuth 인증 =====
-# Streamlit Community Cloud 환경에서는 st.experimental_user가 활성화됨.
-# 로컬 개발 환경에서는 is_logged_in이 없으므로 hasattr로 확인.
-_auth_enabled = hasattr(st.experimental_user, 'is_logged_in')
+# st.experimental_user 접근 자체가 예외를 던질 수 있으므로 try/except로 감쌈.
+# Google OAuth client_id/secret이 secrets에 없으면 _auth_enabled=False (로컬 모드).
+_auth_enabled = False
+try:
+    if hasattr(st, 'experimental_user'):
+        _auth_enabled = hasattr(st.experimental_user, 'is_logged_in')
+except Exception:
+    _auth_enabled = False
 
 if _auth_enabled:
     if not st.experimental_user.is_logged_in:
@@ -111,7 +116,7 @@ if _auth_enabled:
             st.logout()
         st.stop()
 else:
-    # 로컬 개발 모드 — 인증 없이 통과
+    # 로컬 개발 모드 또는 OAuth 미설정 — 인증 없이 통과
     _user_email = "local@tta.or.kr"
     _user_name  = "로컬 개발자"
 
