@@ -563,11 +563,11 @@ if selected == "대시보드":
             # ✅ 6단계: 주간 누적 엑셀 자동 저장
             status_text.markdown("### 📊 6/7: 주간 누적 엑셀 자동 저장 중...")
             progress_bar.progress(0.9)
-        
+
+            year, week, week_str = get_week_number()
             excel_path = save_analysis_to_weekly_excel(analyzed_results)
-        
+
             if excel_path:
-                year, week, week_str = get_week_number()
                 st.success(f"✅ 6단계: 주간 엑셀 누적 저장 완료 ({week_str})")
                 st.info(f"📂 저장 위치: {excel_path}")
                 
@@ -611,17 +611,10 @@ if selected == "대시보드":
         
             st.success("🎉 모든 작업이 완료되었습니다!")
             st.info(f"""
-            📁 **생성된 파일 확인:**
-            - 주간 누적 엑셀: `data/reports/news_analysis_{week_str}.xlsx` (누적)
-            - 키워드 통계: `data/reports/keyword_summary_{week_str}.xlsx` (누적)
-        
-            📊 **이번 실행 결과:**
+            📊 **이번 실행 결과 ({week_str}):**
             - AI 선별: {len(selected_news)}개 (최대 60개)
             - 심층 분석: {len(analyzed_results)}개
             - 추가 수집 뉴스: {len(remaining_selected_news)}개 (이메일 발송)
-        
-            💡 **파일 다운로드:**
-            '뉴스 관리' → '주차별 보고서' 탭에서 확인하세요.
             """)
         
             st.balloons()
