@@ -540,11 +540,22 @@ if selected == "대시보드":
             progress_bar.progress(0.65)
         
             doc_url, report_title = generate_google_doc_report(analyzed_results)
-        
+
+            # Google Docs 실패 시 기본 제목 생성
+            if not report_title:
+                import datetime as _dt
+                report_title = f"전파·이동통신 동향 보고서 ({_dt.date.today().strftime('%Y년 %m월 %d일')})"
+
             if doc_url:
                 st.success("✅ 4단계: 문서 생성 완료")
                 st.markdown(f"[📄 구글 문서 보기]({doc_url})")
-        
+            else:
+                st.warning("⚠️ 4단계: Google Docs 생성 실패 — 이메일 본문으로만 발송됩니다.")
+                # 실제 오류 확인용: news_engine 로그에서 원인 확인
+                sa_check = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+                if not sa_check:
+                    st.error("❌ GOOGLE_SERVICE_ACCOUNT_JSON 환경변수가 없습니다. Streamlit Secrets를 확인하세요.")
+
             progress_bar.progress(0.75)
         
             # 5단계: 이메일 (수정 버전)

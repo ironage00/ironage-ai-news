@@ -2632,14 +2632,16 @@ def get_google_docs_service():
             pass
 
     if sa_json_str:
-        info = json.loads(sa_json_str) if isinstance(sa_json_str, str) else sa_json_str
-        creds = service_account.Credentials.from_service_account_info(
-            info,
-            scopes=SCOPES
-        )
-        docs_service = build('docs', 'v1', credentials=creds)
-        drive_service = build('drive', 'v3', credentials=creds)
-        return docs_service, drive_service
+        try:
+            info = json.loads(sa_json_str) if isinstance(sa_json_str, str) else dict(sa_json_str)
+            creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+            docs_service = build('docs', 'v1', credentials=creds)
+            drive_service = build('drive', 'v3', credentials=creds)
+            log_info("  ✅ Service Account 인증 성공")
+            return docs_service, drive_service
+        except Exception as e:
+            log_error(f"  ❌ Service Account 인증 실패: {type(e).__name__}: {e}")
+            raise
 
     if os.path.exists('ironage-sa.json'):
         creds = service_account.Credentials.from_service_account_file(
