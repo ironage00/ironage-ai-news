@@ -744,22 +744,44 @@ def extract_signature(title: str) -> tuple:
 # ==============================================================================
 
 def load_config():
-    """config.json에서 설정을 로드"""
+    """config.json에서 설정을 로드. 없으면 환경변수 사용 (Streamlit Cloud)."""
     config_file = Path("data/config.json")
-    
+
+    # Streamlit Cloud 환경에서 사용하는 RSS 피드 및 검색 키워드 기본값
+    _default_rss = [
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487599294",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/7282625974461397688",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487600193",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487600258",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/6144919849490706746",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/13972650129806487379",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/12348804382892789873",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2496376606356182211",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2496376606356184244",
+        "https://www.google.co.kr/alerts/feeds/14299983816346888060/6144919849490706848",
+        "https://www.itu.int/hub/feed/",
+        "https://www.etsi.org/?option=com_obrss&task=feed&id=2:rss-news-press&format=feed&Itemid=1094",
+        "https://ieeetv.ieee.org/channel_rss/ieee_future_networks/rss",
+        "https://ieeetv.ieee.org/channel_rss/series_channel_9/rss",
+        "https://api2.fcc.gov/api/exp/v1.0.0/edocspublic/rss/bureaus/SB",
+        "https://api2.fcc.gov/api/exp/v1.0.0/edocspublic/rss/bureaus/IB",
+        "https://www.msit.go.kr/user/rss/rss.do?bbsSeqNo=94",
+    ]
+    _default_queries = ["위성통신", "6G", "클라우드", "3GPP", "FCC", "양자", "UAM", "SDV"]
+
     default_config = {
         'ai_model': 'openai',
-        'openai_api_key': '',
-        'claude_api_key': '',
-        'gemini_api_key': '',
-        'perplexity_api_key': '',
-        'naver_client_id': '',
-        'naver_client_secret': '',
-        'gmail_sender': '',
-        'gmail_password': '',
-        'gmail_receivers': [],
-        'google_alerts_rss': [],
-        'naver_queries': [],
+        'openai_api_key': os.environ.get('OPENAI_API_KEY', ''),
+        'claude_api_key': os.environ.get('CLAUDE_API_KEY', ''),
+        'gemini_api_key': os.environ.get('GEMINI_API_KEY', ''),
+        'perplexity_api_key': os.environ.get('PERPLEXITY_API_KEY', ''),
+        'naver_client_id': os.environ.get('NAVER_CLIENT_ID', ''),
+        'naver_client_secret': os.environ.get('NAVER_CLIENT_SECRET', ''),
+        'gmail_sender': os.environ.get('GMAIL_SENDER', ''),
+        'gmail_password': os.environ.get('GMAIL_PASSWORD', ''),
+        'gmail_receivers': [os.environ.get('GMAIL_SENDER', '')] if os.environ.get('GMAIL_SENDER') else [],
+        'google_alerts_rss': _default_rss,
+        'naver_queries': _default_queries,
         'schedule_daily': '09:00',
         'schedule_weekly': 'Monday 09:00',
         'schedule_monthly': '1 09:00',
@@ -786,8 +808,7 @@ def load_config():
             log_warning(f"⚠️ config.json 로드 실패: {e}")
             log_info("   기본 설정값을 사용합니다.")
     else:
-        log_info("ℹ️  config.json이 없습니다. 기본 설정값을 사용합니다.")
-        log_info("   main_app.py의 설정 탭에서 API 키와 검색 키워드를 설정하세요.")
+        log_info("ℹ️  config.json이 없습니다. 환경변수(Streamlit Secrets)에서 API 키를 로드합니다.")
     
     return default_config
 
