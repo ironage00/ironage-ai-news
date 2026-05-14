@@ -1,9 +1,7 @@
 name: Daily News Collection
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # 00:00 UTC = 09:00 KST
-  workflow_dispatch:        # 수동 실행 가능
+  workflow_dispatch:        # cron-job.org 또는 수동 실행
 
 jobs:
   collect:
