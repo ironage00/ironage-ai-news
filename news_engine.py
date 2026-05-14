@@ -779,7 +779,10 @@ def load_config():
         'naver_client_secret': os.environ.get('NAVER_CLIENT_SECRET', ''),
         'gmail_sender': os.environ.get('GMAIL_SENDER', ''),
         'gmail_password': os.environ.get('GMAIL_PASSWORD', ''),
-        'gmail_receivers': [os.environ.get('GMAIL_SENDER', '')] if os.environ.get('GMAIL_SENDER') else [],
+        'gmail_receivers': (
+            [r.strip() for r in os.environ.get('GMAIL_RECEIVERS', '').split(',') if r.strip()]
+            or ([os.environ.get('GMAIL_SENDER')] if os.environ.get('GMAIL_SENDER') else [])
+        ),
         'google_alerts_rss': _default_rss,
         'naver_queries': _default_queries,
         'schedule_daily': '09:00',
