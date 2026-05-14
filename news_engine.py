@@ -4846,7 +4846,7 @@ def run_daily_collection(ai_model: str = None):
     )
 
     # Bug 4: Docs 실패 여부와 무관하게 이메일 항상 발송
-    report_title = report_title or f"ICT 뉴스 트렌드 분석 ({datetime.date.today()})"
+    report_title = report_title or f"전파·이동통신 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
     log_info(f"   📰 추가 수집 뉴스: {len(other_news)}개 (선별된 목록 중 미분석)")
     safe_execute(
         lambda: send_gmail_report(
@@ -4934,13 +4934,13 @@ def run_weekly_report():
     
     if not analysis_result or not analysis_result.get('key_issues'):
         log_warning("⚠️ 트렌드 분석에 실패했습니다. 기본 보고서를 생성합니다.")
-        report_title = f"주간 ICT 뉴스 트렌드 분석 ({datetime.date.today()})"
+        report_title = f"전파·이동통신 주간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         doc_url, _ = generate_google_doc_report(articles)
         send_gmail_report(report_title, articles, doc_url, [])  # Bug 4: always send
         return doc_url
-    
+
     log_info(f"  ✅ AI 분석 완료: {len(analysis_result['key_issues'])}개 핵심 이슈 도출")
-    
+
     log_info("\n[3/5] 트렌드 리포트 문서 생성 중...")
     # FIX: 존재하지 않을 수 있는 함수 import를 try-except로 감싸기
     try:
@@ -4948,13 +4948,13 @@ def run_weekly_report():
         doc_url, report_title = generate_trend_report_doc(analysis_result, report_type='weekly')
     except ImportError:
         log_warning("⚠️ generate_trend_report_doc 미정의 - 기본 문서 생성으로 대체합니다.")
-        report_title = f"주간 ICT 뉴스 트렌드 분석 ({datetime.date.today()})"
+        report_title = f"전파·이동통신 주간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         doc_url, _ = generate_google_doc_report(articles)
 
     if not doc_url:
         # Bug 4: Docs 실패 시에도 이메일 발송 후 종료
         log_warning("⚠️ 구글 문서 생성에 실패했습니다. 이메일만 발송합니다.")
-        _fallback_title = report_title or f"주간 ICT 뉴스 트렌드 분석 ({datetime.date.today()})"
+        _fallback_title = report_title or f"전파·이동통신 주간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         send_gmail_report(_fallback_title, articles, None, [])
         return None
 
@@ -5018,17 +5018,17 @@ def run_monthly_report():
     
     if not analysis_result or not analysis_result.get('key_issues'):
         log_warning("⚠️ 트렌드 분석에 실패했습니다. 기본 보고서를 생성합니다.")
-        report_title = f"월간 ICT 뉴스 종합 분석 ({datetime.date.today()})"
+        report_title = f"전파·이동통신 월간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         doc_url, _ = generate_google_doc_report(articles)
         if doc_url:
             send_gmail_report(report_title, articles, doc_url, [])
         return doc_url
-    
+
     log_info(f"  ✅ AI 분석 완료:")
     log_info(f"     - 핵심 이슈: {len(analysis_result['key_issues'])}개")
     log_info(f"     - 트렌드: {len(analysis_result.get('trends', []))}개")
     log_info(f"     - 기술 하이라이트: {len(analysis_result.get('technology_highlights', []))}개")
-    
+
     log_info("\n[3/5] 월간 트렌드 리포트 문서 생성 중...")
     # FIX: 존재하지 않을 수 있는 함수 import를 try-except로 감싸기
     try:
@@ -5036,7 +5036,7 @@ def run_monthly_report():
         doc_url, report_title = generate_trend_report_doc(analysis_result, report_type='monthly')
     except ImportError:
         log_warning("⚠️ generate_trend_report_doc 미정의 - 기본 문서 생성으로 대체합니다.")
-        report_title = f"월간 ICT 뉴스 종합 분석 ({datetime.date.today()})"
+        report_title = f"전파·이동통신 월간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         doc_url, _ = generate_google_doc_report(articles)
 
     if not doc_url:
