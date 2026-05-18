@@ -1,4 +1,4 @@
-"""
+﻿"""
 IRONAGE AI Analytics System v5.0
 뉴스 수집 및 분석 엔진 (오류 수정 버전)
 """
@@ -2174,7 +2174,8 @@ def analyze_news_with_ai(news_item, max_retries=3, ai_model: str = None):
 - TTA 표준화본부 관점의 구체적 행동 지침 (예: "3GPP SA2 회의 참여 강화", "ITU-T SG13 의견서 제출 검토")
 - 기사 내용에 직접 근거한 실질적 대응 방안
 - 반드시 한 문장 이상 기재 (빈 문자열 불허)
-- **최소 50자 이상** 작성, 구체적 수치·일정·기구명 포함 필수 (예: "{_current_year}년 3GPP SA2 회의 참여하여 6G NTN 관련 세션 기여문서 제출")
+- **최소 50자 이상** 작성, 구체적 수치·일정·기구명 포함 필수
+- ⚠️ 반드시 기사에서 직접 언급된 기술·기구·이슈를 근거로 TTA 고유 행동 지침을 작성할 것. 아래 예시를 절대 그대로 복사하지 말 것 (예: "{_current_year}년 ITU-T FG-AI4EE 회의에서 에너지 효율 표준화 동향 파악 및 국내 의견서 제출 검토")
 - TTA는 **국가** 표준화 기관임. '도내', '지역', '지방' 한정 표현 절대 사용 금지 → '국내 산업계', '국내 기업', '국내 회원사' 등으로 표현
 - 이미 지난 과거 시점({_current_year - 1}년 이전) 기준의 조치사항 작성 금지 → 현재({_current_year}년) 또는 미래 시점의 실행 가능한 행동 지침만 기재
 
@@ -2776,6 +2777,11 @@ def save_user_settings(user_email: str, settings: dict):
         log_warning(f"save_user_settings 오류: {e}")
 
 
+def _utf16_len(s: str) -> int:
+    """Google Docs API는 UTF-16 코드 유닛 기준으로 위치를 계산함. 이모지(U+10000+)는 2유닛."""
+    return len(s.encode('utf-16-le')) // 2
+
+
 @performance_monitor
 def generate_google_doc_report(analyzed_data):
     """세련된 디자인의 구글 문서 보고서를 생성"""
@@ -2830,7 +2836,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,bold,foregroundColor'
             }
         })
-        index += len(title_text)
+        index += _utf16_len(title_text)
         
         # 부제목
         subtitle_text = f"한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀\n작성일: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}\n"
@@ -2852,7 +2858,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,foregroundColor'
             }
         })
-        index += len(subtitle_text)
+        index += _utf16_len(subtitle_text)
         
         # 구분선
         divider_text = "━" * 50 + "\n\n"
@@ -2867,7 +2873,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,foregroundColor'
             }
         })
-        index += len(divider_text)
+        index += _utf16_len(divider_text)
 
         # Phase 7: 전주 대비 급등 키워드 TOP 5 섹션
         try:
@@ -2903,7 +2909,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize,bold,foregroundColor'
                     }
                 })
-                index += len(surge_header)
+                index += _utf16_len(surge_header)
                 for _rank, _ent in enumerate(_surge_entities, 1):
                     _name = _ent.get('name', '')
                     _ntype = _ent.get('node_type', '')
@@ -2926,10 +2932,10 @@ def generate_google_doc_report(analyzed_data):
                             'fields': 'fontSize,foregroundColor'
                         }
                     })
-                    index += len(_row)
+                    index += _utf16_len(_row)
                 _surge_gap = "\n"
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': _surge_gap}})
-                index += len(_surge_gap)
+                index += _utf16_len(_surge_gap)
         except ImportError:
             log_warning("  ⚠️ knowledge_graph 모듈 없음 — 급등 키워드 섹션 건너뜀")
         except Exception as _phase7_err:
@@ -2948,7 +2954,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,bold'
             }
         })
-        index += len(disclaimer_text)
+        index += _utf16_len(disclaimer_text)
         
         disclaimer_content = "본 보고서는 IRONAGE AI Analytics System이 자동으로 생성한 분석 보고서입니다.\nAI가 수집한 뉴스를 기반으로 작성되었으며, 개인적인 의견을 포함하지 않습니다.\n\n"
         requests_list.append({'insertText': {'location': {'index': index}, 'text': disclaimer_content}})
@@ -2975,7 +2981,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,italic,foregroundColor'
             }
         })
-        index += len(disclaimer_content)
+        index += _utf16_len(disclaimer_content)
         
         # 목차
         toc_header = "📋 목차\n"
@@ -2991,7 +2997,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,bold,foregroundColor'
             }
         })
-        index += len(toc_header)
+        index += _utf16_len(toc_header)
         
         for i, data in enumerate(analyzed_data[:10], 1):
             toc_item = f"  {i}. {data['title'][:50]}...\n"
@@ -3006,11 +3012,11 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'fontSize,foregroundColor'
                 }
             })
-            index += len(toc_item)
+            index += _utf16_len(toc_item)
         
         toc_end = "\n"
         requests_list.append({'insertText': {'location': {'index': index}, 'text': toc_end}})
-        index += len(toc_end)
+        index += _utf16_len(toc_end)
 
         # ── 영향도 요약 섹션 (Critical / High 우선 노출) ──────────────────
         critical_high = [
@@ -3034,7 +3040,7 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'fontSize,bold,foregroundColor'
                 }
             })
-            index += len(impact_header)
+            index += _utf16_len(impact_header)
 
             for art, info in critical_high:
                 icon = IMPACT_LEVEL_ICON.get(info['impact_level'], '📋')
@@ -3053,11 +3059,11 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize,foregroundColor'
                     }
                 })
-                index += len(summary_line)
+                index += _utf16_len(summary_line)
 
             sep = "\n"
             requests_list.append({'insertText': {'location': {'index': index}, 'text': sep}})
-            index += len(sep)
+            index += _utf16_len(sep)
 
         # 각 뉴스 아이템
         for i, data in enumerate(analyzed_data):
@@ -3084,7 +3090,7 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'spaceAbove,spaceBelow'
                 }
             })
-            index += len(news_header)
+            index += _utf16_len(news_header)
             
             meta_text = f"📰 출처: {data['source']}  |  📅 발행일: {data['published']}\n"
             requests_list.append({'insertText': {'location': {'index': index}, 'text': meta_text}})
@@ -3098,7 +3104,7 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'fontSize,foregroundColor'
                 }
             })
-            index += len(meta_text)
+            index += _utf16_len(meta_text)
             
             link_text = f"🔗 원문: {data['link']}\n\n"
             requests_list.append({'insertText': {'location': {'index': index}, 'text': link_text}})
@@ -3114,7 +3120,7 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'fontSize,link,foregroundColor,underline'
                 }
             })
-            index += len(link_text)
+            index += _utf16_len(link_text)
 
             # ── 영향도 배지 + TTA 조치 사항 ────────────────────────────
             impact_info = _get_impact_info(data)
@@ -3135,7 +3141,7 @@ def generate_google_doc_report(analyzed_data):
                     'fields': 'fontSize,bold,foregroundColor'
                 }
             })
-            index += len(badge_text)
+            index += _utf16_len(badge_text)
 
             tta = impact_info['tta_action_item']
             if tta:
@@ -3158,7 +3164,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'shading,spaceAbove'
                     }
                 })
-                index += len(tta_label)
+                index += _utf16_len(tta_label)
 
                 tta_body = f"{tta}\n\n"
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_body}})
@@ -3179,7 +3185,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize'
                     }
                 })
-                index += len(tta_body)
+                index += _utf16_len(tta_body)
 
             std_gap = impact_info['standardization_gap']
             if std_gap and std_gap != '기사에서 표준화 현황 정보 미확인':
@@ -3192,7 +3198,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize,bold'
                     }
                 })
-                index += len(gap_label)
+                index += _utf16_len(gap_label)
 
                 gap_body = f"{std_gap}\n\n"
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': gap_body}})
@@ -3210,7 +3216,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize'
                     }
                 })
-                index += len(gap_body)
+                index += _utf16_len(gap_body)
 
             analysis_text = data.get('analysis_result', '')
 
@@ -3271,7 +3277,7 @@ def generate_google_doc_report(analyzed_data):
                         }
                     })
                 
-                index += len(section_title)
+                index += _utf16_len(section_title)
                 
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': section_body}})
                 requests_list.append({
@@ -3293,7 +3299,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize'
                     }
                 })
-                index += len(section_body)
+                index += _utf16_len(section_body)
             
             if i < len(analyzed_data) - 1:
                 separator = "\n" + "─" * 40 + "\n"
@@ -3308,7 +3314,7 @@ def generate_google_doc_report(analyzed_data):
                         'fields': 'fontSize,foregroundColor'
                     }
                 })
-                index += len(separator)
+                index += _utf16_len(separator)
 
         # 문서 푸터
         footer_text = f"\n\n{'=' * 60}\n"
@@ -3339,7 +3345,7 @@ def generate_google_doc_report(analyzed_data):
                 'fields': 'fontSize,foregroundColor,italic'
             }
         })
-        index += len(footer_text)
+        index += _utf16_len(footer_text)
 
         # ── Bug 3: requests_list 100개 단위 청크 분할 + 소켓 타임아웃 120초 ─────
         _CHUNK_SIZE = 100
@@ -4742,6 +4748,22 @@ def run_daily_collection(ai_model: str = None):
     log_info(f"🤖 사용 AI 모델: {ai_model.upper()}")
     log_info("=" * 60)
 
+    # 당일 중복 실행 방지: 오늘 이미 분석 완료된 기사가 5개 이상이면 스킵
+    try:
+        _today_start = datetime.datetime.now(datetime.timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        with get_db_session() as _s:
+            _today_analyzed = _s.query(NewsArticle).filter(
+                NewsArticle.collected_at >= _today_start,
+                NewsArticle.is_analyzed == True
+            ).count()
+        if _today_analyzed >= 5:
+            log_info(f"ℹ️ 오늘 이미 {_today_analyzed}개 기사 분석 완료 — 중복 실행 건너뜀.")
+            return []
+    except Exception as _dup_err:
+        log_warning(f"⚠️ 중복 실행 체크 실패 (계속 진행): {_dup_err}")
+
     log_info("\n[작업 0/8] 경쟁 기관 (3GPP·ETSI·ITU) 뉴스 수집 중...")
     standards_news = safe_execute(
         lambda: get_standards_org_news(days=1),
@@ -5140,3 +5162,4 @@ if __name__ == "__main__":
             log_info("=" * 60)
     else:
         run_daily_collection()
+
