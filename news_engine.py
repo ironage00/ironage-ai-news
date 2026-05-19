@@ -2798,7 +2798,13 @@ def generate_google_doc_report(analyzed_data):
     document_title = f"전파·이동통신 동향 보고서 ({current_date})"
 
     try:
-        document = docs_service.documents().create(body={'title': document_title}).execute()
+        try:
+            document = docs_service.documents().create(body={'title': document_title}).execute()
+        except Exception as _docs_create_err:
+            _err_str = str(_docs_create_err)
+            if '403' in _err_str and 'permission' in _err_str.lower():
+                log_error("  ❌ Google Docs 생성 권한 없음 (403). GCP 콘솔 → API 및 서비스 → Google Docs API 활성화 필요.")
+            raise
         document_id = document.get('documentId')
         
         permission = {'type': 'anyone', 'role': 'reader'}
@@ -3426,7 +3432,7 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news):
 
     news_items_html = ""
     for i, data in enumerate(sorted_data):
-        analysis_text = data.get('analysis_result', '')
+        analysis_text = data.get('analysis_result') or ''
         main_content = None
         implications = "시사점 정보를 찾을 수 없습니다."
 
@@ -3470,8 +3476,8 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news):
             
         except Exception as e:
             log_error(f"  (경고) AI 분석 결과 파싱 중 오류 발생: {e}")
-            main_content = main_content.replace('ㅇ', '•').replace('\n', '<br>')
-            implications = implications.replace('ㅇ', '•').replace('\n', '<br>')
+            main_content = (main_content or "주요내용 정보를 찾을 수 없습니다.").replace('ㅇ', '•').replace('\n', '<br>')
+            implications = (implications or "시사점 정보를 찾을 수 없습니다.").replace('ㅇ', '•').replace('\n', '<br>')
 
         impact_info = _get_impact_info(data)
         impact_level = impact_info['impact_level']
