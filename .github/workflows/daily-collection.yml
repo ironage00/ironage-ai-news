@@ -40,6 +40,7 @@ jobs:
           GMAIL_SENDER:           ${{ secrets.GMAIL_SENDER }}
           GMAIL_PASSWORD:         ${{ secrets.GMAIL_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
 
       - name: Save DB to cache
         if: always()

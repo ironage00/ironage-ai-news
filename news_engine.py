@@ -2629,9 +2629,35 @@ def get_google_docs_service():
               2) ironage-sa.json 파일
               3) 레거시 OAuth2 token.json (로컬 개발용)
     """
-    sa_json_str = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+    # ── 우선순위 1: OAuth2 사용자 토큰 (Docs 생성 가능, GitHub Actions용) ──
+    token_json_str = os.environ.get('GOOGLE_TOKEN_JSON')
+    if not token_json_str:
+        try:
+            import streamlit as st
+            token_json_str = st.secrets.get('GOOGLE_TOKEN_JSON')
+        except Exception:
+            pass
+    if not token_json_str and os.path.exists('token.json'):
+        token_json_str = open('token.json').read()
 
-    # Streamlit Secrets에서도 시도
+    if token_json_str:
+        try:
+            token_info = json.loads(token_json_str) if isinstance(token_json_str, str) else dict(token_json_str)
+            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            if not creds.valid:
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    raise ValueError("OAuth2 토큰 만료, 재인증 필요")
+            docs_service = build('docs', 'v1', credentials=creds)
+            drive_service = build('drive', 'v3', credentials=creds)
+            log_info("  ✅ OAuth2 사용자 인증 성공")
+            return docs_service, drive_service
+        except Exception as e:
+            log_warning(f"  ⚠️ OAuth2 인증 실패 ({e}), 서비스 계정으로 폴백")
+
+    # ── 우선순위 2: 서비스 계정 (Docs 생성 불가, Drive 전용) ──────────────
+    sa_json_str = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
     if not sa_json_str:
         try:
             import streamlit as st
@@ -2653,25 +2679,17 @@ def get_google_docs_service():
 
     if os.path.exists('ironage-sa.json'):
         creds = service_account.Credentials.from_service_account_file(
-            'ironage-sa.json',
-            scopes=SCOPES
+            'ironage-sa.json', scopes=SCOPES
         )
         docs_service = build('docs', 'v1', credentials=creds)
         drive_service = build('drive', 'v3', credentials=creds)
         return docs_service, drive_service
 
-    # 레거시 OAuth2 (로컬 개발 전용)
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    # ── 우선순위 3: 브라우저 재인증 (로컬 개발 전용) ───────────────────────
+    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+    creds = flow.run_local_server(port=0)
+    with open('token.json', 'w') as f:
+        f.write(creds.to_json())
 
     docs_service = build('docs', 'v1', credentials=creds)
     drive_service = build('drive', 'v3', credentials=creds)
