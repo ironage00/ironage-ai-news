@@ -20,10 +20,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Download DB from Google Drive
-        run: python scripts/sync_db.py download
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Restore DB from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/news.db
+          key: news-db-${{ github.run_id }}
+          restore-keys: |
+            news-db-
 
       - name: Run daily collection
         run: python news_engine.py daily
@@ -38,8 +41,9 @@ jobs:
           GMAIL_PASSWORD:         ${{ secrets.GMAIL_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
-      - name: Upload DB to Google Drive
+      - name: Save DB to cache
         if: always()
-        run: python scripts/sync_db.py upload
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/news.db
+          key: news-db-${{ github.run_id }}
