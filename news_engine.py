@@ -3426,8 +3426,33 @@ def generate_google_doc_report(analyzed_data):
 # --- 이메일 발송 함수 ---
 # ==============================================================================
 
-def send_gmail_report(report_title, analyzed_data, doc_url, other_news):
-    """분석 리포트를 개선된 디자인의 이메일로 전송"""
+def get_weekly_subscribers() -> list:
+    """user_settings에서 schedule_weekly=True인 사용자의 email_recipients를 취합.
+    등록된 사용자 설정이 없으면 전역 RECEIVER_EMAIL 반환."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_db_session() as session:
+            rows = session.execute(
+                sa_text("SELECT email_recipients FROM user_settings WHERE schedule_weekly = TRUE")
+            ).fetchall()
+        emails = set()
+        for row in rows:
+            try:
+                for addr in json.loads(row[0] or '[]'):
+                    addr = addr.strip()
+                    if addr and '@' in addr:
+                        emails.add(addr)
+            except Exception:
+                pass
+        return sorted(emails) if emails else list(RECEIVER_EMAIL)
+    except Exception as e:
+        log_warning(f"get_weekly_subscribers 오류: {e}")
+        return list(RECEIVER_EMAIL)
+
+
+def send_gmail_report(report_title, analyzed_data, doc_url, other_news, receivers=None):
+    """분석 리포트를 개선된 디자인의 이메일로 전송.
+    receivers: 수신자 목록 (None이면 전역 RECEIVER_EMAIL 사용)"""
 
     # 영향도 우선순위(Critical→High→Medium→Low)로 정렬
     sorted_data = sorted(
@@ -3985,19 +4010,24 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news):
     </html>
     """
 
+    actual_receivers = list(receivers) if receivers else list(RECEIVER_EMAIL)
+    if not actual_receivers:
+        log_warning("  ⚠️ 이메일 수신자가 없습니다. 발송 건너뜀.")
+        return
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[TTA] {report_title}"
     msg["From"] = SENDER_EMAIL
-    msg["To"] = ", ".join(RECEIVER_EMAIL)
+    msg["To"] = ", ".join(actual_receivers)
     msg["Date"] = formatdate(localtime=True)
     msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-    
+
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
             server.starttls()
             server.login(SENDER_EMAIL, GMAIL_PASSWORD)
-            server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        log_info(f"  > ✅ 이메일이 {len(RECEIVER_EMAIL)}명의 수신자에게 성공적으로 발송되었습니다.")
+            server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
+        log_info(f"  > ✅ 이메일이 {len(actual_receivers)}명의 수신자에게 성공적으로 발송되었습니다.")
     except Exception as e:
         log_error(f"  (오류) 이메일 발송에 실패했습니다: {e}")
 
@@ -4967,31 +4997,34 @@ def run_weekly_report():
     log_info("=" * 60)
     log_info("📊 주간 트렌드 리포트 생성 시작")
     log_info("=" * 60)
-    
+
+    # user_settings에서 주간 구독자 이메일 취합
+    subscribers = get_weekly_subscribers()
+    log_info(f"  📧 주간 구독자: {len(subscribers)}명 — {', '.join(subscribers)}")
+
     log_info("\n[1/5] 최근 7일간 분석된 뉴스를 불러옵니다...")
     articles = load_news_from_db(days=7, is_analyzed=True)
-    
+
     if not articles:
         log_warning("⚠️ 주간 리포트를 생성할 데이터가 없습니다.")
         return None
-    
+
     log_info(f"  ✅ {len(articles)}개의 분석된 뉴스 로드 완료")
-    
+
     log_info("\n[2/5] AI 트렌드 분석 중...")
     from trend_analyzer import analyze_weekly_trends
     analysis_result = analyze_weekly_trends(articles)
-    
+
     if not analysis_result or not analysis_result.get('key_issues'):
         log_warning("⚠️ 트렌드 분석에 실패했습니다. 기본 보고서를 생성합니다.")
         report_title = f"전파·이동통신 주간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
         doc_url, _ = generate_google_doc_report(articles)
-        send_gmail_report(report_title, articles, doc_url, [])  # Bug 4: always send
+        send_gmail_report(report_title, articles, doc_url, [], receivers=subscribers)
         return doc_url
 
     log_info(f"  ✅ AI 분석 완료: {len(analysis_result['key_issues'])}개 핵심 이슈 도출")
 
     log_info("\n[3/5] 트렌드 리포트 문서 생성 중...")
-    # FIX: 존재하지 않을 수 있는 함수 import를 try-except로 감싸기
     try:
         from trend_analyzer import generate_trend_report_doc
         doc_url, report_title = generate_trend_report_doc(analysis_result, report_type='weekly')
@@ -5001,22 +5034,21 @@ def run_weekly_report():
         doc_url, _ = generate_google_doc_report(articles)
 
     if not doc_url:
-        # Bug 4: Docs 실패 시에도 이메일 발송 후 종료
         log_warning("⚠️ 구글 문서 생성에 실패했습니다. 이메일만 발송합니다.")
         _fallback_title = report_title or f"전파·이동통신 주간 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
-        send_gmail_report(_fallback_title, articles, None, [])
+        send_gmail_report(_fallback_title, articles, None, [], receivers=subscribers)
         return None
 
     log_info(f"  ✅ 문서 생성 완료: {doc_url}")
 
     log_info("\n[4/5] 이메일 발송 중...")
-    # FIX: 존재하지 않을 수 있는 함수 import를 try-except로 감싸기
     try:
         from trend_analyzer import send_trend_report_email
-        send_trend_report_email(report_title, analysis_result, doc_url, report_type='weekly')
-    except ImportError:
-        log_warning("⚠️ send_trend_report_email 미정의 - 기본 이메일 발송으로 대체합니다.")
-        send_gmail_report(report_title, articles, doc_url, [])
+        send_trend_report_email(report_title, analysis_result, doc_url, report_type='weekly',
+                                receivers=subscribers)
+    except (ImportError, TypeError):
+        log_warning("⚠️ send_trend_report_email 미지원 - 기본 이메일 발송으로 대체합니다.")
+        send_gmail_report(report_title, articles, doc_url, [], receivers=subscribers)
     
     log_info("\n[5/5] 결과 저장 중...")
     try:

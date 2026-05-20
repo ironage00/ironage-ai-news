@@ -700,6 +700,7 @@ def send_trend_report_email(
     analysis_result: Dict,
     doc_url: str,
     report_type: str = 'weekly',
+    receivers: list = None,
 ):
     """트렌드 보고서 HTML 이메일 발송 (개조식, 링크 포함)"""
     from news_engine import SENDER_EMAIL, GMAIL_PASSWORD, RECEIVER_EMAIL
@@ -974,7 +975,8 @@ def send_trend_report_email(
     msg = MIMEMultipart("alternative")
     msg["Subject"] = report_title
     msg["From"] = SENDER_EMAIL
-    msg["To"] = ", ".join(RECEIVER_EMAIL)
+    actual_receivers = list(receivers) if receivers else list(RECEIVER_EMAIL)
+    msg["To"] = ", ".join(actual_receivers)
     msg["Date"] = formatdate(localtime=True)
     msg.attach(MIMEText(html_body, 'html', 'utf-8'))
 
@@ -982,9 +984,9 @@ def send_trend_report_email(
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, GMAIL_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+        server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
         server.quit()
-        log_info(f"  ✅ 이메일 발송 완료: {len(RECEIVER_EMAIL)}명")
+        log_info(f"  ✅ 이메일 발송 완료: {len(actual_receivers)}명")
     except Exception as e:
         log_error(f"❌ 이메일 발송 실패: {e}")
 
