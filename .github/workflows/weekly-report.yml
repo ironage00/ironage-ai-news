@@ -3,6 +3,9 @@ name: Weekly ICT Report
 on:
   workflow_dispatch:        # cron-job.org 또는 수동 실행
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   report:
     runs-on: ubuntu-latest
