@@ -120,6 +120,10 @@ else:
     _user_email = "local@tta.or.kr"
     _user_name  = "로컬 개발자"
 
+# 관리자 이메일 목록 — 운영 관리/시스템 설정 탭 접근 가능
+_ADMIN_EMAILS = {"ironage@tta.or.kr", "local@tta.or.kr"}
+_is_admin = _user_email in _ADMIN_EMAILS
+
 
 # ===== 헬퍼 함수 정의 (함수 호출 전에 정의) =====
 # get_db_session은 news_engine에서 임포트
@@ -397,10 +401,22 @@ with st.sidebar:
             st.logout()
     st.markdown("---")
 
+    _user_options = ["🏠 홈", "📰 내 뉴스피드", "🔍 AI 검색", "📊 리포트", "📈 트렌드 분석", "⚙️ 내 설정"]
+    _user_icons   = ["house", "newspaper", "search", "file-earmark-text", "graph-up", "person-gear"]
+    _admin_options = ["🛠️ 운영 대시보드", "📋 뉴스 관리", "⚙️ 시스템 설정"]
+    _admin_icons   = ["tools", "clipboard-data", "gear"]
+
+    if _is_admin:
+        _all_options = _user_options + _admin_options
+        _all_icons   = _user_icons   + _admin_icons
+    else:
+        _all_options = _user_options
+        _all_icons   = _user_icons
+
     selected = option_menu(
         menu_title="메뉴",
-        options=["대시보드", "뉴스 관리", "리포트", "뉴스 검색", "이슈 추적", "내 설정", "설정"],
-        icons=["speedometer2", "newspaper", "file-earmark-text", "search", "graph-up", "person-gear", "gear"],
+        options=_all_options,
+        icons=_all_icons,
         menu_icon="cast",
         default_index=0,
     )
@@ -411,10 +427,118 @@ with st.sidebar:
     st.markdown(f"*{datetime.now().strftime('%Y-%m-%d %H:%M')}*")
 
 
-# ===== 1. 대시보드 페이지 =====
-if selected == "대시보드":
-    st.markdown('<h1 class="main-header">📊 뉴스 인텔리전스 모니터링 대시보드</h1>', unsafe_allow_html=True)
-    
+# ===== 1. 홈 페이지 (모든 사용자) =====
+if selected == "🏠 홈":
+    from news_engine import filter_articles_by_keywords, NAVER_QUERIES as _NQ
+    st.markdown('<h1 class="main-header">🏠 IRONAGE 뉴스 인텔리전스</h1>', unsafe_allow_html=True)
+    st.markdown(f"안녕하세요, **{_user_name}** 님! 오늘의 ICT 뉴스 요약입니다.")
+    st.markdown("---")
+
+    _home_settings = load_user_settings(_user_email)
+    _home_keywords = _home_settings.get('keywords') or list(_NQ) or []
+
+    _hs = get_db_statistics()
+    _hc1, _hc2, _hc3, _hc4 = st.columns(4)
+    _hc1.metric("오늘 수집", _hs['today'])
+    _hc2.metric("분석 완료", _hs['analyzed'])
+    _hc3.metric("전체 기사", _hs['total'])
+    _hc4.metric("대기 중", _hs['pending'])
+
+    st.markdown("---")
+
+    _kw_label = ", ".join(_home_keywords[:5]) + ("..." if len(_home_keywords) > 5 else "")
+    st.markdown(f"### 📌 내 키워드 최신 뉴스 ({_kw_label or '전체'})")
+
+    _home_news_raw = load_news_from_db(days=3)
+    _home_news = filter_articles_by_keywords(_home_news_raw, _home_keywords) if _home_keywords else _home_news_raw
+    _home_analyzed = [n for n in _home_news if n.get('is_analyzed')]
+
+    if _home_analyzed:
+        for _h_art in _home_analyzed[:8]:
+            try:
+                _h_data = json.loads(_h_art.get('analysis_result') or '{}')
+            except Exception:
+                _h_data = {}
+            _h_title = _h_art.get('title', '제목 없음')
+            _h_source = _h_art.get('source', '')
+            _h_main = _h_data.get('main_content', '') or ''
+            with st.expander(f"**[{_h_source}]** {_h_title}"):
+                st.markdown(_h_main[:300] + ("..." if len(_h_main) > 300 else ""))
+                if _h_art.get('link'):
+                    st.markdown(f"[🔗 원문 보기]({_h_art['link']})")
+                st.caption(f"수집일: {str(_h_art.get('collected_at', ''))[:10]}")
+    else:
+        st.info("오늘 키워드에 맞는 분석 기사가 없습니다. **⚙️ 내 설정**에서 키워드를 확인하거나, "
+                "관리자에게 수집 실행을 요청하세요.")
+
+    st.markdown("---")
+    st.markdown("### ⚡ 빠른 바로가기")
+    _ql1, _ql2, _ql3 = st.columns(3)
+    with _ql1:
+        st.info("📰 **내 뉴스피드**\n\n키워드 맞춤 전체 뉴스 목록 → 좌측 메뉴")
+    with _ql2:
+        st.info("🔍 **AI 검색**\n\n자연어로 뉴스 검색 → 좌측 메뉴")
+    with _ql3:
+        st.info("📊 **리포트**\n\n주간/월간 리포트 생성 → 좌측 메뉴")
+
+
+# ===== 2. 내 뉴스피드 (모든 사용자 - 키워드 필터) =====
+elif selected == "📰 내 뉴스피드":
+    from news_engine import filter_articles_by_keywords, NAVER_QUERIES as _NQ2
+    st.markdown('<h1 class="main-header">📰 내 뉴스피드</h1>', unsafe_allow_html=True)
+
+    _feed_settings = load_user_settings(_user_email)
+    _feed_keywords = _feed_settings.get('keywords') or list(_NQ2) or []
+
+    _f_col1, _f_col2 = st.columns([3, 1])
+    with _f_col1:
+        if _feed_keywords:
+            st.markdown(f"**모니터링 키워드:** {', '.join(_feed_keywords)}")
+        else:
+            st.info("키워드가 설정되지 않았습니다. **⚙️ 내 설정**에서 키워드를 추가하세요.")
+    with _f_col2:
+        _feed_days = st.selectbox("기간", [1, 3, 7, 14], index=1, format_func=lambda x: f"최근 {x}일", key="feed_days")
+
+    st.markdown("---")
+
+    _feed_all = load_news_from_db(days=_feed_days)
+    _feed_news = filter_articles_by_keywords(_feed_all, _feed_keywords) if _feed_keywords else _feed_all
+    _feed_analyzed = [n for n in _feed_news if n.get('is_analyzed')]
+    _feed_others   = [n for n in _feed_news if not n.get('is_analyzed')]
+
+    st.markdown(f"**분석 완료 {len(_feed_analyzed)}건** / 수집 {len(_feed_news)}건 (최근 {_feed_days}일)")
+
+    if _feed_analyzed:
+        for _f_art in _feed_analyzed[:30]:
+            try:
+                _f_data = json.loads(_f_art.get('analysis_result') or '{}')
+            except Exception:
+                _f_data = {}
+            _f_title  = _f_art.get('title', '제목 없음')
+            _f_source = _f_art.get('source', '')
+            _f_main   = _f_data.get('main_content', '') or ''
+            _f_impl   = _f_data.get('implications', '') or ''
+            _f_action = _f_data.get('tta_action_item', '') or ''
+            with st.expander(f"**[{_f_source}]** {_f_title}"):
+                if _f_main:
+                    st.markdown(f"**요약:** {_f_main[:400]}{'...' if len(_f_main) > 400 else ''}")
+                if _f_impl:
+                    st.markdown(f"**시사점:** {_f_impl[:300]}{'...' if len(_f_impl) > 300 else ''}")
+                if _f_action:
+                    st.markdown(f"**TTA 조치:** {_f_action}")
+                if _f_art.get('link'):
+                    st.markdown(f"[🔗 원문 보기]({_f_art['link']})")
+                st.caption(f"수집일: {str(_f_art.get('collected_at', ''))[:10]}")
+    elif _feed_news:
+        st.info(f"수집된 기사 {len(_feed_news)}건이 있지만 아직 AI 분석이 완료되지 않았습니다.")
+    else:
+        st.warning("해당 기간에 키워드에 맞는 기사가 없습니다.")
+
+
+# ===== 운영 대시보드 (관리자 전용) =====
+elif selected == "🛠️ 운영 대시보드":
+    st.markdown('<h1 class="main-header">🛠️ 운영 대시보드</h1>', unsafe_allow_html=True)
+
     # 통계 카드
     stats = get_db_statistics()
     
@@ -1502,9 +1626,9 @@ if selected == "대시보드":
 
 
 
-# ===== 2. 뉴스 관리 페이지 (수정 버전 - 주차별 보고서 추가) =====
-elif selected == "뉴스 관리":
-    st.markdown('<h1 class="main-header">📰 뉴스 수집 및 분석 관리</h1>', unsafe_allow_html=True)
+# ===== 뉴스 관리 페이지 (관리자 전용) =====
+elif selected == "📋 뉴스 관리":
+    st.markdown('<h1 class="main-header">📋 뉴스 수집 및 분석 관리</h1>', unsafe_allow_html=True)
     
     if 'news_tab' not in st.session_state:
         st.session_state.news_tab = 'collect'
@@ -1825,8 +1949,8 @@ elif selected == "뉴스 관리":
             st.caption("💡 대시보드 → 전체 프로세스 실행으로 폴더가 자동 생성됩니다.")
 
 
-# ===== 3. 리포트 페이지 =====
-elif selected == "리포트":
+# ===== 리포트 페이지 =====
+elif selected == "📊 리포트":
     st.markdown('<h1 class="main-header">📊 리포트 생성 및 발송</h1>', unsafe_allow_html=True)
     
     # ===== 🔥 커스텀 탭 UI =====
@@ -2096,8 +2220,8 @@ elif selected == "리포트":
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ===== 4. 뉴스 검색 (RAG) 페이지 =====
-elif selected == "뉴스 검색":
+# ===== AI 검색 (RAG) 페이지 =====
+elif selected == "🔍 AI 검색":
     st.markdown('<h1 class="main-header">🔍 뉴스 자연어 검색</h1>', unsafe_allow_html=True)
     st.markdown("수집된 뉴스 DB를 자연어로 검색합니다. AI가 관련 기사를 찾아 종합 답변을 생성합니다.")
 
@@ -2219,9 +2343,9 @@ elif selected == "뉴스 검색":
         st.error(f"오류 발생: {e}")
 
 
-# ===== 5. 이슈 추적 페이지 =====
-elif selected == "이슈 추적":
-    st.markdown('<h1 class="main-header">📈 이슈 추적 & 표준화 갭</h1>', unsafe_allow_html=True)
+# ===== 트렌드 분석 페이지 =====
+elif selected == "📈 트렌드 분석":
+    st.markdown('<h1 class="main-header">📈 트렌드 분석 & 표준화 갭</h1>', unsafe_allow_html=True)
 
     try:
         from trend_analyzer import (
@@ -2303,8 +2427,8 @@ elif selected == "이슈 추적":
         st.error(f"오류 발생: {e}")
 
 
-# ===== 6. 내 설정 페이지 =====
-elif selected == "내 설정":
+# ===== 내 설정 페이지 =====
+elif selected == "⚙️ 내 설정":
     st.markdown('<h1 class="main-header">👤 내 설정</h1>', unsafe_allow_html=True)
     st.markdown(f"**{_user_name}** ({_user_email}) 님의 개인 설정")
     st.markdown("---")
@@ -2379,8 +2503,8 @@ elif selected == "내 설정":
         st.rerun()
 
 
-# ===== 7. 설정 페이지 =====
-elif selected == "설정":
+# ===== 시스템 설정 페이지 (관리자 전용) =====
+elif selected == "⚙️ 시스템 설정":
     st.markdown('<h1 class="main-header">⚙️ 시스템 설정</h1>', unsafe_allow_html=True)
     
     cfg = load_config()

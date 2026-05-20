@@ -1427,12 +1427,14 @@ def get_news_data():
     
     # ===== Naver 뉴스 처리 =====
     log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
-    
-    for i, query in enumerate(NAVER_QUERIES, 1):
-        if not query.strip(): 
+    _active_queries = get_all_active_keywords()
+    log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (전역 {len(NAVER_QUERIES)}개 + 사용자 키워드)")
+
+    for i, query in enumerate(_active_queries, 1):
+        if not query.strip():
             continue
-            
-        log_info(f"  🔍 검색어 {i}/{len(NAVER_QUERIES)}: '{query}'")
+
+        log_info(f"  🔍 검색어 {i}/{len(_active_queries)}: '{query}'")
         
         try:
             naver_url = "https://openapi.naver.com/v1/search/news.json"
@@ -3421,6 +3423,50 @@ def generate_google_doc_report(analyzed_data):
     except Exception as e:
         log_error(f"  (오류) 구글 문서 생성/스타일링 실패: {e}")
         return None, None
+
+# ==============================================================================
+# --- 키워드 유틸리티 함수 ---
+# ==============================================================================
+
+def get_all_active_keywords() -> list:
+    """전역 NAVER_QUERIES + user_settings에 등록된 모든 사용자 키워드의 합집합 반환."""
+    from sqlalchemy import text as sa_text
+    keywords = set(NAVER_QUERIES)
+    try:
+        with get_db_session() as session:
+            rows = session.execute(
+                sa_text("SELECT keywords FROM user_settings WHERE schedule_daily = TRUE")
+            ).fetchall()
+        for row in rows:
+            try:
+                user_kws = json.loads(row[0] or '[]')
+                for kw in user_kws:
+                    kw = kw.strip()
+                    if kw:
+                        keywords.add(kw)
+            except Exception:
+                pass
+    except Exception as e:
+        log_warning(f"get_all_active_keywords 오류: {e}")
+    return sorted(keywords)
+
+
+def filter_articles_by_keywords(articles: list, keywords: list) -> list:
+    """키워드가 title/analysis_result/extracted_keywords에 포함된 기사만 반환.
+    키워드 목록이 비어있으면 원본 그대로 반환."""
+    if not keywords:
+        return articles
+    kw_lower = [k.lower() for k in keywords if k]
+    result = []
+    for art in articles:
+        title = (art.get('title') or '').lower()
+        analysis = (art.get('analysis_result') or '').lower()
+        extracted = (art.get('extracted_keywords') or '').lower()
+        combined = f"{title} {analysis} {extracted}"
+        if any(kw in combined for kw in kw_lower):
+            result.append(art)
+    return result
+
 
 # ==============================================================================
 # --- 이메일 발송 함수 ---
