@@ -69,7 +69,9 @@ try:
         GMAIL_PASSWORD,
         RECEIVER_EMAIL,
         GOOGLE_ALERTS_RSS_URLS,
-        NAVER_QUERIES
+        NAVER_QUERIES,
+        get_all_active_keywords,
+        filter_articles_by_keywords,
     )
 except ImportError as e:
     st.error(f"❌ 모듈 import 실패: {e}")
@@ -429,13 +431,12 @@ with st.sidebar:
 
 # ===== 1. 홈 페이지 (모든 사용자) =====
 if selected == "🏠 홈":
-    from news_engine import filter_articles_by_keywords, NAVER_QUERIES as _NQ
     st.markdown('<h1 class="main-header">🏠 IRONAGE 뉴스 인텔리전스</h1>', unsafe_allow_html=True)
     st.markdown(f"안녕하세요, **{_user_name}** 님! 오늘의 ICT 뉴스 요약입니다.")
     st.markdown("---")
 
     _home_settings = load_user_settings(_user_email)
-    _home_keywords = _home_settings.get('keywords') or list(_NQ) or []
+    _home_keywords = _home_settings.get('keywords') or list(NAVER_QUERIES) or []
 
     _hs = get_db_statistics()
     _hc1, _hc2, _hc3, _hc4 = st.columns(4)
@@ -484,11 +485,10 @@ if selected == "🏠 홈":
 
 # ===== 2. 내 뉴스피드 (모든 사용자 - 키워드 필터) =====
 elif selected == "📰 내 뉴스피드":
-    from news_engine import filter_articles_by_keywords, NAVER_QUERIES as _NQ2
     st.markdown('<h1 class="main-header">📰 내 뉴스피드</h1>', unsafe_allow_html=True)
 
     _feed_settings = load_user_settings(_user_email)
-    _feed_keywords = _feed_settings.get('keywords') or list(_NQ2) or []
+    _feed_keywords = _feed_settings.get('keywords') or list(NAVER_QUERIES) or []
 
     _f_col1, _f_col2 = st.columns([3, 1])
     with _f_col1:
