@@ -195,6 +195,7 @@ init_session_state()
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Pretendard:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block');
 
     :root {
         --primary-gradient: linear-gradient(135deg, #1a2a6c 0%, #b21f1f 50%, #fdbb2d 100%);
@@ -376,63 +377,98 @@ st.markdown("""
         color: white !important;
     }
 
-    /* ===== Expander 아이콘/텍스트 겹침 버그 수정 ===== */
-    /* summary 내부를 flex 레이아웃으로 고정 — 화살표 SVG와 레이블이 겹치지 않도록 */
+    /* ===================================================================
+       Material Symbols 텍스트 노출 완전 차단 + CSS-only 화살표로 대체
+       Google Fonts 미로드 환경(방화벽 등)에서도 정상 동작
+       =================================================================== */
+
+    /* expander summary 레이아웃 */
     [data-testid="stExpander"] details summary {
         display: flex !important;
         flex-direction: row !important;
         align-items: center !important;
-        gap: 8px !important;
+        gap: 6px !important;
         overflow: visible !important;
         position: relative !important;
         padding: 0.6rem 0.75rem !important;
     }
 
-    /* 화살표 SVG는 크기 고정, 절대 위치 해제 */
-    [data-testid="stExpander"] details summary svg {
-        flex-shrink: 0 !important;
-        position: static !important;
-        width: 1rem !important;
-        height: 1rem !important;
-    }
-
-    /* 레이블 텍스트 컨테이너 — 남은 공간을 채우고 잘리지 않도록 */
+    /* summary 내부 레이블 — 남은 공간을 채우도록 */
     [data-testid="stExpander"] details summary > div,
-    [data-testid="stExpander"] details summary > p,
-    [data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"] ~ * {
+    [data-testid="stExpander"] details summary > p {
         flex: 1 !important;
         min-width: 0 !important;
         overflow: visible !important;
         margin: 0 !important;
     }
-
-    /* 각 Expander 사이 간격 확보 */
-    [data-testid="stExpander"] {
-        margin-bottom: 0.5rem !important;
-        overflow: visible !important;
-    }
-
-    /* 버튼/Expander 내부 p 태그 margin 초기화 */
     [data-testid="stExpander"] details summary p {
         margin: 0 !important;
         padding: 0 !important;
         line-height: 1.5 !important;
     }
 
-    /* Bootstrap Icons 잔류 CSS 무력화 — ::before/::after 텍스트 유사 내용 방지 */
-    /* option_menu가 주입한 CSS가 브라우저 캐시에 남아 있을 경우 대비 */
-    [data-testid="stExpander"] details summary::before,
-    [data-testid="stExpander"] details summary::after {
-        display: none !important;
-        content: none !important;
+    /* expander 간격 */
+    [data-testid="stExpander"] {
+        margin-bottom: 0.5rem !important;
+        overflow: visible !important;
     }
-    /* 탭 스크롤 화살표 버튼 */
-    .stTabs [data-baseweb="tab-list"] > button::before,
-    .stTabs [data-baseweb="tab-list"] > button::after {
-        display: none !important;
-        content: none !important;
+
+    /* ── Material Symbols 아이콘 텍스트 차단 (summary 헤더 내부 한정) ── */
+    /* Streamlit이 keyboard_arrow_right / keyboard_arrow_down 텍스트를
+       Material Symbols 폰트로 렌더링하는데, 폰트 미로드 시 텍스트 노출됨.
+       font-size:0 으로 텍스트를 숨기고 ::before CSS 삼각형으로 대체. */
+    [data-testid="stExpander"] details summary span[data-testid="stIconMaterial"] {
+        font-size: 0 !important;
+        min-width: 1.1rem !important;
+        width: 1.1rem !important;
+        height: 1.1rem !important;
+        flex-shrink: 0 !important;
+        position: relative !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
-    /* Bootstrap Icons 클래스 기반 아이콘 텍스트 전역 차단 */
+
+    /* 닫힌 상태 → ▶ 오른쪽 방향 삼각형 */
+    [data-testid="stExpander"] details:not([open]) summary span[data-testid="stIconMaterial"]::before {
+        content: "" !important;
+        display: block !important;
+        width: 0 !important;
+        height: 0 !important;
+        border-top: 5px solid transparent !important;
+        border-bottom: 5px solid transparent !important;
+        border-left: 7px solid #64748b !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* 열린 상태 → ▼ 아래 방향 삼각형 */
+    [data-testid="stExpander"] details[open] summary span[data-testid="stIconMaterial"]::before {
+        content: "" !important;
+        display: block !important;
+        width: 0 !important;
+        height: 0 !important;
+        border-left: 5px solid transparent !important;
+        border-right: 5px solid transparent !important;
+        border-top: 7px solid #64748b !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* ── 탭 스크롤 버튼 내 아이콘 텍스트 차단 ── */
+    .stTabs [data-baseweb="tab-list"] > button span[data-testid="stIconMaterial"] {
+        font-size: 0 !important;
+    }
+    .stTabs [data-baseweb="tab-list"] > button:first-child span[data-testid="stIconMaterial"]::before {
+        content: "◀" !important;
+        font-size: 0.75rem !important;
+        color: #64748b !important;
+    }
+    .stTabs [data-baseweb="tab-list"] > button:last-child span[data-testid="stIconMaterial"]::before {
+        content: "▶" !important;
+        font-size: 0.75rem !important;
+        color: #64748b !important;
+    }
+
+    /* ── Bootstrap Icons 잔류 CSS 전역 차단 (캐시 대비) ── */
     [class^="bi-"]::before, [class*=" bi-"]::before,
     [class^="bi-"]::after,  [class*=" bi-"]::after {
         display: none !important;
