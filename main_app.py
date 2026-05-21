@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
-from streamlit_option_menu import option_menu
 import streamlit as st
 import warnings
 import re
@@ -313,10 +312,43 @@ st.markdown("""
         background-color: #0f172a;
         color: white;
     }
-    
-    section[data-testid="stSidebar"] .stMarkdown h1, 
-    section[data-testid="stSidebar"] .stMarkdown h3 {
+
+    section[data-testid="stSidebar"] .stMarkdown h1,
+    section[data-testid="stSidebar"] .stMarkdown h3,
+    section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] .stMarkdown strong {
         color: white !important;
+    }
+
+    /* 사이드바 라디오 버튼 — 메뉴 스타일 */
+    section[data-testid="stSidebar"] .stRadio > div {
+        gap: 2px !important;
+    }
+    section[data-testid="stSidebar"] .stRadio label {
+        display: flex !important;
+        align-items: center !important;
+        padding: 8px 14px !important;
+        border-radius: 8px !important;
+        color: #cbd5e1 !important;
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+        transition: background 0.15s, color 0.15s !important;
+        width: 100% !important;
+    }
+    section[data-testid="stSidebar"] .stRadio label:hover {
+        background-color: rgba(255,255,255,0.08) !important;
+        color: white !important;
+    }
+    section[data-testid="stSidebar"] .stRadio label[data-checked="true"],
+    section[data-testid="stSidebar"] .stRadio input:checked + div {
+        background-color: rgba(0,90,171,0.55) !important;
+        color: white !important;
+        font-weight: 700 !important;
+    }
+    /* 라디오 동그라미 숨기기 — 메뉴처럼 보이도록 */
+    section[data-testid="stSidebar"] .stRadio input[type="radio"] {
+        display: none !important;
     }
 
     /* 버튼 스타일 조정 */
@@ -342,6 +374,49 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background-color: #005aab !important;
         color: white !important;
+    }
+
+    /* ===== Expander 아이콘/텍스트 겹침 버그 수정 ===== */
+    /* summary 내부를 flex 레이아웃으로 고정 — 화살표 SVG와 레이블이 겹치지 않도록 */
+    [data-testid="stExpander"] details summary {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        overflow: visible !important;
+        position: relative !important;
+        padding: 0.6rem 0.75rem !important;
+    }
+
+    /* 화살표 SVG는 크기 고정, 절대 위치 해제 */
+    [data-testid="stExpander"] details summary svg {
+        flex-shrink: 0 !important;
+        position: static !important;
+        width: 1rem !important;
+        height: 1rem !important;
+    }
+
+    /* 레이블 텍스트 컨테이너 — 남은 공간을 채우고 잘리지 않도록 */
+    [data-testid="stExpander"] details summary > div,
+    [data-testid="stExpander"] details summary > p,
+    [data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"] ~ * {
+        flex: 1 !important;
+        min-width: 0 !important;
+        overflow: visible !important;
+        margin: 0 !important;
+    }
+
+    /* 각 Expander 사이 간격 확보 */
+    [data-testid="stExpander"] {
+        margin-bottom: 0.5rem !important;
+        overflow: visible !important;
+    }
+
+    /* 버튼/Expander 내부 p 태그 margin 초기화 */
+    [data-testid="stExpander"] details summary p {
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.5 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -404,24 +479,20 @@ with st.sidebar:
     st.markdown("---")
 
     _user_options = ["🏠 홈", "📰 내 뉴스피드", "🔍 AI 검색", "📊 리포트", "📈 트렌드 분석", "⚙️ 내 설정"]
-    _user_icons   = ["house", "newspaper", "search", "file-earmark-text", "graph-up", "person-gear"]
     _admin_options = ["🛠️ 운영 대시보드", "📋 뉴스 관리", "⚙️ 시스템 설정"]
-    _admin_icons   = ["tools", "clipboard-data", "gear"]
+
+    _all_options = _user_options + (_admin_options if _is_admin else [])
+
+    st.markdown("**메뉴**")
+    selected = st.radio(
+        "nav",
+        options=_all_options,
+        label_visibility="collapsed",
+        key="main_nav",
+    )
 
     if _is_admin:
-        _all_options = _user_options + _admin_options
-        _all_icons   = _user_icons   + _admin_icons
-    else:
-        _all_options = _user_options
-        _all_icons   = _user_icons
-
-    selected = option_menu(
-        menu_title="메뉴",
-        options=_all_options,
-        icons=_all_icons,
-        menu_icon="cast",
-        default_index=0,
-    )
+        st.caption("🛠 운영 대시보드 / 뉴스 관리 / 시스템 설정은 관리자 전용입니다.")
 
     st.markdown("---")
     st.markdown("**한국정보통신기술협회(TTA)**")
@@ -455,19 +526,36 @@ if selected == "🏠 홈":
     _home_analyzed = [n for n in _home_news if n.get('is_analyzed')]
 
     if _home_analyzed:
+        _home_cards = []
         for _h_art in _home_analyzed[:8]:
             try:
                 _h_data = json.loads(_h_art.get('analysis_result') or '{}')
             except Exception:
                 _h_data = {}
-            _h_title = _h_art.get('title', '제목 없음')
+            _h_title  = _h_art.get('title', '제목 없음')
             _h_source = _h_art.get('source', '')
-            _h_main = _h_data.get('main_content', '') or ''
-            with st.expander(f"**[{_h_source}]** {_h_title}"):
-                st.markdown(_h_main[:300] + ("..." if len(_h_main) > 300 else ""))
-                if _h_art.get('link'):
-                    st.markdown(f"[🔗 원문 보기]({_h_art['link']})")
-                st.caption(f"수집일: {str(_h_art.get('collected_at', ''))[:10]}")
+            _h_main_raw = _h_data.get('main_content', '') or ''
+            _h_main   = (_h_main_raw[:300] + '...') if len(_h_main_raw) > 300 else _h_main_raw
+            _h_link   = _h_art.get('link', '')
+            _h_date   = str(_h_art.get('collected_at', ''))[:10]
+            _h_link_tag = (f'<a href="{_h_link}" target="_blank" '
+                           f'style="color:#005aab;text-decoration:none;font-size:0.85rem;">🔗 원문 보기</a>'
+                           if _h_link else '')
+            _home_cards.append(f"""
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
+            margin-bottom:10px;background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+  <div style="font-size:0.78rem;font-weight:700;color:#005aab;
+              margin-bottom:4px;letter-spacing:0.02em;">[{_h_source}]</div>
+  <div style="font-weight:600;color:#1e293b;font-size:0.97rem;
+              line-height:1.5;margin-bottom:8px;">{_h_title}</div>
+  <div style="font-size:0.88rem;color:#475569;line-height:1.65;
+              margin-bottom:10px;">{_h_main}</div>
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+    {_h_link_tag}
+    <span style="color:#94a3b8;font-size:0.78rem;">수집일: {_h_date}</span>
+  </div>
+</div>""")
+        st.markdown('\n'.join(_home_cards), unsafe_allow_html=True)
     else:
         st.info("오늘 키워드에 맞는 분석 기사가 없습니다. **⚙️ 내 설정**에서 키워드를 확인하거나, "
                 "관리자에게 수집 실행을 요청하세요.")
@@ -509,6 +597,7 @@ elif selected == "📰 내 뉴스피드":
     st.markdown(f"**분석 완료 {len(_feed_analyzed)}건** / 수집 {len(_feed_news)}건 (최근 {_feed_days}일)")
 
     if _feed_analyzed:
+        _feed_cards = []
         for _f_art in _feed_analyzed[:30]:
             try:
                 _f_data = json.loads(_f_art.get('analysis_result') or '{}')
@@ -516,19 +605,36 @@ elif selected == "📰 내 뉴스피드":
                 _f_data = {}
             _f_title  = _f_art.get('title', '제목 없음')
             _f_source = _f_art.get('source', '')
-            _f_main   = _f_data.get('main_content', '') or ''
-            _f_impl   = _f_data.get('implications', '') or ''
+            _f_main_raw = _f_data.get('main_content', '') or ''
+            _f_main   = (_f_main_raw[:400] + '...') if len(_f_main_raw) > 400 else _f_main_raw
+            _f_impl_raw = _f_data.get('implications', '') or ''
+            _f_impl   = (_f_impl_raw[:300] + '...') if len(_f_impl_raw) > 300 else _f_impl_raw
             _f_action = _f_data.get('tta_action_item', '') or ''
-            with st.expander(f"**[{_f_source}]** {_f_title}"):
-                if _f_main:
-                    st.markdown(f"**요약:** {_f_main[:400]}{'...' if len(_f_main) > 400 else ''}")
-                if _f_impl:
-                    st.markdown(f"**시사점:** {_f_impl[:300]}{'...' if len(_f_impl) > 300 else ''}")
-                if _f_action:
-                    st.markdown(f"**TTA 조치:** {_f_action}")
-                if _f_art.get('link'):
-                    st.markdown(f"[🔗 원문 보기]({_f_art['link']})")
-                st.caption(f"수집일: {str(_f_art.get('collected_at', ''))[:10]}")
+            _f_link   = _f_art.get('link', '')
+            _f_date   = str(_f_art.get('collected_at', ''))[:10]
+            _f_link_tag = (f'<a href="{_f_link}" target="_blank" '
+                           f'style="color:#005aab;text-decoration:none;font-size:0.85rem;">🔗 원문 보기</a>'
+                           if _f_link else '')
+            _impl_block = (f'<div style="margin-top:6px;font-size:0.85rem;color:#64748b;">'
+                           f'<strong>시사점:</strong> {_f_impl}</div>' if _f_impl else '')
+            _action_block = (f'<div style="margin-top:4px;font-size:0.85rem;color:#64748b;">'
+                             f'<strong>TTA 조치:</strong> {_f_action}</div>' if _f_action else '')
+            _feed_cards.append(f"""
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
+            margin-bottom:10px;background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
+  <div style="font-size:0.78rem;font-weight:700;color:#005aab;
+              margin-bottom:4px;letter-spacing:0.02em;">[{_f_source}]</div>
+  <div style="font-weight:600;color:#1e293b;font-size:0.97rem;
+              line-height:1.5;margin-bottom:8px;">{_f_title}</div>
+  <div style="font-size:0.88rem;color:#475569;line-height:1.65;">{_f_main}</div>
+  {_impl_block}
+  {_action_block}
+  <div style="margin-top:10px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+    {_f_link_tag}
+    <span style="color:#94a3b8;font-size:0.78rem;">수집일: {_f_date}</span>
+  </div>
+</div>""")
+        st.markdown('\n'.join(_feed_cards), unsafe_allow_html=True)
     elif _feed_news:
         st.info(f"수집된 기사 {len(_feed_news)}건이 있지만 아직 AI 분석이 완료되지 않았습니다.")
     else:
@@ -2327,22 +2433,41 @@ elif selected == "🔍 AI 검색":
                 n_kw  = sum(1 for r in result['sources'] if r.get('search_type') == 'keyword')
                 st.caption(f"참고 기사 {len(result['sources'])}건 — 임베딩 유사도: {n_emb}건 · 키워드 매칭: {n_kw}건")
                 st.markdown("### 📰 참고 기사")
+                _src_cards = []
                 for i, art in enumerate(result['sources'], 1):
                     sim_pct = int(art.get('similarity', 0) * 100)
                     stype = art.get('search_type', 'embedding')
-                    badge = "🔵 임베딩" if stype == 'embedding' else "🟡 키워드"
+                    badge_color = "#3b82f6" if stype == 'embedding' else "#f59e0b"
+                    badge_text  = "🔵 임베딩" if stype == 'embedding' else "🟡 키워드"
                     has_analysis = "📝" if art.get('analysis_result') else "📄"
                     _short_title = art['title'][:70] + ('…' if len(art['title']) > 70 else '')
-                    with st.expander(f"{has_analysis} [{i}] {_short_title}"):
-                        st.markdown(f"{badge} {sim_pct}%  |  **출처**: {art['source']}  |  **날짜**: {art['published']}")
-                        if art.get('link'):
-                            st.markdown(f"**링크**: [{art['link']}]({art['link']})")
-                        if art.get('analysis_result'):
-                            st.markdown("**분석 요약**")
-                            st.markdown(art['analysis_result'][:600])
-                        elif art.get('content'):
-                            st.markdown("**본문 일부**")
-                            st.markdown(art['content'][:400])
+                    _art_link   = art.get('link', '')
+                    _link_tag   = (f'<a href="{_art_link}" target="_blank" '
+                                   f'style="color:#005aab;font-size:0.83rem;text-decoration:none;">'
+                                   f'🔗 원문</a>' if _art_link else '')
+                    _body_raw   = art.get('analysis_result') or art.get('content') or ''
+                    _body_label = '분석 요약' if art.get('analysis_result') else '본문 일부'
+                    _body_text  = _body_raw[:500] if _body_raw else ''
+                    _body_block = (f'<div style="margin-top:8px;font-size:0.85rem;color:#475569;'
+                                   f'line-height:1.6;border-top:1px solid #f1f5f9;padding-top:8px;">'
+                                   f'<strong>{_body_label}:</strong> {_body_text}</div>'
+                                   if _body_text else '')
+                    _src_cards.append(f"""
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:13px 16px;
+            margin-bottom:8px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+    <span style="font-size:0.75rem;background:{badge_color};color:white;
+                 border-radius:4px;padding:1px 6px;">{badge_text} {sim_pct}%</span>
+    <span style="font-size:0.75rem;color:#64748b;">출처: {art['source']}</span>
+    <span style="font-size:0.75rem;color:#94a3b8;">{art['published']}</span>
+    {_link_tag}
+  </div>
+  <div style="font-weight:600;color:#1e293b;font-size:0.95rem;line-height:1.5;">
+    {has_analysis} [{i}] {_short_title}
+  </div>
+  {_body_block}
+</div>""")
+                st.markdown('\n'.join(_src_cards), unsafe_allow_html=True)
         elif submitted:
             st.warning("검색어를 입력해주세요.")
 
