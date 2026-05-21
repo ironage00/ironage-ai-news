@@ -418,6 +418,26 @@ st.markdown("""
         padding: 0 !important;
         line-height: 1.5 !important;
     }
+
+    /* Bootstrap Icons 잔류 CSS 무력화 — ::before/::after 텍스트 유사 내용 방지 */
+    /* option_menu가 주입한 CSS가 브라우저 캐시에 남아 있을 경우 대비 */
+    [data-testid="stExpander"] details summary::before,
+    [data-testid="stExpander"] details summary::after {
+        display: none !important;
+        content: none !important;
+    }
+    /* 탭 스크롤 화살표 버튼 */
+    .stTabs [data-baseweb="tab-list"] > button::before,
+    .stTabs [data-baseweb="tab-list"] > button::after {
+        display: none !important;
+        content: none !important;
+    }
+    /* Bootstrap Icons 클래스 기반 아이콘 텍스트 전역 차단 */
+    [class^="bi-"]::before, [class*=" bi-"]::before,
+    [class^="bi-"]::after,  [class*=" bi-"]::after {
+        display: none !important;
+        content: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
