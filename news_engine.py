@@ -577,6 +577,7 @@ def load_news_from_db(days=7, is_analyzed=None):
                 'link': a.link,
                 'source': a.source,
                 'published': a.published.strftime('%Y-%m-%d %H:%M') if a.published else '',
+                'collected_at': a.collected_at.strftime('%Y-%m-%d %H:%M') if a.collected_at else '',
                 'content': a.content,
                 'quality_score': a.quality_score,
                 'is_analyzed': a.is_analyzed,

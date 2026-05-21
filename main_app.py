@@ -892,17 +892,26 @@ elif selected == "🛠️ 운영 대시보드":
             )
             
             st.markdown("### 🚨 주요 조치 필요 항목 (Critical / High)")
-            st.markdown("""<div style="background-color: #fff1f2; padding: 15px; border-radius: 12px; border-left: 6px solid #dc2626; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">""", unsafe_allow_html=True)
-            for urgent in sorted_urgent[:5]: # 최대 5개 노출
+            _urgent_html = '<div style="background-color: #fff1f2; padding: 15px; border-radius: 12px; border-left: 6px solid #dc2626; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">'
+            for urgent in sorted_urgent[:5]:
                 impact = _get_impact_info(urgent)
                 level = impact['impact_level']
                 icon = "🚨" if level == 'Critical' else "⚠️"
                 color = "#dc2626" if level == 'Critical' else "#ea580c"
-                
-                st.markdown(f"**{icon} <span style='color: {color};'>[{level}]</span> [{urgent['source']}] {urgent['title']}**", unsafe_allow_html=True)
+                src = (urgent.get('source') or '').replace('<', '&lt;').replace('>', '&gt;')
+                ttl = (urgent.get('title') or '').replace('<', '&lt;').replace('>', '&gt;')
+                _urgent_html += (
+                    f'<p style="margin:8px 0;"><strong>{icon} '
+                    f'<span style="color:{color};">[{level}]</span> [{src}] {ttl}</strong></p>'
+                )
                 if impact['tta_action_item']:
-                    st.markdown(f"<p style='margin-left: 32px; margin-top: 4px; margin-bottom: 12px; font-size: 14.5px; font-weight: 600; color: #334155;'>▶ TTA 조치: {impact['tta_action_item']}</p>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+                    act = impact['tta_action_item'].replace('<', '&lt;').replace('>', '&gt;')
+                    _urgent_html += (
+                        f'<p style="margin-left:32px;margin-top:4px;margin-bottom:12px;'
+                        f'font-size:14.5px;font-weight:600;color:#334155;">▶ TTA 조치: {act}</p>'
+                    )
+            _urgent_html += '</div>'
+            st.markdown(_urgent_html, unsafe_allow_html=True)
 
         # 4열 레이아웃으로 변경
         viz_col1, viz_col2, viz_col3, viz_col4 = st.columns(4)
