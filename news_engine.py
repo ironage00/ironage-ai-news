@@ -4848,21 +4848,22 @@ def run_daily_collection(ai_model: str = None):
     log_info(f"🤖 사용 AI 모델: {ai_model.upper()}")
     log_info("=" * 60)
 
-    # 당일 중복 실행 방지: 오늘 이미 분석 완료된 기사가 5개 이상이면 스킵
+    # 당일 중복 실행 방지: 최근 20시간 이내 분석 완료 기사가 5건 이상이면 스킵
+    # - 20시간 윈도우: 자정 UTC 기준 대신 사용 → cron-job.org 오후 재실행에도 안전
+    # - DB 조회 실패 시에도 스킵 (Supabase 일시 장애로 인한 중복 방지 우선)
     try:
-        _today_start = datetime.datetime.now(datetime.timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        _dup_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=20)
         with get_db_session() as _s:
             _today_analyzed = _s.query(NewsArticle).filter(
-                NewsArticle.collected_at >= _today_start,
+                NewsArticle.collected_at >= _dup_since,
                 NewsArticle.is_analyzed == True
             ).count()
         if _today_analyzed >= 5:
-            log_info(f"ℹ️ 오늘 이미 {_today_analyzed}개 기사 분석 완료 — 중복 실행 건너뜀.")
+            log_info(f"ℹ️ 최근 20시간 내 {_today_analyzed}개 기사 분석 완료 — 중복 실행 건너뜀.")
             return []
     except Exception as _dup_err:
-        log_warning(f"⚠️ 중복 실행 체크 실패 (계속 진행): {_dup_err}")
+        log_warning(f"⚠️ 중복 실행 체크 실패 — 안전을 위해 건너뜀: {_dup_err}")
+        return []
 
     log_info("\n[작업 0/8] 경쟁 기관 (3GPP·ETSI·ITU) 뉴스 수집 중...")
     standards_news = safe_execute(
