@@ -85,6 +85,10 @@ CLAUDE_MODEL_DEFAULT = "claude-sonnet-4-6"
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 
+# Google Drive 보고서 저장 폴더 ID (공유 드라이브)
+# https://drive.google.com/drive/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT
+REPORT_FOLDER_ID = "15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT"
+
 # ==============================================================================
 # --- SSL 경고 무시 설정 ---
 # ==============================================================================
@@ -2455,6 +2459,7 @@ def analyze_news_with_replacement(news_to_analyze, all_news_items, target_count=
 
         if is_valid_analysis(analysis):
             item['analysis_result'] = analysis
+            item['_original_rank'] = len(analyzed_results) + 1   # AI 선별 원래 순위 (1-based)
             analyzed_results.append(item)
             analyzed_links.add(item['link'])
             with get_db_session() as session:
@@ -2820,20 +2825,28 @@ def generate_google_doc_report(analyzed_data):
 
     try:
         try:
-            document = docs_service.documents().create(body={'title': document_title}).execute()
+            # 공유 드라이브 폴더에 직접 생성 (Drive API files().create 사용)
+            file_meta = {
+                'name': document_title,
+                'mimeType': 'application/vnd.google-apps.document',
+                'parents': [REPORT_FOLDER_ID],
+            }
+            _created_file = drive_service.files().create(
+                body=file_meta,
+                supportsAllDrives=True,
+                fields='id',
+            ).execute()
+            document_id = _created_file['id']
         except Exception as _docs_create_err:
             _err_str = str(_docs_create_err)
-            if '403' in _err_str and 'permission' in _err_str.lower():
-                log_error("  ❌ Google Docs 생성 권한 없음 (403). GCP 콘솔 → API 및 서비스 → Google Docs API 활성화 필요.")
+            if '403' in _err_str:
+                log_error("  ❌ Google Drive 생성 권한 없음 (403). 서비스 계정을 공유 드라이브 폴더 멤버로 추가했는지 확인하세요.")
             raise
-        document_id = document.get('documentId')
-        
-        permission = {'type': 'anyone', 'role': 'reader'}
-        drive_service.permissions().create(fileId=document_id, body=permission).execute()
-        log_info("  > 문서 접근 권한을 공개로 설정했습니다.")
-        
+
+        # 공유 드라이브 문서는 폴더 권한을 상속하므로 별도 공개 설정 불필요
+        # (폴더 자체가 공개이거나 특정 멤버 공유인 경우 그대로 적용됨)
         document_url = f"https://docs.google.com/document/d/{document_id}/edit"
-        log_info(f"  > 새 문서가 생성되었습니다: {document_url}")
+        log_info(f"  > 공유 드라이브 폴더에 문서가 생성되었습니다: {document_url}")
 
         requests_list = []
         index = 1
@@ -3400,25 +3413,6 @@ def generate_google_doc_report(analyzed_data):
         finally:
             socket.setdefaulttimeout(_orig_timeout)
 
-        # AI_news 폴더로 이동
-        try:
-            folder_query = "name='AI_news' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            folder_results = drive_service.files().list(q=folder_query, fields='files(id, name)').execute()
-            folders = folder_results.get('files', [])
-            if folders:
-                folder_id = folders[0]['id']
-                drive_service.files().update(
-                    fileId=document_id,
-                    addParents=folder_id,
-                    removeParents='root',
-                    fields='id, parents'
-                ).execute()
-                log_info(f"  > 문서를 'AI_news' 폴더로 이동했습니다.")
-            else:
-                log_warning("  ⚠️ 'AI_news' 폴더를 찾을 수 없습니다. 내 드라이브 루트에 저장됩니다.")
-        except Exception as folder_err:
-            log_warning(f"  ⚠️ 폴더 이동 실패 (문서는 정상 생성됨): {folder_err}")
-
         return document_url, document_title
 
     except Exception as e:
@@ -3592,10 +3586,11 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news, receiver
                     <div class="section-content">{impact_info['standardization_gap']}</div>
                 </div>"""
 
+        _rank_display = data.get('_original_rank', i + 1)
         news_items_html += f"""
         <div class="news-card" style="border-top:3px solid {impact_color};">
             <div class="news-header">
-                <div class="news-number" style="background:{impact_color};">{i+1}</div>
+                <div class="news-number" style="background:{impact_color};">{_rank_display}</div>
                 <div class="news-title-container">
                     <div style="margin-bottom:4px;">
                         <span style="display:inline-block;background:{impact_bg};color:{impact_color};border:1px solid {impact_color};border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;">{impact_icon} {impact_level}</span>

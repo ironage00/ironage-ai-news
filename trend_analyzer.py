@@ -520,9 +520,19 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
     log_info(f"📝 구글 문서 생성 중: {report_title}")
 
     try:
+        from news_engine import REPORT_FOLDER_ID
         docs_service, drive_service = get_google_docs_service()
-        doc = docs_service.documents().create(body={'title': report_title}).execute()
-        doc_id = doc['documentId']
+        # 공유 드라이브 폴더에 직접 생성
+        _f = drive_service.files().create(
+            body={
+                'name': report_title,
+                'mimeType': 'application/vnd.google-apps.document',
+                'parents': [REPORT_FOLDER_ID],
+            },
+            supportsAllDrives=True,
+            fields='id',
+        ).execute()
+        doc_id = _f['id']
         doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
 
         title_link_map = analysis_result.get('title_link_map', {})
@@ -663,26 +673,7 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
             body={'type': 'anyone', 'role': 'reader'}
         ).execute()
 
-        # AI_news 폴더로 이동
-        try:
-            folder_query = "name='AI_news' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            folder_results = drive_service.files().list(q=folder_query, fields='files(id, name)').execute()
-            folders = folder_results.get('files', [])
-            if folders:
-                folder_id = folders[0]['id']
-                drive_service.files().update(
-                    fileId=doc_id,
-                    addParents=folder_id,
-                    removeParents='root',
-                    fields='id, parents'
-                ).execute()
-                log_info(f"  > 문서를 'AI_news' 폴더로 이동했습니다.")
-            else:
-                log_warning("  ⚠️ 'AI_news' 폴더를 찾을 수 없습니다. 내 드라이브 루트에 저장됩니다.")
-        except Exception as folder_err:
-            log_warning(f"  ⚠️ 폴더 이동 실패 (문서는 정상 생성됨): {folder_err}")
-
-        log_info(f"  ✅ 구글 문서 생성 완료: {doc_url}")
+        log_info(f"  ✅ 공유 드라이브 폴더에 구글 문서 생성 완료: {doc_url}")
         return doc_url, report_title
 
     except Exception as e:
