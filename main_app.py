@@ -57,6 +57,7 @@ try:
         get_all_units,
         load_unit_settings,
         assign_user_unit,
+        run_unit_collection,
         IMPACT_LEVEL_ORDER,
         IMPACT_LEVEL_COLOR_RGB,
 

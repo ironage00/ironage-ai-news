@@ -573,19 +573,24 @@ def deduplicate_news(news_list):
 
     return title_unique
 
-def save_news_to_db(news_items):
-    """뉴스 아이템을 DB에 저장"""
+def save_news_to_db(news_items, unit_id=None):
+    """뉴스 아이템을 DB에 저장.
+
+    Args:
+        news_items: 저장할 뉴스 아이템 리스트
+        unit_id: 단 ID (None = 전체/마이그레이션 전 기사)
+    """
     if not SessionLocal:
         log_error("❌ DB 세션이 초기화되지 않았습니다.")
         return 0
-    
+
     saved_count = 0
-    
+
     with get_db_session() as session:
         for item in news_items:
             try:
                 existing = session.query(NewsArticle).filter_by(link=item['link']).first()
-                
+
                 if not existing:
                     pub_date = None
                     if item.get('published'):
@@ -596,24 +601,26 @@ def save_news_to_db(news_items):
                                 pub_date = item['published']
                         except Exception:
                             pass
-                    
+
                     article = NewsArticle(
                         title=item['title'],
                         link=item['link'],
                         source=item.get('source', '출처 불명'),
                         published=pub_date,
                         content=item.get('content', ''),
-                        quality_score=item.get('quality_score', 0.0)
+                        quality_score=item.get('quality_score', 0.0),
+                        unit_id=unit_id,
                     )
-                    
+
                     session.add(article)
                     saved_count += 1
-            
+
             except Exception as e:
                 log_warning(f"⚠️ DB 저장 실패: {item.get('title', 'Unknown')[:30]}...")
                 continue
-    
-    log_info(f"   💾 {saved_count}개 뉴스가 DB에 저장되었습니다.")
+
+    unit_label = f" (단 {unit_id})" if unit_id else ""
+    log_info(f"   💾 {saved_count}개 뉴스가 DB에 저장되었습니다{unit_label}.")
     return saved_count
 
 def load_news_from_db(days=7, is_analyzed=None):
@@ -1329,24 +1336,32 @@ def get_article_content(url: str, max_length: int = 3000) -> str:
 # ==============================================================================
 
 @performance_monitor
-def get_news_data():
-    """여러 RSS 피드와 키워드에서 뉴스를 수집하고 24시간 이내 뉴스만 필터링"""
+def get_news_data(rss_urls=None, naver_queries=None):
+    """여러 RSS 피드와 키워드에서 뉴스를 수집하고 24시간 이내 뉴스만 필터링.
+
+    Args:
+        rss_urls: RSS URL 리스트. None이면 전역 GOOGLE_ALERTS_RSS_URLS 사용.
+        naver_queries: 네이버 검색 키워드 리스트. None이면 get_all_active_keywords() 사용.
+    """
     news_list = []
     failed_urls = []
-    
+
     stats = {
         'google_alerts': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0},
         'naver': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0}
     }
-    
+
+    # rss_urls/naver_queries 미지정이면 전역값 사용
+    _rss_urls = rss_urls if rss_urls is not None else GOOGLE_ALERTS_RSS_URLS
+
     # FIX: pytz.UTC 대신 datetime.timezone.utc로 통일
     time_threshold = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=NEWS_TIME_WINDOW_HOURS)
-    
+
     log_info(f"\n🔍 Google Alerts에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
     log_info(f"   기준 시간: {time_threshold.strftime('%Y-%m-%d %H:%M:%S')} UTC 이후")
-    
+
     # ===== Google Alerts 처리 (병렬 피드 수집) =====
-    valid_rss_urls = [(i, url) for i, url in enumerate(GOOGLE_ALERTS_RSS_URLS, 1) if url.strip()]
+    valid_rss_urls = [(i, url) for i, url in enumerate(_rss_urls, 1) if url.strip()]
     n_feeds = len(valid_rss_urls)
     # 모든 피드를 동시에 fetch (I/O bound이므로 피드 수만큼 worker 사용)
     max_feed_workers = max(n_feeds, 1)
@@ -1492,8 +1507,12 @@ def get_news_data():
     
     # ===== Naver 뉴스 처리 =====
     log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
-    _active_queries = get_all_active_keywords()
-    log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (전역 {len(NAVER_QUERIES)}개 + 사용자 키워드)")
+    if naver_queries is not None:
+        _active_queries = list(dict.fromkeys(naver_queries))  # 중복 제거, 순서 유지
+        log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
+    else:
+        _active_queries = get_all_active_keywords()
+        log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (전역 {len(NAVER_QUERIES)}개 + 사용자 키워드)")
 
     for i, query in enumerate(_active_queries, 1):
         if not query.strip():
@@ -4973,6 +4992,90 @@ def run_batch_analysis_on_pending(batch_size: int = 10, ai_model: str = None, pr
     return {'analyzed': analyzed, 'failed': failed, 'pending_after': tagged_pending}
 
 
+# --- 단별 수집 함수 ---
+# ==============================================================================
+
+def run_unit_collection(unit_id: int, ai_model: str = None) -> dict:
+    """단별 독립 뉴스 수집 파이프라인.
+
+    해당 단의 RSS URL + 키워드로만 수집하고 unit_id를 태깅하여 저장한다.
+    GitHub Actions sequential 4-unit 배치 또는 수동 실행에 사용.
+
+    Args:
+        unit_id: units 테이블의 id (1~4)
+        ai_model: AI 분석 모델. None이면 CONFIG에서 읽음.
+
+    Returns:
+        {'unit_id': int, 'unit_name': str, 'collected': int, 'saved': int, 'errors': [str]}
+    """
+    from sqlalchemy import text as sa_text
+
+    result = {'unit_id': unit_id, 'unit_name': '', 'collected': 0, 'saved': 0, 'errors': []}
+
+    # 단 정보 조회
+    try:
+        with get_db_session() as session:
+            row = session.execute(
+                sa_text("SELECT name, display_name FROM units WHERE id = :uid"),
+                {"uid": unit_id}
+            ).fetchone()
+        if not row:
+            result['errors'].append(f"unit_id={unit_id} 없음")
+            log_error(f"❌ run_unit_collection: unit_id={unit_id} 없음")
+            return result
+        unit_name, unit_display = row[0], row[1]
+        result['unit_name'] = unit_display
+    except Exception as e:
+        result['errors'].append(f"단 정보 조회 실패: {e}")
+        log_error(f"❌ run_unit_collection: 단 정보 조회 실패 — {e}")
+        return result
+
+    log_info("=" * 60)
+    log_info(f"🏢 [{unit_display}] 단별 뉴스 수집 시작 (unit_id={unit_id})")
+    log_info("=" * 60)
+
+    # 단 설정 로드
+    unit_cfg = load_unit_settings(unit_id)
+    rss_urls  = unit_cfg.get('google_alerts_rss', [])
+    keywords  = unit_cfg.get('keywords', [])
+
+    if not rss_urls and not keywords:
+        log_warning(f"⚠️ [{unit_display}] RSS/키워드 미설정 — 수집 건너뜀")
+        result['errors'].append("RSS/키워드 미설정")
+        return result
+
+    log_info(f"   📡 RSS 피드: {len(rss_urls)}개")
+    log_info(f"   🔑 키워드: {len(keywords)}개 → {', '.join(keywords[:5])}{'...' if len(keywords) > 5 else ''}")
+
+    # 뉴스 수집
+    try:
+        news_items = get_news_data(
+            rss_urls=rss_urls if rss_urls else None,
+            naver_queries=keywords if keywords else None,
+        )
+        result['collected'] = len(news_items)
+        log_info(f"   ✅ {len(news_items)}개 수집 완료")
+    except Exception as e:
+        result['errors'].append(f"수집 실패: {e}")
+        log_error(f"❌ [{unit_display}] 수집 실패: {e}")
+        return result
+
+    if not news_items:
+        log_warning(f"⚠️ [{unit_display}] 수집된 뉴스 없음")
+        return result
+
+    # DB 저장 (unit_id 태깅)
+    try:
+        saved = save_news_to_db(news_items, unit_id=unit_id)
+        result['saved'] = saved
+    except Exception as e:
+        result['errors'].append(f"DB 저장 실패: {e}")
+        log_error(f"❌ [{unit_display}] DB 저장 실패: {e}")
+
+    log_info(f"✅ [{unit_display}] 수집 완료 — 수집 {result['collected']}개 / 저장 {result['saved']}개")
+    return result
+
+
 # --- 메인 실행 함수 ---
 # ==============================================================================
 
@@ -5374,41 +5477,65 @@ def run_monthly_report():
 
 if __name__ == "__main__":
     import sys
-    
-    if len(sys.argv) > 1:
-        command = sys.argv[1].lower()
-        
-        if command == "daily":
-            run_daily_collection()
-        elif command == "weekly":
-            run_weekly_report()
-        elif command == "monthly":
-            run_monthly_report()
-        elif command == "test":
-            log_info("🧪 테스트 모드")
-            stats = get_db_statistics()
-            log_info(f"DB 통계: {stats}")
-        elif command == "setup-schedule":
-            setup_windows_schedule()
-        elif command == "standards":
-            items = get_standards_org_news(days=7)
-            log_info(f"경쟁 기관 수집 결과: {len(items)}개")
-            for it in items[:5]:
-                log_info(f"  - {it['title'][:80]}")
+    import argparse
+
+    # ── argparse로 --unit 파라미터 파싱 ─────────────────────────────────────
+    _parser = argparse.ArgumentParser(add_help=False)
+    _parser.add_argument('command', nargs='?', default='daily')
+    _parser.add_argument('--unit', type=str, default=None,
+                         help='단 name (e.g. standards_planning) — daily 명령에서만 사용')
+    _parser.add_argument('--model', type=str, default=None,
+                         help='AI 모델 override (openai/claude/gemini/perplexity)')
+    _args, _unknown = _parser.parse_known_args()
+
+    command = _args.command.lower() if _args.command else 'daily'
+
+    if command == "daily":
+        if _args.unit:
+            # 단별 수집 모드
+            from sqlalchemy import text as _sa_text
+            with get_db_session() as _sess:
+                _unit_row = _sess.execute(
+                    _sa_text("SELECT id, display_name FROM units WHERE name = :n"),
+                    {"n": _args.unit}
+                ).fetchone()
+            if not _unit_row:
+                log_error(f"❌ 알 수 없는 단: --unit {_args.unit}")
+                log_info("사용 가능한 단: standards_planning, standards_innovation, ai_convergence, radio_network")
+                sys.exit(1)
+            _result = run_unit_collection(_unit_row[0], ai_model=_args.model)
+            log_info(f"수집 결과: {_result}")
         else:
-            log_info("=" * 60)
-            log_info("IRONAGE AI Analytics System v5.0 - CLI")
-            log_info("=" * 60)
-            log_info("\n사용법:")
-            log_info("  python news_engine.py daily           # 일일 뉴스 수집 및 분석")
-            log_info("  python news_engine.py weekly          # 주간 트렌드 리포트")
-            log_info("  python news_engine.py monthly         # 월간 종합 리포트")
-            log_info("  python news_engine.py test            # DB 통계 확인")
-            log_info("  python news_engine.py setup-schedule  # Windows 자동 스케줄 등록")
-            log_info("  python news_engine.py standards       # 경쟁 기관 RSS 수집 테스트")
-            log_info("\n웹 대시보드 실행:")
-            log_info("  streamlit run main_app.py")
-            log_info("=" * 60)
+            run_daily_collection(ai_model=_args.model)
+    elif command == "weekly":
+        run_weekly_report()
+    elif command == "monthly":
+        run_monthly_report()
+    elif command == "test":
+        log_info("🧪 테스트 모드")
+        stats = get_db_statistics()
+        log_info(f"DB 통계: {stats}")
+    elif command == "setup-schedule":
+        setup_windows_schedule()
+    elif command == "standards":
+        items = get_standards_org_news(days=7)
+        log_info(f"경쟁 기관 수집 결과: {len(items)}개")
+        for it in items[:5]:
+            log_info(f"  - {it['title'][:80]}")
     else:
-        run_daily_collection()
+        log_info("=" * 60)
+        log_info("IRONAGE AI Analytics System v5.0 - CLI")
+        log_info("=" * 60)
+        log_info("\n사용법:")
+        log_info("  python news_engine.py daily                    # 전체 일일 수집 및 분석")
+        log_info("  python news_engine.py daily --unit <name>      # 단별 독립 수집")
+        log_info("    units: standards_planning, standards_innovation, ai_convergence, radio_network")
+        log_info("  python news_engine.py weekly                   # 주간 트렌드 리포트")
+        log_info("  python news_engine.py monthly                  # 월간 종합 리포트")
+        log_info("  python news_engine.py test                     # DB 통계 확인")
+        log_info("  python news_engine.py setup-schedule           # Windows 자동 스케줄 등록")
+        log_info("  python news_engine.py standards                # 경쟁 기관 RSS 수집 테스트")
+        log_info("\n웹 대시보드 실행:")
+        log_info("  streamlit run main_app.py")
+        log_info("=" * 60)
 
