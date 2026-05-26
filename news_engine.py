@@ -247,7 +247,8 @@ class NewsArticle(Base):
     analysis_result = Column(Text)
     ai_model = Column(String(50))
     extracted_keywords = Column(Text)
-    
+    unit_id = Column(Integer, nullable=True)  # units.id FK (NULL = 마이그레이션 전 기사)
+
     def __repr__(self):
         return f"<NewsArticle(id={self.id}, title='{self.title[:30]}...')>"
 
@@ -367,35 +368,77 @@ def check_and_migrate_database():
     """
     데이터베이스 스키마 자동 확인 및 업데이트.
     SQLite / PostgreSQL 모두 지원 (SQLAlchemy Inspector 사용).
+
+    수행 순서:
+      1. ORM 테이블 create_all (신규 DB)
+      2. SQLite WAL 모드 활성화
+      3. news_articles 누락 컬럼 추가 (unit_id 포함)
+      4. units 테이블 생성 + 4개 단 시드
+      5. user_settings 테이블 생성 (full schema)
+      6. user_settings 누락 컬럼 추가 (기존 DB 마이그레이션)
     """
     from sqlalchemy import inspect, text
 
     try:
-        # 모든 테이블을 ORM 기준으로 생성 (없으면 신규, 있으면 무시)
+        # 1. ORM 테이블 create_all
         Base.metadata.create_all(DB_ENGINE)
-        log_info("✅ 테이블 확인/생성 완료")
+        log_info("✅ ORM 테이블 확인/생성 완료")
 
-        inspector = inspect(DB_ENGINE)
-
-        # news_articles 컬럼 목록
-        existing_cols = {c['name'] for c in inspector.get_columns('news_articles')}
-
-        # 누락 컬럼 자동 추가
-        missing = {
-            'extracted_keywords': 'TEXT',
-            'ai_model_fallback': 'VARCHAR(100)',
-        }
-        with DB_ENGINE.connect() as conn:
-            for col, col_type in missing.items():
-                if col not in existing_cols:
-                    log_info(f"🔄 DB 스키마 업데이트: {col} 컬럼 추가 중...")
-                    conn.execute(text(f"ALTER TABLE news_articles ADD COLUMN {col} {col_type}"))
-                    conn.commit()
-                    log_info(f"✅ {col} 컬럼 추가 완료!")
-
-        # user_settings 테이블 생성 (없을 때만)
         is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
         id_col = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        inspector = inspect(DB_ENGINE)
+
+        # 2. SQLite WAL 모드 (동시 쓰기 안전성)
+        if not is_pg:
+            with DB_ENGINE.connect() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL"))
+                conn.commit()
+
+        # 3. news_articles 누락 컬럼 추가
+        existing_na_cols = {c['name'] for c in inspector.get_columns('news_articles')}
+        missing_na = {
+            'extracted_keywords': 'TEXT',
+            'ai_model_fallback':  'VARCHAR(100)',
+            'unit_id':            'INTEGER',
+        }
+        with DB_ENGINE.connect() as conn:
+            for col, col_type in missing_na.items():
+                if col not in existing_na_cols:
+                    log_info(f"🔄 news_articles.{col} 컬럼 추가 중...")
+                    conn.execute(text(f"ALTER TABLE news_articles ADD COLUMN {col} {col_type}"))
+                    conn.commit()
+                    log_info(f"✅ news_articles.{col} 추가 완료")
+
+        # 4. units 테이블 생성 + 4개 단 시드
+        upsert_unit = (
+            "INSERT INTO units (name, display_name, description) VALUES (:n, :d, :desc) ON CONFLICT DO NOTHING"
+            if is_pg else
+            "INSERT OR IGNORE INTO units (name, display_name, description) VALUES (:n, :d, :desc)"
+        )
+        _UNITS = [
+            ("standards_planning",   "표준기획단",        "ICT 표준화 기획 및 정책"),
+            ("standards_innovation", "표준혁신단",        "표준화 혁신 및 신기술"),
+            ("ai_convergence",       "AI융합표준단",      "AI·SW 융합 표준화"),
+            ("radio_network",        "전파네트워크표준단", "전파·통신망 표준화"),
+        ]
+        with DB_ENGINE.connect() as conn:
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS units (
+                    id {id_col},
+                    name VARCHAR(50) UNIQUE NOT NULL,
+                    display_name VARCHAR(100) NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+            for name, display_name, desc in _UNITS:
+                conn.execute(text(upsert_unit), {"n": name, "d": display_name, "desc": desc})
+            conn.commit()
+        log_info("✅ units 테이블 확인/시드 완료 (4개 단)")
+
+        # 5. user_settings 테이블 생성 (없을 때만 — full schema 포함)
+        _us_existed = 'user_settings' in inspector.get_table_names()
         with DB_ENGINE.connect() as conn:
             conn.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -406,13 +449,30 @@ def check_and_migrate_database():
                     email_recipients TEXT,
                     schedule_daily BOOLEAN DEFAULT TRUE,
                     schedule_weekly BOOLEAN DEFAULT TRUE,
+                    unit_id INTEGER,
+                    google_alerts_rss TEXT DEFAULT '[]',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
             conn.commit()
 
-        log_info("✅ DB 스키마 최신 상태")
+        # 6. user_settings 누락 컬럼 추가 (기존 DB — 테이블이 이미 있었던 경우만)
+        if _us_existed:
+            existing_us_cols = {c['name'] for c in inspector.get_columns('user_settings')}
+            missing_us = {
+                'unit_id':          'INTEGER',
+                'google_alerts_rss': "TEXT DEFAULT '[]'",
+            }
+            with DB_ENGINE.connect() as conn:
+                for col, col_type in missing_us.items():
+                    if col not in existing_us_cols:
+                        log_info(f"🔄 user_settings.{col} 컬럼 추가 중...")
+                        conn.execute(text(f"ALTER TABLE user_settings ADD COLUMN {col} {col_type}"))
+                        conn.commit()
+                        log_info(f"✅ user_settings.{col} 추가 완료")
+
+        log_info("✅ DB 스키마 최신 상태 (멀티유닛 v5)")
 
     except Exception as e:
         log_warning(f"⚠️ DB 마이그레이션 중 오류: {e}")
@@ -2749,18 +2809,20 @@ def load_user_settings(user_email: str) -> dict:
         with get_db_session() as session:
             row = session.execute(
                 sa_text("SELECT keywords, ai_model, email_recipients, "
-                        "schedule_daily, schedule_weekly "
+                        "schedule_daily, schedule_weekly, unit_id, google_alerts_rss "
                         "FROM user_settings WHERE user_email = :email"),
                 {"email": user_email}
             ).fetchone()
         if row is None:
             return {}
         return {
-            'keywords': json.loads(row[0] or '[]'),
-            'ai_model': row[1] or 'gemini',
+            'keywords':         json.loads(row[0] or '[]'),
+            'ai_model':         row[1] or 'gemini',
             'email_recipients': json.loads(row[2] or '[]'),
-            'schedule_daily': bool(row[3]),
-            'schedule_weekly': bool(row[4]),
+            'schedule_daily':   bool(row[3]),
+            'schedule_weekly':  bool(row[4]),
+            'unit_id':          row[5],           # int or None
+            'google_alerts_rss': json.loads(row[6] or '[]'),
         }
     except Exception as e:
         log_warning(f"load_user_settings 오류: {e}")
@@ -2768,39 +2830,127 @@ def load_user_settings(user_email: str) -> dict:
 
 
 def save_user_settings(user_email: str, settings: dict):
-    """사용자 설정 저장 (upsert)."""
+    """사용자 설정 저장 (upsert). unit_id는 관리자가 별도 관리하므로 이 함수에서 변경하지 않음."""
     from sqlalchemy import text as sa_text
     is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
     upsert_sql = (
         "INSERT INTO user_settings "
-        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, updated_at) "
-        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, CURRENT_TIMESTAMP) "
+        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, google_alerts_rss, updated_at) "
+        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, CURRENT_TIMESTAMP) "
         "ON CONFLICT (user_email) DO UPDATE SET "
         "keywords=EXCLUDED.keywords, ai_model=EXCLUDED.ai_model, "
         "email_recipients=EXCLUDED.email_recipients, schedule_daily=EXCLUDED.schedule_daily, "
-        "schedule_weekly=EXCLUDED.schedule_weekly, updated_at=EXCLUDED.updated_at"
+        "schedule_weekly=EXCLUDED.schedule_weekly, google_alerts_rss=EXCLUDED.google_alerts_rss, "
+        "updated_at=EXCLUDED.updated_at"
     ) if is_pg else (
         "INSERT INTO user_settings "
-        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, updated_at) "
-        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, CURRENT_TIMESTAMP) "
+        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, google_alerts_rss, updated_at) "
+        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, CURRENT_TIMESTAMP) "
         "ON CONFLICT (user_email) DO UPDATE SET "
         "keywords=excluded.keywords, ai_model=excluded.ai_model, "
         "email_recipients=excluded.email_recipients, schedule_daily=excluded.schedule_daily, "
-        "schedule_weekly=excluded.schedule_weekly, updated_at=CURRENT_TIMESTAMP"
+        "schedule_weekly=excluded.schedule_weekly, google_alerts_rss=excluded.google_alerts_rss, "
+        "updated_at=CURRENT_TIMESTAMP"
     )
     try:
         with get_db_session() as session:
             session.execute(sa_text(upsert_sql), {
                 "email": user_email,
-                "kw": json.dumps(settings.get('keywords', []), ensure_ascii=False),
+                "kw":    json.dumps(settings.get('keywords', []), ensure_ascii=False),
                 "model": settings.get('ai_model', 'gemini'),
                 "emails": json.dumps(settings.get('email_recipients', []), ensure_ascii=False),
-                "daily": settings.get('schedule_daily', True),
+                "daily":  settings.get('schedule_daily', True),
                 "weekly": settings.get('schedule_weekly', True),
+                "rss":    json.dumps(settings.get('google_alerts_rss', []), ensure_ascii=False),
             })
             session.commit()
     except Exception as e:
         log_warning(f"save_user_settings 오류: {e}")
+
+
+def get_unit_display_name(unit_id: int) -> str:
+    """units 테이블에서 display_name 조회. 없으면 빈 문자열 반환."""
+    if unit_id is None:
+        return ""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_db_session() as session:
+            row = session.execute(
+                sa_text("SELECT display_name, name FROM units WHERE id = :uid"),
+                {"uid": unit_id}
+            ).fetchone()
+        return row[0] if row else ""
+    except Exception as e:
+        log_warning(f"get_unit_display_name 오류: {e}")
+        return ""
+
+
+def get_all_units() -> list:
+    """units 테이블 전체 조회. [{id, name, display_name, description}] 반환."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_db_session() as session:
+            rows = session.execute(
+                sa_text("SELECT id, name, display_name, description FROM units ORDER BY id")
+            ).fetchall()
+        return [{"id": r[0], "name": r[1], "display_name": r[2], "description": r[3]} for r in rows]
+    except Exception as e:
+        log_warning(f"get_all_units 오류: {e}")
+        return []
+
+
+def load_unit_settings(unit_id: int) -> dict:
+    """단별 수집 설정 로드 (해당 unit_id를 가진 user_settings 첫 번째 행).
+    단 담당자가 아직 설정을 저장하지 않은 경우 빈 설정을 반환(오류 아님).
+    Returns: {'keywords': [], 'google_alerts_rss': []}
+    """
+    if unit_id is None:
+        return {'keywords': [], 'google_alerts_rss': []}
+    from sqlalchemy import text as sa_text
+    try:
+        with get_db_session() as session:
+            row = session.execute(
+                sa_text("SELECT keywords, google_alerts_rss "
+                        "FROM user_settings WHERE unit_id = :uid LIMIT 1"),
+                {"uid": unit_id}
+            ).fetchone()
+        if row is None:
+            return {'keywords': [], 'google_alerts_rss': []}
+        return {
+            'keywords':          json.loads(row[0] or '[]'),
+            'google_alerts_rss': json.loads(row[1] or '[]'),
+        }
+    except Exception as e:
+        log_warning(f"load_unit_settings 오류 (unit_id={unit_id}): {e}")
+        return {'keywords': [], 'google_alerts_rss': []}
+
+
+def assign_user_unit(user_email: str, unit_id) -> bool:
+    """관리자가 사용자에게 단을 배정/변경/해제한다 (unit_id=None 이면 해제).
+    user_settings 행이 없으면 신규 생성(upsert). True=성공, False=실패.
+    """
+    from sqlalchemy import text as sa_text
+    is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
+    upsert_sql = (
+        "INSERT INTO user_settings (user_email, unit_id, updated_at) "
+        "VALUES (:email, :uid, CURRENT_TIMESTAMP) "
+        "ON CONFLICT (user_email) DO UPDATE SET "
+        "unit_id=EXCLUDED.unit_id, updated_at=EXCLUDED.updated_at"
+    ) if is_pg else (
+        "INSERT INTO user_settings (user_email, unit_id, updated_at) "
+        "VALUES (:email, :uid, CURRENT_TIMESTAMP) "
+        "ON CONFLICT (user_email) DO UPDATE SET "
+        "unit_id=excluded.unit_id, updated_at=CURRENT_TIMESTAMP"
+    )
+    try:
+        with get_db_session() as session:
+            session.execute(sa_text(upsert_sql), {"email": user_email, "uid": unit_id})
+            session.commit()
+        log_info(f"✅ 단 배정: {user_email} → unit_id={unit_id}")
+        return True
+    except Exception as e:
+        log_warning(f"assign_user_unit 오류: {e}")
+        return False
 
 
 def _utf16_len(s: str) -> int:

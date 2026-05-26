@@ -53,6 +53,10 @@ try:
         _get_impact_info,
         load_user_settings,
         save_user_settings,
+        get_unit_display_name,
+        get_all_units,
+        load_unit_settings,
+        assign_user_unit,
         IMPACT_LEVEL_ORDER,
         IMPACT_LEVEL_COLOR_RGB,
 
@@ -86,17 +90,17 @@ st.set_page_config(
 )
 
 # ===== Google OAuth 인증 =====
-# st.experimental_user 접근 자체가 예외를 던질 수 있으므로 try/except로 감쌈.
+# st.user (Streamlit 1.37.0+) — st.experimental_user는 1.50.0에서 제거됨.
 # Google OAuth client_id/secret이 secrets에 없으면 _auth_enabled=False (로컬 모드).
 _auth_enabled = False
 try:
-    if hasattr(st, 'experimental_user'):
-        _auth_enabled = hasattr(st.experimental_user, 'is_logged_in')
+    if hasattr(st, 'user'):
+        _auth_enabled = hasattr(st.user, 'is_logged_in')
 except Exception:
     _auth_enabled = False
 
 if _auth_enabled:
-    if not st.experimental_user.is_logged_in:
+    if not st.user.is_logged_in:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.markdown("## IRONAGE AI Analytics")
@@ -107,8 +111,8 @@ if _auth_enabled:
             st.caption("@tta.or.kr 계정만 접속 가능합니다.")
         st.stop()
 
-    _user_email = st.experimental_user.email or ""
-    _user_name  = st.experimental_user.name  or _user_email
+    _user_email = st.user.email or ""
+    _user_name  = st.user.name  or _user_email
 
     if not _user_email.endswith("@tta.or.kr"):
         st.error(f"접근 거부: {_user_email} 은(는) TTA 임직원 계정이 아닙니다.")
@@ -117,13 +121,33 @@ if _auth_enabled:
             st.logout()
         st.stop()
 else:
-    # 로컬 개발 모드 또는 OAuth 미설정 — 인증 없이 통과
-    _user_email = "local@tta.or.kr"
-    _user_name  = "로컬 개발자"
+    # 로컬 개발 모드 또는 OAuth 미설정 — 테스트 유저 전환 가능
+    _user_email = st.session_state.get("_test_user_email", "local@tta.or.kr")
+    _user_name  = f"[테스트] {_user_email.split('@')[0]}"
 
 # 관리자 이메일 목록 — 운영 관리/시스템 설정 탭 접근 가능
 _ADMIN_EMAILS = {"ironage@tta.or.kr", "local@tta.or.kr"}
 _is_admin = _user_email in _ADMIN_EMAILS
+
+# ── 단(Unit) 감지 ──────────────────────────────────────────────────────────────
+# 이메일이 바뀔 때마다 (테스트 전환 포함) unit 정보를 새로 로드한다.
+# session_state 키: "_unit_id" (int|None), "_unit_display_name" (str)
+_cached_email = st.session_state.get("_unit_cache_email")
+if _cached_email != _user_email:
+    # 이메일이 바뀌었거나 첫 로드 → DB에서 unit 정보 갱신
+    try:
+        _s = load_user_settings(_user_email)
+        _uid = _s.get("unit_id")           # int or None
+        _uname = get_unit_display_name(_uid) if _uid else ""
+    except Exception:
+        _uid, _uname = None, ""
+    st.session_state["_unit_id"]           = _uid
+    st.session_state["_unit_display_name"] = _uname
+    st.session_state["_unit_cache_email"]  = _user_email
+
+_unit_id           = st.session_state["_unit_id"]            # int or None
+_unit_display_name = st.session_state["_unit_display_name"]  # "AI융합표준단" or ""
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 # ===== 헬퍼 함수 정의 (함수 호출 전에 정의) =====
@@ -529,10 +553,51 @@ with st.sidebar:
     # 로그인 사용자 정보
     st.markdown(f"**{_user_name}**")
     st.caption(_user_email)
+    if _unit_display_name:
+        st.caption(f"🏢 {_unit_display_name}")
+    elif _is_admin:
+        st.caption("🛠️ 관리자")
+    else:
+        st.caption("⚠️ 단 미배정")
     if _auth_enabled:
         if st.button("로그아웃", use_container_width=True, key="sidebar_logout"):
             st.logout()
     st.markdown("---")
+
+    # ── 🧪 테스트 유저 전환 (로컬 모드 전용) ─────────────────────────────────
+    if not _auth_enabled:
+        st.caption("🧪 테스트 유저 전환")
+        _TEST_USERS = [
+            "local@tta.or.kr",
+            "ironage@tta.or.kr",
+            "planning@tta.or.kr",
+            "innovation@tta.or.kr",
+            "ai@tta.or.kr",
+            "radio@tta.or.kr",
+        ]
+        _TEST_LABELS = [
+            "local@tta.or.kr (관리자)",
+            "ironage@tta.or.kr (관리자)",
+            "planning@tta.or.kr (표준기획단)",
+            "innovation@tta.or.kr (표준혁신단)",
+            "ai@tta.or.kr (AI융합표준단)",
+            "radio@tta.or.kr (전파네트워크표준단)",
+        ]
+        _cur_email = st.session_state.get("_test_user_email", "local@tta.or.kr")
+        _cur_idx = _TEST_USERS.index(_cur_email) if _cur_email in _TEST_USERS else 0
+        _sel_label = st.selectbox(
+            "테스트 유저",
+            _TEST_LABELS,
+            index=_cur_idx,
+            key="test_user_select",
+            label_visibility="collapsed",
+        )
+        _sel_email = _TEST_USERS[_TEST_LABELS.index(_sel_label)]
+        if _sel_email != _cur_email:
+            st.session_state["_test_user_email"] = _sel_email
+            st.rerun()
+        st.markdown("---")
+    # ─────────────────────────────────────────────────────────────────────────
 
     _user_options = ["🏠 홈", "📰 내 뉴스피드", "🔍 AI 검색", "📊 리포트", "📈 트렌드 분석", "⚙️ 내 설정"]
     _admin_options = ["🛠️ 운영 대시보드", "📋 뉴스 관리", "⚙️ 시스템 설정"]
@@ -841,6 +906,18 @@ elif selected == "🛠️ 운영 대시보드":
                 sa_check = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
                 if not sa_check:
                     st.error("❌ GOOGLE_SERVICE_ACCOUNT_JSON 환경변수가 없습니다. Streamlit Secrets를 확인하세요.")
+
+            # ✅ 로컬 마크다운 보고서 저장 (results/ 폴더 및 규약 적용)
+            try:
+                from trend_analyzer import save_analyzed_news_to_markdown
+                md_path = save_analyzed_news_to_markdown(analyzed_results)
+                if md_path:
+                    st.success(f"✅ 로컬 마크다운 보고서 저장 완료")
+                    st.info(f"📂 저장 위치: {md_path}")
+                else:
+                    st.warning("⚠️ 로컬 마크다운 보고서 저장 실패")
+            except Exception as e:
+                st.warning(f"⚠️ 로컬 마크다운 보고서 저장 중 예외 발생: {e}")
 
             progress_bar.progress(0.75)
         
