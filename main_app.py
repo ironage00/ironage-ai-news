@@ -622,15 +622,59 @@ with st.sidebar:
     st.markdown(f"*{datetime.now().strftime('%Y-%m-%d %H:%M')}*")
 
 
+# ===== 홈 페이지 헬퍼 =====
+def _render_unit_articles(articles: list, unit_display: str, max_cards: int = 8):
+    """단별 분석 기사 카드를 렌더링한다."""
+    analyzed = [a for a in articles if a.get('is_analyzed')][:max_cards]
+    if not analyzed:
+        st.info(f"최근 3일간 **{unit_display}** 분석 기사가 없습니다.\n\n"
+                "⚙️ 시스템 설정에서 RSS/키워드를 확인하거나 관리자에게 수집 실행을 요청하세요.")
+        return
+    cards = []
+    for art in analyzed:
+        try:
+            data = json.loads(art.get('analysis_result') or '{}')
+        except Exception:
+            data = {}
+        title    = art.get('title', '제목 없음')
+        source   = art.get('source', '')
+        raw_main = data.get('main_content', '') or ''
+        summary  = (raw_main[:280] + '…') if len(raw_main) > 280 else raw_main
+        link     = art.get('link', '')
+        date_str = str(art.get('collected_at', ''))[:10]
+        impact   = data.get('impact_level', '')
+        impact_color = {'Critical': '#dc2626', 'High': '#ea580c',
+                        'Medium': '#2563eb', 'Low': '#64748b'}.get(impact, '#64748b')
+        impact_badge = (f'<span style="background:{impact_color};color:#fff;'
+                        f'font-size:0.7rem;padding:1px 7px;border-radius:99px;'
+                        f'font-weight:600;">{impact}</span> ') if impact else ''
+        link_tag = (f'<a href="{link}" target="_blank" '
+                    f'style="color:#005aab;text-decoration:none;font-size:0.82rem;">🔗 원문</a>'
+                    if link else '')
+        cards.append(f"""
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
+            margin-bottom:10px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+  <div style="font-size:0.76rem;font-weight:700;color:#005aab;
+              margin-bottom:4px;">[{source}] {impact_badge}</div>
+  <div style="font-weight:600;color:#1e293b;font-size:0.96rem;
+              line-height:1.5;margin-bottom:7px;">{title}</div>
+  <div style="font-size:0.87rem;color:#475569;line-height:1.65;
+              margin-bottom:9px;">{summary}</div>
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+    {link_tag}
+    <span style="color:#94a3b8;font-size:0.76rem;">수집: {date_str}</span>
+  </div>
+</div>""")
+    st.markdown('\n'.join(cards), unsafe_allow_html=True)
+
+
 # ===== 1. 홈 페이지 (모든 사용자) =====
 if selected == "🏠 홈":
     st.markdown('<h1 class="main-header">🏠 IRONAGE 뉴스 인텔리전스</h1>', unsafe_allow_html=True)
-    st.markdown(f"안녕하세요, **{_user_name}** 님! 오늘의 ICT 뉴스 요약입니다.")
+    st.markdown(f"안녕하세요, **{_user_name}** 님! ({_unit_display_name or ('관리자' if _is_admin else '단 미배정')})")
     st.markdown("---")
 
-    _home_settings = load_user_settings(_user_email)
-    _home_keywords = _home_settings.get('keywords') or list(NAVER_QUERIES) or []
-
+    # ── 전체 통계 ─────────────────────────────────────────────────────────────
     _hs = get_db_statistics()
     _hc1, _hc2, _hc3, _hc4 = st.columns(4)
     _hc1.metric("오늘 수집", _hs['today'])
@@ -639,49 +683,40 @@ if selected == "🏠 홈":
     _hc4.metric("대기 중", _hs['pending'])
 
     st.markdown("---")
+    st.markdown("### 🏢 단별 일일 동향")
 
-    _kw_label = ", ".join(_home_keywords[:5]) + ("..." if len(_home_keywords) > 5 else "")
-    st.markdown(f"### 📌 내 키워드 최신 뉴스 ({_kw_label or '전체'})")
+    # ── 4개 단 탭 ─────────────────────────────────────────────────────────────
+    _ALL_UNITS = get_all_units()  # [{id, name, display_name, description}]
 
-    _home_news_raw = load_news_from_db(days=3)
-    _home_news = filter_articles_by_keywords(_home_news_raw, _home_keywords) if _home_keywords else _home_news_raw
-    _home_analyzed = [n for n in _home_news if n.get('is_analyzed')]
-
-    if _home_analyzed:
-        _home_cards = []
-        for _h_art in _home_analyzed[:8]:
-            try:
-                _h_data = json.loads(_h_art.get('analysis_result') or '{}')
-            except Exception:
-                _h_data = {}
-            _h_title  = _h_art.get('title', '제목 없음')
-            _h_source = _h_art.get('source', '')
-            _h_main_raw = _h_data.get('main_content', '') or ''
-            _h_main   = (_h_main_raw[:300] + '...') if len(_h_main_raw) > 300 else _h_main_raw
-            _h_link   = _h_art.get('link', '')
-            _h_date   = str(_h_art.get('collected_at', ''))[:10]
-            _h_link_tag = (f'<a href="{_h_link}" target="_blank" '
-                           f'style="color:#005aab;text-decoration:none;font-size:0.85rem;">🔗 원문 보기</a>'
-                           if _h_link else '')
-            _home_cards.append(f"""
-<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
-            margin-bottom:10px;background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
-  <div style="font-size:0.78rem;font-weight:700;color:#005aab;
-              margin-bottom:4px;letter-spacing:0.02em;">[{_h_source}]</div>
-  <div style="font-weight:600;color:#1e293b;font-size:0.97rem;
-              line-height:1.5;margin-bottom:8px;">{_h_title}</div>
-  <div style="font-size:0.88rem;color:#475569;line-height:1.65;
-              margin-bottom:10px;">{_h_main}</div>
-  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-    {_h_link_tag}
-    <span style="color:#94a3b8;font-size:0.78rem;">수집일: {_h_date}</span>
-  </div>
-</div>""")
-        st.markdown('\n'.join(_home_cards), unsafe_allow_html=True)
+    if not _ALL_UNITS:
+        st.warning("단 정보를 불러올 수 없습니다. DB 연결을 확인하세요.")
     else:
-        st.info("오늘 키워드에 맞는 분석 기사가 없습니다. **⚙️ 내 설정**에서 키워드를 확인하거나, "
-                "관리자에게 수집 실행을 요청하세요.")
+        # 탭 레이블: 내 단에 ★ 표시
+        _tab_labels = []
+        for _u in _ALL_UNITS:
+            _mark = " ★" if _u['id'] == _unit_id else ""
+            _tab_labels.append(f"{_u['display_name']}{_mark}")
 
+        _tabs = st.tabs(_tab_labels)
+
+        for _tab, _unit in zip(_tabs, _ALL_UNITS):
+            with _tab:
+                # 단별 최근 3일 기사 로드
+                _unit_news = load_news_from_db(days=3, unit_id=_unit['id'])
+                _analyzed_count = sum(1 for a in _unit_news if a.get('is_analyzed'))
+
+                # 단 설명 + 기사 수
+                _desc = _unit.get('description', '')
+                _col_desc, _col_cnt = st.columns([3, 1])
+                with _col_desc:
+                    if _desc:
+                        st.caption(f"📋 {_desc}")
+                with _col_cnt:
+                    st.caption(f"✅ 분석 {_analyzed_count}건 / 전체 {len(_unit_news)}건 (최근 3일)")
+
+                _render_unit_articles(_unit_news, _unit['display_name'])
+
+    # ── 빠른 바로가기 ─────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### ⚡ 빠른 바로가기")
     _ql1, _ql2, _ql3 = st.columns(3)

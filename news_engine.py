@@ -623,25 +623,36 @@ def save_news_to_db(news_items, unit_id=None):
     log_info(f"   💾 {saved_count}개 뉴스가 DB에 저장되었습니다{unit_label}.")
     return saved_count
 
-def load_news_from_db(days=7, is_analyzed=None):
-    """DB에서 뉴스 로드"""
+def load_news_from_db(days=7, is_analyzed=None, unit_id=None):
+    """DB에서 뉴스 로드.
+
+    Args:
+        days: 최근 N일 기사 조회
+        is_analyzed: True/False/None(전체)
+        unit_id: 단 ID 필터. None이면 전체(unit_id 구분 없음) 반환.
+                 -1 이면 unit_id IS NULL (마이그레이션 전 기사) 조회.
+    """
     if not SessionLocal:
         log_error("❌ DB 세션이 초기화되지 않았습니다.")
         return []
-    
+
     with get_db_session() as session:
         try:
             query = session.query(NewsArticle)
-            
-            # ✅ 수정: timezone-aware datetime 사용
+
             date_from = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
             query = query.filter(NewsArticle.collected_at >= date_from)
-            
+
             if is_analyzed is not None:
                 query = query.filter(NewsArticle.is_analyzed == is_analyzed)
-            
+
+            if unit_id == -1:
+                query = query.filter(NewsArticle.unit_id.is_(None))
+            elif unit_id is not None:
+                query = query.filter(NewsArticle.unit_id == unit_id)
+
             articles = query.order_by(NewsArticle.collected_at.desc()).all()
-            
+
             return [{
                 'id': a.id,
                 'title': a.title,
@@ -653,9 +664,10 @@ def load_news_from_db(days=7, is_analyzed=None):
                 'quality_score': a.quality_score,
                 'is_analyzed': a.is_analyzed,
                 'analysis_result': a.analysis_result,
-                'extracted_keywords': a.extracted_keywords
+                'extracted_keywords': a.extracted_keywords,
+                'unit_id': a.unit_id,
             } for a in articles]
-            
+
         except Exception as e:
             log_error(f"❌ DB 조회 실패: {e}")
             return []
