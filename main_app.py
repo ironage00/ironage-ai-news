@@ -2733,26 +2733,37 @@ elif selected == "📈 트렌드 분석":
 # ===== 내 설정 페이지 =====
 elif selected == "⚙️ 내 설정":
     st.markdown('<h1 class="main-header">👤 내 설정</h1>', unsafe_allow_html=True)
-    st.markdown(f"**{_user_name}** ({_user_email}) 님의 개인 설정")
+    st.markdown(f"**{_user_name}** ({_user_email}) 님의 설정")
     st.markdown("---")
 
     current = load_user_settings(_user_email)
 
     from news_engine import CONFIG, NAVER_QUERIES, RECEIVER_EMAIL
 
+    # ── 내 단 정보 배너 ────────────────────────────────────────────────────────
+    if _unit_display_name:
+        st.info(f"🏢 소속 단: **{_unit_display_name}** — 아래 키워드·RSS·이메일은 단 전체에 적용됩니다.")
+    elif _is_admin:
+        st.info("🛠️ 관리자 계정입니다. 단별 RSS/키워드는 각 단 담당자가 설정합니다.")
+    else:
+        st.warning("⚠️ 소속 단이 배정되지 않았습니다. 관리자(⚙️ 시스템 설정 → 단 멤버십)에게 요청하세요.")
+
+    st.markdown("---")
+
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("키워드 설정")
+        st.subheader("🔑 키워드 설정")
+        st.caption("네이버 뉴스 검색에 사용할 키워드입니다.")
         default_keywords = current.get('keywords') or NAVER_QUERIES or []
         keywords_input = st.text_area(
             "모니터링할 키워드 (줄바꿈으로 구분)",
             value="\n".join(default_keywords),
-            height=200,
+            height=180,
             key="user_keywords"
         )
 
-        st.subheader("AI 모델 선택")
+        st.subheader("🤖 AI 모델 선택")
         model_options = ["gemini", "openai", "claude", "perplexity"]
         model_labels = {
             "gemini": "Gemini 2.5 Flash",
@@ -2770,7 +2781,8 @@ elif selected == "⚙️ 내 설정":
         )
 
     with col2:
-        st.subheader("리포트 수신 이메일")
+        st.subheader("📧 리포트 수신 이메일")
+        st.caption("리포트를 받을 이메일 주소입니다. (단 내부 관리용)")
         default_emails = current.get('email_recipients') or (
             [RECEIVER_EMAIL] if RECEIVER_EMAIL else []
         )
@@ -2781,7 +2793,7 @@ elif selected == "⚙️ 내 설정":
             key="user_emails"
         )
 
-        st.subheader("자동 실행 설정")
+        st.subheader("⏰ 자동 실행 설정")
         sched_daily = st.checkbox(
             "일일 뉴스 수집 (매일 09:00 KST)",
             value=current.get('schedule_daily', True),
@@ -2793,16 +2805,34 @@ elif selected == "⚙️ 내 설정":
             key="user_sched_weekly"
         )
 
+    # ── Google Alerts RSS 편집 (단 담당자 + 관리자 모두 편집 가능) ────────────
     st.markdown("---")
-    if st.button("💾 설정 저장", type="primary", use_container_width=False):
+    st.subheader("📡 Google Alerts RSS 피드")
+    st.caption("Google Alerts에서 생성한 RSS URL을 등록하세요. 단별 수집 시 이 목록을 사용합니다.")
+
+    default_rss = current.get('google_alerts_rss') or []
+    rss_input = st.text_area(
+        "RSS URL (한 줄에 하나씩)",
+        value="\n".join(default_rss),
+        height=150,
+        key="user_rss",
+        placeholder="https://www.google.co.kr/alerts/feeds/...",
+    )
+
+    # ── 저장 ──────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    if st.button("💾 설정 저장", type="primary", use_container_width=False, key="save_user_settings_btn"):
         save_user_settings(_user_email, {
-            'keywords': [k.strip() for k in keywords_input.split('\n') if k.strip()],
-            'ai_model': ai_model,
-            'email_recipients': [e.strip() for e in emails_input.split('\n') if e.strip()],
-            'schedule_daily': sched_daily,
-            'schedule_weekly': sched_weekly,
+            'keywords':          [k.strip() for k in keywords_input.split('\n') if k.strip()],
+            'ai_model':          ai_model,
+            'email_recipients':  [e.strip() for e in emails_input.split('\n') if e.strip()],
+            'schedule_daily':    sched_daily,
+            'schedule_weekly':   sched_weekly,
+            'google_alerts_rss': [u.strip() for u in rss_input.split('\n') if u.strip()],
         })
-        st.success("설정이 저장되었습니다.")
+        # 단 감지 캐시 초기화 → 다음 리런에서 unit 재로드
+        st.session_state.pop("_unit_cache_email", None)
+        st.success("✅ 설정이 저장되었습니다.")
         st.rerun()
 
 
@@ -2816,23 +2846,27 @@ elif selected == "⚙️ 시스템 설정":
     if 'settings_tab' not in st.session_state:
         st.session_state.settings_tab = 'api'
     
-    col_tab1, col_tab2, col_tab3, col_tab4, col_spacer = st.columns([1, 1, 1, 1, 2])
-    
+    col_tab1, col_tab2, col_tab3, col_tab4, col_tab5 = st.columns(5)
+
     with col_tab1:
         if st.button("🔑 API 키", key="tab_api_settings", use_container_width=True):
             st.session_state.settings_tab = 'api'
-    
+
     with col_tab2:
         if st.button("🏷️ 키워드", key="tab_keywords_settings", use_container_width=True):
             st.session_state.settings_tab = 'keywords'
-    
+
     with col_tab3:
         if st.button("📧 이메일", key="tab_email_settings", use_container_width=True):
             st.session_state.settings_tab = 'email'
-    
+
     with col_tab4:
         if st.button("⏰ 스케줄", key="tab_schedule_settings", use_container_width=True):
             st.session_state.settings_tab = 'schedule'
+
+    with col_tab5:
+        if st.button("🏢 단 멤버십", key="tab_units_settings", use_container_width=True):
+            st.session_state.settings_tab = 'units'
     
     st.markdown("---")
     
@@ -3156,5 +3190,78 @@ python news_engine.py weekly
 # 월간 리포트
 python news_engine.py monthly
             """, language="powershell")
-        
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.settings_tab == 'units':
+        st.markdown('<div class="tab-content">', unsafe_allow_html=True)
+        st.markdown("### 🏢 단 멤버십 관리")
+        st.caption("각 단에 담당자 이메일을 배정합니다. 배정된 계정은 해당 단의 RSS·키워드·이메일을 ⚙️ 내 설정에서 편집할 수 있습니다.")
+        st.markdown("---")
+
+        _mgmt_units = get_all_units()
+        from sqlalchemy import text as _sa_text
+
+        for _mu in _mgmt_units:
+            with st.expander(f"🏢 {_mu['display_name']}  —  {_mu['description']}", expanded=True):
+                # 현재 배정된 담당자 목록 조회
+                try:
+                    with get_db_session() as _ms:
+                        _members = _ms.execute(
+                            _sa_text("SELECT user_email FROM user_settings "
+                                     "WHERE unit_id = :uid ORDER BY user_email"),
+                            {"uid": _mu['id']}
+                        ).fetchall()
+                    _member_emails = [r[0] for r in _members]
+                except Exception:
+                    _member_emails = []
+
+                if _member_emails:
+                    st.markdown(f"**현재 담당자**: {', '.join(_member_emails)}")
+                else:
+                    st.markdown("**현재 담당자**: *(미배정)*")
+
+                _col_inp, _col_btn = st.columns([3, 1])
+                with _col_inp:
+                    _new_email = st.text_input(
+                        "담당자 이메일 추가/변경 (@tta.or.kr)",
+                        placeholder="example@tta.or.kr",
+                        key=f"unit_mgmt_email_{_mu['id']}",
+                        label_visibility="collapsed",
+                    )
+                with _col_btn:
+                    if st.button("배정", key=f"unit_mgmt_assign_{_mu['id']}", use_container_width=True):
+                        _em = _new_email.strip()
+                        if not _em:
+                            st.warning("이메일을 입력하세요.")
+                        elif not _em.endswith("@tta.or.kr"):
+                            st.error("@tta.or.kr 계정만 배정 가능합니다.")
+                        else:
+                            _ok = assign_user_unit(_em, _mu['id'])
+                            if _ok:
+                                st.session_state.pop("_unit_cache_email", None)
+                                st.success(f"✅ {_em} → {_mu['display_name']} 배정 완료")
+                                st.rerun()
+                            else:
+                                st.error("배정 실패. 오류 로그를 확인하세요.")
+
+                # 해제 버튼 (담당자가 있을 때만 표시)
+                if _member_emails:
+                    with st.expander("담당자 해제", expanded=False):
+                        _release_email = st.selectbox(
+                            "해제할 담당자",
+                            _member_emails,
+                            key=f"unit_release_sel_{_mu['id']}",
+                        )
+                        if st.button(f"🗑️ {_release_email} 해제",
+                                     key=f"unit_release_btn_{_mu['id']}",
+                                     type="secondary"):
+                            _ok2 = assign_user_unit(_release_email, None)
+                            if _ok2:
+                                st.session_state.pop("_unit_cache_email", None)
+                                st.success(f"✅ {_release_email} 단 배정 해제 완료")
+                                st.rerun()
+                            else:
+                                st.error("해제 실패.")
+
         st.markdown('</div>', unsafe_allow_html=True)
