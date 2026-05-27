@@ -752,98 +752,54 @@ if selected == "🏠 홈":
     _hc3.metric("전체 기사", _hs['total'])
     _hc4.metric("대기 중", _hs['pending'])
 
-    # ── GAP 1: 전체 프로세스 실행 (관리자 전용) ────────────────────────────────
+    # ── 전체 프로세스 실행 (관리자 전용) ──────────────────────────────────────
     if _is_admin:
         st.markdown("---")
         with st.expander("🚀 전체 프로세스 실행 (관리자 전용)", expanded=False):
-            st.markdown("""
-            **1단계:** 뉴스 수집 (Google Alerts + Naver) → DB 저장
-            **2단계:** AI 뉴스 선별 (중요도 평가)
-            **3단계:** 심층 분析 (본문 수집 + AI 분析 + 키워드 추출)
-            **4단계:** 구글 문서 생성
-            **5단계:** 이메일 자동 발송
-            **6~7단계:** 주간 엑셀 + 키워드 통계 자동 저장
-            *⏱️ 예상 소요 시간: 30분 이내*
-            """)
-            _home_num_analyze = st.slider("📊 분析할 뉴스 개수", 5, 20, 10, key="home_full_process_slider")
-            if st.button("🚀 전체 프로세스 시작", type="primary",
+            _home_cfg = load_config()
+            _home_model = _home_cfg.get('ai_model', 'openai')
+
+            st.markdown(f"""
+각 단의 키워드·RSS로 **단별 독립 수집→AI분析→이메일**을 순차 실행합니다.
+
+| 단계 | 내용 |
+|------|------|
+| 1 | 단별 키워드·RSS로 뉴스 수집 (키워드 혼합 없음) |
+| 2 | AI 선별 (중요도 상위 50개) |
+| 3 | 심층 분析 (최대 20건) |
+| 4 | Google Docs 리포트 생성 |
+| 5 | 단별 수신자 이메일 발송 |
+| 6 | 주간 엑셀 누적 저장 |
+
+🤖 **AI 모델:** `{_home_model.upper()}` &nbsp;|&nbsp; ⏱️ **예상 소요:** 단당 10~20분
+""")
+            # 미설정 단 경고
+            _all_u = get_all_units()
+            _skip_units = [
+                u['display_name'] for u in _all_u
+                if not load_unit_settings(u['id']).get('keywords')
+                and not load_unit_settings(u['id']).get('google_alerts_rss')
+            ]
+            if _skip_units:
+                st.warning(f"⚠️ 키워드/RSS 미설정으로 건너뛸 단: **{', '.join(_skip_units)}**\n\n⚙️ 내 설정에서 키워드를 추가하세요.")
+
+            if st.button("🚀 4개 단 전체 프로세스 시작", type="primary",
                          use_container_width=True, key="home_full_process_start"):
-                _home_progress = st.progress(0)
                 _home_status = st.empty()
+                _home_status.info("⏳ 실행 중... 단별로 순차 처리합니다. 완료까지 수분~수십분 소요될 수 있습니다.")
                 try:
-                    _home_cfg = load_config()
-                    _home_model = _home_cfg.get('ai_model', 'openai')
-                    st.info(f"🤖 사용 AI 모델: **{_home_model.upper()}**")
+                    _summary = run_all_units_daily(ai_model=_home_model)
+                    _home_status.empty()
 
-                    _home_status.markdown("### 📡 1/7: 뉴스 수집 중...")
-                    _home_progress.progress(0.10)
-                    _home_items = get_news_data()
-                    _home_saved = save_news_to_db(_home_items)
-                    st.success(f"✅ 1단계: {len(_home_items)}개 수집, {_home_saved}개 저장")
-                    _home_progress.progress(0.15)
-
-                    _home_status.markdown("### 🤖 2/7: AI 선별 중...")
-                    _home_selected = filter_news_by_ai(_home_items, ai_model=_home_model, max_results=50)
-                    st.success(f"✅ 2단계: {len(_home_selected)}개 선별")
-                    _home_progress.progress(0.30)
-
-                    _home_status.markdown("### 📝 3/7: 심층 분析 중...")
-                    _home_pool = _home_selected[_home_num_analyze:] + [
-                        item for item in _home_items
-                        if item['link'] not in {n['link'] for n in _home_selected}
-                    ]
-
-                    def _home_progress_cb(done, total):
-                        _home_progress.progress(0.35 + 0.25 * (done / total))
-                        _home_status.markdown(f"### 📝 3/7: 심층 분析 중... ({done}/{total})")
-
-                    _home_analyzed = analyze_news_with_replacement(
-                        _home_selected[:_home_num_analyze], _home_pool,
-                        target_count=_home_num_analyze, ai_model=_home_model,
-                        progress_callback=_home_progress_cb,
-                    )
-                    st.success(f"✅ 3단계: {len(_home_analyzed)}개 분析")
-                    _home_progress.progress(0.60)
-
-                    _home_status.markdown("### 📄 4/7: 구글 문서 생성 중...")
-                    _home_doc_url, _home_report_title = generate_google_doc_report(_home_analyzed)
-                    if not _home_report_title:
-                        import datetime as _hdt
-                        _home_report_title = (
-                            f"전파·이동통신 동향 보고서 "
-                            f"({_hdt.date.today().strftime('%Y년 %m월 %d일')})"
-                        )
-                    if _home_doc_url:
-                        st.success("✅ 4단계: 문서 생성 완료")
-                        st.markdown(f"[📄 구글 문서 보기]({_home_doc_url})")
-                    else:
-                        st.warning("⚠️ 4단계: Google Docs 생성 실패")
-                    _home_progress.progress(0.75)
-
-                    _home_status.markdown("### 📧 5/7: 이메일 발송 중...")
-                    _home_analyzed_links = {r['link'] for r in _home_analyzed}
-                    _home_remaining = [n for n in _home_selected
-                                       if n['link'] not in _home_analyzed_links]
-                    send_gmail_report(_home_report_title, _home_analyzed,
-                                      _home_doc_url, _home_remaining)
-                    st.success("✅ 5단계: 이메일 발송 완료")
-                    _home_progress.progress(0.85)
-
-                    _home_status.markdown("### 📊 6/7: 주간 엑셀 저장 중...")
-                    _home_year, _home_week, _home_week_str = get_week_number()
-                    _home_excel = save_analysis_to_weekly_excel(_home_analyzed)
-                    if _home_excel:
-                        st.success(f"✅ 6단계: 주간 엑셀 저장 완료 ({_home_week_str})")
-                    _home_progress.progress(0.93)
-
-                    _home_status.markdown("### 📈 7/7: 키워드 통계 저장 중...")
-                    _home_kw_path = save_keyword_summary_to_weekly_excel()
-                    if _home_kw_path:
-                        st.success("✅ 7단계: 키워드 통계 저장 완료")
-                    _home_progress.progress(1.0)
-
-                    _home_status.markdown("### ✅ 전체 프로세스 완료!")
-                    st.success("🎉 모든 작업이 완료되었습니다!")
+                    st.success("🎉 전체 프로세스 완료!")
+                    for _uname, _r in _summary.items():
+                        if _r.get('errors') and not _r.get('analyzed'):
+                            st.warning(f"⚠️ [{_uname}] 건너뜀 — {_r['errors'][0]}")
+                        else:
+                            st.success(
+                                f"✅ [{_uname}] 수집 {_r['collected']}건 / "
+                                f"저장 {_r['saved']}건 / 분析 {_r['analyzed']}건"
+                            )
                     st.balloons()
                 except Exception as _home_err:
                     st.error(f"❌ 오류: {str(_home_err)}")
