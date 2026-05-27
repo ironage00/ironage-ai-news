@@ -82,6 +82,12 @@ except ImportError as e:
     st.info("news_engine.py 파일이 같은 폴더에 있는지 확인하세요.")
     st.stop()
 
+try:
+    from intelligence_widgets import render_keyword_intelligence
+    _INTEL_WIDGET_OK = True
+except ImportError:
+    _INTEL_WIDGET_OK = False
+
 # ===== 페이지 설정 =====
 st.set_page_config(
     page_title="IRONAGE AI Analytics",
@@ -674,24 +680,120 @@ if selected == "🏠 홈":
     st.markdown(f"안녕하세요, **{_user_name}** 님! ({_unit_display_name or ('관리자' if _is_admin else '단 미배정')})")
     st.markdown("---")
 
-    # ── 전체 통계 ─────────────────────────────────────────────────────────────
+    # ── 전체 통계 ──────────────────────────────────────────────────────────────
     _hs = get_db_statistics()
     _hc1, _hc2, _hc3, _hc4 = st.columns(4)
     _hc1.metric("오늘 수집", _hs['today'])
-    _hc2.metric("분석 완료", _hs['analyzed'])
+    _hc2.metric("분析 완료", _hs['analyzed'])
     _hc3.metric("전체 기사", _hs['total'])
     _hc4.metric("대기 중", _hs['pending'])
+
+    # ── GAP 1: 전체 프로세스 실행 (관리자 전용) ────────────────────────────────
+    if _is_admin:
+        st.markdown("---")
+        with st.expander("🚀 전체 프로세스 실행 (관리자 전용)", expanded=False):
+            st.markdown("""
+            **1단계:** 뉴스 수집 (Google Alerts + Naver) → DB 저장
+            **2단계:** AI 뉴스 선별 (중요도 평가)
+            **3단계:** 심층 분析 (본문 수집 + AI 분析 + 키워드 추출)
+            **4단계:** 구글 문서 생성
+            **5단계:** 이메일 자동 발송
+            **6~7단계:** 주간 엑셀 + 키워드 통계 자동 저장
+            *⏱️ 예상 소요 시간: 30분 이내*
+            """)
+            _home_num_analyze = st.slider("📊 분析할 뉴스 개수", 5, 20, 10, key="home_full_process_slider")
+            if st.button("🚀 전체 프로세스 시작", type="primary",
+                         use_container_width=True, key="home_full_process_start"):
+                _home_progress = st.progress(0)
+                _home_status = st.empty()
+                try:
+                    _home_cfg = load_config()
+                    _home_model = _home_cfg.get('ai_model', 'openai')
+                    st.info(f"🤖 사용 AI 모델: **{_home_model.upper()}**")
+
+                    _home_status.markdown("### 📡 1/7: 뉴스 수집 중...")
+                    _home_progress.progress(0.10)
+                    _home_items = get_news_data()
+                    _home_saved = save_news_to_db(_home_items)
+                    st.success(f"✅ 1단계: {len(_home_items)}개 수집, {_home_saved}개 저장")
+                    _home_progress.progress(0.15)
+
+                    _home_status.markdown("### 🤖 2/7: AI 선별 중...")
+                    _home_selected = filter_news_by_ai(_home_items, ai_model=_home_model, max_results=50)
+                    st.success(f"✅ 2단계: {len(_home_selected)}개 선별")
+                    _home_progress.progress(0.30)
+
+                    _home_status.markdown("### 📝 3/7: 심층 분析 중...")
+                    _home_pool = _home_selected[_home_num_analyze:] + [
+                        item for item in _home_items
+                        if item['link'] not in {n['link'] for n in _home_selected}
+                    ]
+
+                    def _home_progress_cb(done, total):
+                        _home_progress.progress(0.35 + 0.25 * (done / total))
+                        _home_status.markdown(f"### 📝 3/7: 심층 분析 중... ({done}/{total})")
+
+                    _home_analyzed = analyze_news_with_replacement(
+                        _home_selected[:_home_num_analyze], _home_pool,
+                        target_count=_home_num_analyze, ai_model=_home_model,
+                        progress_callback=_home_progress_cb,
+                    )
+                    st.success(f"✅ 3단계: {len(_home_analyzed)}개 분析")
+                    _home_progress.progress(0.60)
+
+                    _home_status.markdown("### 📄 4/7: 구글 문서 생성 중...")
+                    _home_doc_url, _home_report_title = generate_google_doc_report(_home_analyzed)
+                    if not _home_report_title:
+                        import datetime as _hdt
+                        _home_report_title = (
+                            f"전파·이동통신 동향 보고서 "
+                            f"({_hdt.date.today().strftime('%Y년 %m월 %d일')})"
+                        )
+                    if _home_doc_url:
+                        st.success("✅ 4단계: 문서 생성 완료")
+                        st.markdown(f"[📄 구글 문서 보기]({_home_doc_url})")
+                    else:
+                        st.warning("⚠️ 4단계: Google Docs 생성 실패")
+                    _home_progress.progress(0.75)
+
+                    _home_status.markdown("### 📧 5/7: 이메일 발송 중...")
+                    _home_analyzed_links = {r['link'] for r in _home_analyzed}
+                    _home_remaining = [n for n in _home_selected
+                                       if n['link'] not in _home_analyzed_links]
+                    send_gmail_report(_home_report_title, _home_analyzed,
+                                      _home_doc_url, _home_remaining)
+                    st.success("✅ 5단계: 이메일 발송 완료")
+                    _home_progress.progress(0.85)
+
+                    _home_status.markdown("### 📊 6/7: 주간 엑셀 저장 중...")
+                    _home_year, _home_week, _home_week_str = get_week_number()
+                    _home_excel = save_analysis_to_weekly_excel(_home_analyzed)
+                    if _home_excel:
+                        st.success(f"✅ 6단계: 주간 엑셀 저장 완료 ({_home_week_str})")
+                    _home_progress.progress(0.93)
+
+                    _home_status.markdown("### 📈 7/7: 키워드 통계 저장 중...")
+                    _home_kw_path = save_keyword_summary_to_weekly_excel()
+                    if _home_kw_path:
+                        st.success("✅ 7단계: 키워드 통계 저장 완료")
+                    _home_progress.progress(1.0)
+
+                    _home_status.markdown("### ✅ 전체 프로세스 완료!")
+                    st.success("🎉 모든 작업이 완료되었습니다!")
+                    st.balloons()
+                except Exception as _home_err:
+                    st.error(f"❌ 오류: {str(_home_err)}")
+                    st.error(traceback.format_exc())
 
     st.markdown("---")
     st.markdown("### 🏢 단별 일일 동향")
 
-    # ── 4개 단 탭 ─────────────────────────────────────────────────────────────
-    _ALL_UNITS = get_all_units()  # [{id, name, display_name, description}]
+    # ── 4개 단 탭 ──────────────────────────────────────────────────────────────
+    _ALL_UNITS = get_all_units()
 
     if not _ALL_UNITS:
         st.warning("단 정보를 불러올 수 없습니다. DB 연결을 확인하세요.")
     else:
-        # 탭 레이블: 내 단에 ★ 표시
         _tab_labels = []
         for _u in _ALL_UNITS:
             _mark = " ★" if _u['id'] == _unit_id else ""
@@ -705,27 +807,48 @@ if selected == "🏠 홈":
                 _unit_news = load_news_from_db(days=3, unit_id=_unit['id'])
                 _analyzed_count = sum(1 for a in _unit_news if a.get('is_analyzed'))
 
-                # 단 설명 + 기사 수
+                # GAP 2: 단 설명 + 키워드 현황 + 기사 수 통계
                 _desc = _unit.get('description', '')
-                _col_desc, _col_cnt = st.columns([3, 1])
-                with _col_desc:
+                _unit_cfg = load_unit_settings(_unit['id'])
+                _unit_kws = _unit_cfg.get('keywords', [])
+
+                _col_info, _col_cnt = st.columns([3, 1])
+                with _col_info:
                     if _desc:
                         st.caption(f"📋 {_desc}")
+                    if _unit_kws:
+                        _kw_badges = " ".join(
+                            f'<span style="background:#e8f0fe;color:#005aab;font-size:0.75rem;'
+                            f'padding:1px 8px;border-radius:99px;margin:2px;display:inline-block;">'
+                            f'{k}</span>'
+                            for k in _unit_kws[:10]
+                        )
+                        st.markdown(
+                            f"**🔑 모니터링 키워드:** {_kw_badges}", unsafe_allow_html=True
+                        )
+                    else:
+                        st.caption("⚠️ 키워드 미설정 — ⚙️ 시스템 설정에서 단 키워드를 추가하세요.")
                 with _col_cnt:
-                    st.caption(f"✅ 분석 {_analyzed_count}건 / 전체 {len(_unit_news)}건 (최근 3일)")
+                    st.metric(
+                        label="수집/분析",
+                        value=f"{len(_unit_news)}건",
+                        delta=f"분析 {_analyzed_count}건",
+                        delta_color="normal",
+                        help="최근 3일 기준"
+                    )
 
                 _render_unit_articles(_unit_news, _unit['display_name'])
 
-    # ── 빠른 바로가기 ─────────────────────────────────────────────────────────
+    # ── GAP 3: 인텔리전스 대시보드 ────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("### ⚡ 빠른 바로가기")
-    _ql1, _ql2, _ql3 = st.columns(3)
-    with _ql1:
-        st.info("📰 **내 뉴스피드**\n\n키워드 맞춤 전체 뉴스 목록 → 좌측 메뉴")
-    with _ql2:
-        st.info("🔍 **AI 검색**\n\n자연어로 뉴스 검색 → 좌측 메뉴")
-    with _ql3:
-        st.info("📊 **리포트**\n\n주간/월간 리포트 생성 → 좌측 메뉴")
+    st.markdown("### 📊 인텔리전스 대시보드")
+    if _INTEL_WIDGET_OK:
+        render_keyword_intelligence("home")
+    else:
+        st.warning(
+            "⚠️ intelligence_widgets.py 모듈을 불러오지 못했습니다. "
+            "운영 대시보드에서 확인하세요."
+        )
 
 
 # ===== 2. 내 뉴스피드 (모든 사용자 - 키워드 필터) =====
@@ -839,297 +962,7 @@ elif selected == "🛠️ 운영 대시보드":
         </div>
         """, unsafe_allow_html=True)
     
-    st.markdown("---")
-    
-    # ===== ✅ 전체 프로세스 실행 (자동 엑셀 생성 포함) =====
-    st.markdown("### 🚀 전체 프로세스 실행")
-    
-    info_html = """
-    <div class="info-card">
-        <div class="info-card-title">📋 실행 내용</div>
-        <div class="info-card-content">
-            <strong>1단계:</strong> 뉴스 수집 (Google Alerts + Naver) → DB 저장<br>
-            <strong>2단계:</strong> AI 뉴스 선별 (중요도 평가)<br>
-            <strong>3단계:</strong> 심층 분석 (본문 수집 + AI 분석 + 키워드 추출)<br>
-            <strong>4단계:</strong> 구글 문서 생성<br>
-            <strong>5단계:</strong> 이메일 자동 발송<br>
-            <strong>6단계:</strong> 주간 누적 엑셀 자동 저장 ✨<br>
-            <strong>7단계:</strong> 키워드 통계 엑셀 자동 저장 ✨<br>
-            <br>
-            <strong>⏱️ 예상 소요 시간:</strong> 30분 이내<br>
-            <strong>💾 엑셀 파일:</strong> data/reports 폴더에 자동 저장
-        </div>
-    </div>
-    """
-    st.markdown(info_html, unsafe_allow_html=True)
-    
-    # 분석 개수 선택
-    num_analyze = st.slider("📊 분석할 뉴스 개수", 5, 20, 10, key="full_process_slider")
-    
-    # 전체 프로세스 시작 버튼
-    if st.button("🚀 전체 프로세스 시작", type="primary", use_container_width=True, key="full_process_start"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-    
-        try:
-            # ✅ 현재 선택된 AI 모델 가져오기
-            cfg = load_config()
-            current_ai_model = cfg.get('ai_model', 'openai')
-        
-            st.info(f"🤖 사용 AI 모델: **{current_ai_model.upper()}**")
-        
-            # 1단계: 수집
-            status_text.markdown("### 📡 1/7: 뉴스 수집 중...")
-            progress_bar.progress(0.1)
-        
-            news_items = get_news_data()
-            saved_count = save_news_to_db(news_items)
-        
-            st.success(f"✅ 1단계: {len(news_items)}개 수집, {saved_count}개 저장")
-            progress_bar.progress(0.15)
-        
-            # 2단계: 선별 (60개로 수정)
-            status_text.markdown("### 🤖 2/7: AI 선별 중...")
-            progress_bar.progress(0.2)
-        
-            # ✅ 수정: 선별 개수를 60개로 증가
-            selected_news = filter_news_by_ai(news_items, ai_model=current_ai_model, max_results=50)
 
-            st.success(f"✅ 2단계: {len(selected_news)}개 선별 (최대 50개)")
-            progress_bar.progress(0.3)
-        
-            # 3단계: 분석
-            status_text.markdown("### 📝 3/7: 심층 분석 중...")
-            progress_bar.progress(0.35)
-        
-            _replacement_pool = selected_news[num_analyze:] + [
-                item for item in news_items
-                if item['link'] not in {n['link'] for n in selected_news}
-            ]
-
-            def _on_analysis_progress(done, total):
-                progress_bar.progress(0.35 + 0.25 * (done / total))
-                status_text.markdown(f"### 📝 3/7: 심층 분석 중... ({done}/{total})")
-
-            analyzed_results = analyze_news_with_replacement(
-                selected_news[:num_analyze],
-                _replacement_pool,
-                target_count=num_analyze,
-                ai_model=current_ai_model,
-                progress_callback=_on_analysis_progress,
-            )
-        
-            st.success(f"✅ 3단계: {len(analyzed_results)}개 분석")
-            progress_bar.progress(0.6)
-        
-            # 4단계: 문서 생성
-            status_text.markdown("### 📄 4/7: 구글 문서 생성 중...")
-            progress_bar.progress(0.65)
-        
-            doc_url, report_title = generate_google_doc_report(analyzed_results)
-
-            # Google Docs 실패 시 기본 제목 생성
-            if not report_title:
-                import datetime as _dt
-                report_title = f"전파·이동통신 동향 보고서 ({_dt.date.today().strftime('%Y년 %m월 %d일')})"
-
-            if doc_url:
-                st.success("✅ 4단계: 문서 생성 완료")
-                st.markdown(f"[📄 구글 문서 보기]({doc_url})")
-            else:
-                st.warning("⚠️ 4단계: Google Docs 생성 실패 — 이메일 본문으로만 발송됩니다.")
-                # 실제 오류 확인용: news_engine 로그에서 원인 확인
-                sa_check = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
-                if not sa_check:
-                    st.error("❌ GOOGLE_SERVICE_ACCOUNT_JSON 환경변수가 없습니다. Streamlit Secrets를 확인하세요.")
-
-            # ✅ 로컬 마크다운 보고서 저장 (results/ 폴더 및 규약 적용)
-            try:
-                from trend_analyzer import save_analyzed_news_to_markdown
-                md_path = save_analyzed_news_to_markdown(analyzed_results)
-                if md_path:
-                    st.success(f"✅ 로컬 마크다운 보고서 저장 완료")
-                    st.info(f"📂 저장 위치: {md_path}")
-                else:
-                    st.warning("⚠️ 로컬 마크다운 보고서 저장 실패")
-            except Exception as e:
-                st.warning(f"⚠️ 로컬 마크다운 보고서 저장 중 예외 발생: {e}")
-
-            progress_bar.progress(0.75)
-        
-            # 5단계: 이메일 (수정 버전)
-            status_text.markdown("### 📧 5/7: 이메일 발송 중...")
-        
-            # ✅ 수정: 선별된 60개 중 미분석 뉴스를 "추가 수집 뉴스"로 사용
-            analyzed_links = {r['link'] for r in analyzed_results}
-            remaining_selected_news = [n for n in selected_news if n['link'] not in analyzed_links]
-        
-            send_gmail_report(report_title, analyzed_results, doc_url, remaining_selected_news)
-        
-            st.success("✅ 5단계: 이메일 발송 완료")
-            st.info(f"📧 추가 수집 뉴스: {len(remaining_selected_news)}개 (선별된 60개 중 미분석)")
-            progress_bar.progress(0.85)
-        
-            # ✅ 6단계: 주간 누적 엑셀 자동 저장
-            status_text.markdown("### 📊 6/7: 주간 누적 엑셀 자동 저장 중...")
-            progress_bar.progress(0.9)
-
-            year, week, week_str = get_week_number()
-            excel_path = save_analysis_to_weekly_excel(analyzed_results)
-
-            if excel_path:
-                st.success(f"✅ 6단계: 주간 엑셀 누적 저장 완료 ({week_str})")
-                st.info(f"📂 저장 위치: {excel_path}")
-                
-                # 중복도 검증
-                try:
-                    from news_engine import verify_deduplication
-                    duplication_rate = verify_deduplication(analyzed_results)
-        
-                    st.info(f"""
-                    📊 **품질 지표:**
-                    - AI 선별: {len(selected_news)}개 (중복 제거 완료)
-                    - 심층 분석: {len(analyzed_results)}개
-                    - 중복도: {duplication_rate:.1%} (낮을수록 좋음)
-        
-                    💡 **Tip:** 중복도가 30% 이상이면 프롬프트 개선이 필요합니다.
-                    """)
-                except Exception as e:
-                    st.warning(f"⚠️ 중복도 검증 실패: {e}")
-                
-                
-            else:
-                st.warning("⚠️ 6단계: 엑셀 저장 실패")
-        
-            progress_bar.progress(0.95)
-        
-            # ✅ 7단계: 키워드 통계 누적 저장
-            status_text.markdown("### 📈 7/7: 키워드 통계 누적 저장 중...")
-        
-            keyword_path = save_keyword_summary_to_weekly_excel()
-        
-            if keyword_path:
-                st.success(f"✅ 7단계: 키워드 통계 누적 저장 완료")
-                st.info(f"📂 저장 위치: {keyword_path}")
-            else:
-                st.warning("⚠️ 7단계: 키워드 통계 저장 실패")
-        
-            progress_bar.progress(1.0)
-        
-            # ✅ 최종 안내 메시지
-            status_text.markdown("### ✅ 전체 프로세스 완료!")
-        
-            st.success("🎉 모든 작업이 완료되었습니다!")
-            st.info(f"""
-            📊 **이번 실행 결과 ({week_str}):**
-            - AI 선별: {len(selected_news)}개 (최대 60개)
-            - 심층 분석: {len(analyzed_results)}개
-            - 추가 수집 뉴스: {len(remaining_selected_news)}개 (이메일 발송)
-            """)
-        
-            st.balloons()
-    
-        except Exception as e:
-            st.error(f"❌ 오류: {str(e)}")
-            st.error(traceback.format_exc())
-    
-    # ===== 🤖 AI 모델 선택 및 빠른 실행 =====
-    st.markdown("---")
-    st.markdown("### 🤖 AI 모델 설정 및 빠른 실행")
-    
-    cfg = load_config()
-    
-    # ✅ 3열 레이아웃 생성
-    col_model, col_status, col_quick = st.columns([2, 1, 1])
-    
-    with col_model:
-        ai_model = st.selectbox(
-            "분석에 사용할 AI 모델",
-            options=['openai', 'claude', 'perplexity', 'gemini'],
-            index=['openai', 'claude', 'perplexity', 'gemini'].index(cfg.get('ai_model', 'openai')),
-            format_func=lambda x: {
-                'openai': '🟢 OpenAI (GPT-4o)',
-                'claude': '🟣 Anthropic (Claude Sonnet 4)',
-                'perplexity': '🟠 Perplexity (Sonar Pro)',
-                'gemini': '🔵 Google (Gemini 2.5 Flash)'
-            }[x],
-            key="ai_model_selector",
-            help="뉴스 분석에 사용할 AI 모델을 선택하세요."
-        )
-        
-        # FIX: st.rerun() 무한 루프 방지 - 이미 저장된 모델과 다를 때만 저장 후 1회 rerun
-        if ai_model != cfg.get('ai_model'):
-            cfg['ai_model'] = ai_model
-            save_config(cfg)
-            # session_state 플래그로 중복 rerun 방지
-            if not st.session_state.get('_model_rerun_guard'):
-                st.session_state['_model_rerun_guard'] = True
-                st.success(f"✅ AI 모델이 **{ai_model.upper()}**로 변경되었습니다!")
-                st.rerun()
-        else:
-            # 모델이 동일하면 가드 초기화
-            st.session_state.pop('_model_rerun_guard', None)
-    
-    with col_status:
-        st.markdown("**📊 모델 상태**")
-        
-        # API 키 확인
-        api_key_status = {
-            'openai': bool(cfg.get('openai_api_key', '')) and not cfg.get('openai_api_key', '').startswith('YOUR_'),
-            'claude': bool(cfg.get('claude_api_key', '')) and not cfg.get('claude_api_key', '').startswith('YOUR_'),
-            'perplexity': bool(cfg.get('perplexity_api_key', '')) and not cfg.get('perplexity_api_key', '').startswith('YOUR_'),
-            'gemini': bool(cfg.get('gemini_api_key', '')) and not cfg.get('gemini_api_key', '').startswith('YOUR_')
-        }
-        
-        # 선택된 모델의 상태 표시
-        if api_key_status[ai_model]:
-            st.success("✅ API 키 설정됨")
-        else:
-            st.error("❌ API 키 미설정")
-            st.caption("💡 설정 탭에서 API 키를 입력하세요.")
-    
-    with col_quick:
-        st.markdown("**⚡ 빠른 실행**")
-        if st.button("🔄 지금 뉴스 수집", key="quick_collect", use_container_width=True):
-            with st.spinner(f"뉴스 수집 중... (모델: {ai_model.upper()})"):
-                try:
-                    # ✅ 선택된 AI 모델 전달
-                    run_daily_collection(ai_model=ai_model)
-                    st.success(f"✅ 뉴스 수집 완료! (사용 모델: {ai_model.upper()})")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ 오류: {str(e)}")
-    
-    # 모델별 특징 안내
-    with st.expander("📖 AI 모델 선택 가이드"):
-        st.markdown("""
-        ### 🤖 각 모델의 특징
-        
-        #### 🟢 OpenAI (GPT-4o)
-        - **장점:** 가장 안정적이고 검증된 성능
-        - **추천:** 일반적인 뉴스 분석, 정확한 요약 필요 시
-        - **비용:** 중간 수준
-        
-        #### 🟣 Anthropic (Claude Sonnet 4)
-        - **장점:** 긴 문맥 이해, 세밀한 분석
-        - **추천:** 복잡한 정책 분석, 심층 리포트
-        - **비용:** 중간~높음
-        
-        #### 🟠 Perplexity (Sonar Pro)
-        - **장점:** 최신 정보 반영, 빠른 응답
-        - **추천:** 실시간 트렌드 분석, 속보성 뉴스
-        - **비용:** 낮음~중간
-        
-        #### 🔵 Google (Gemini 2.5 Flash)
-        - **장점:** 빠른 처리 속도, 비용 효율
-        - **추천:** 대량 뉴스 처리, 빠른 스캔
-        - **비용:** 낮음
-        
-        ---
-        
-        💡 **Tip:** 일일 분석은 GPT-4o, 주간 리포트는 Claude를 추천합니다.
-        """)
-    
     # ===== 키워드 트렌드 (데이터 시각화 대시보드) =====
     st.markdown("---")
     st.markdown("### 📈 데이터 시각화 대시보드")
@@ -1390,523 +1223,6 @@ elif selected == "🛠️ 운영 대시보드":
                     st.info("영향도 데이터 부족")
             except Exception as e:
                 st.error(f"차트 생성 오류: {str(e)}")
-
-        # ===== 🔥 AI 기반 키워드 분석 =====
-        st.markdown("---")
-        st.markdown("#### 🤖 AI 추출 핵심 키워드 분석")
-        
-        col_refresh2, col_period2 = st.columns([1, 3])
-        
-        with col_refresh2:
-            if st.button("🔄 키워드 새로고침", key="refresh_keywords", use_container_width=True):
-                st.rerun()
-        
-        with col_period2:
-            keyword_days = st.selectbox(
-                "분석 기간",
-                options=[7, 14, 30, 90],
-                index=2,
-                format_func=lambda x: f"최근 {x}일",
-                key="keyword_period"
-            )
-
-        try:
-            # Bug 6: is_analyzed 플래그 대신 extracted_keywords 존재 여부로 필터링
-            _all_news = load_news_from_db(days=keyword_days)
-            news_with_keywords = [n for n in _all_news if n.get('extracted_keywords')]
-            dashboard_news_analyzed = news_with_keywords
-
-            st.info(f"📊 분석 대상: 최근 {keyword_days}일간 키워드 추출된 뉴스 {len(news_with_keywords)}개")
-            
-            if not news_with_keywords:
-                st.warning(f"⚠️ 최근 {keyword_days}일간 키워드가 추출된 뉴스가 없습니다.")
-                st.info("💡 뉴스를 먼저 분석하거나 기간을 늘려보세요.")
-            else:
-                st.success(f"✅ {len(news_with_keywords)}개 뉴스에서 키워드 발견!")
-            
-            all_keywords = []
-            keyword_categories = Counter()
-            importance_counts = Counter()
-            
-            all_companies = []
-            all_technologies = []
-            all_countries = []
-            
-            # 기술명 동의어/세부항목 통합 딕셔너리
-            TECH_SYNONYMS = {
-                "저궤도 위성통신": "위성통신", "저궤도": "위성통신", "satellite communications": "위성통신", "위성 통신": "위성통신",
-                "생성형 ai": "AI", "genai": "AI", "인공지능": "AI", "생성형ai": "AI", "인공 지능": "AI",
-                "6세대 이동통신": "6G", "sixth generation": "6G", "6세대 통신": "6G",
-                "개방형 무선 접속망": "Open RAN", "오픈랜": "Open RAN", "oran": "Open RAN", "openran": "Open RAN",
-                "사물인터넷": "IoT", "비지상 네트워크": "NTN", "비지상네트워크": "NTN"
-            }
-            
-            for news in news_with_keywords:
-                if news.get('extracted_keywords'):
-                    try:
-                        keyword_data = json.loads(news['extracted_keywords'])
-                        keywords = keyword_data.get('keywords', [])
-                        
-                        for kw in keywords:
-                            term = kw.get('term', '')
-                            category = kw.get('category', '기타')
-                            importance = kw.get('importance', 'medium')
-                            
-                            if term:
-                                all_keywords.append({
-                                    'term': term,
-                                    'category': category,
-                                    'importance': importance
-                                })
-                                keyword_categories[category] += 1
-                                importance_counts[importance] += 1
-                                
-                        # 엔티티 추출 (구 버전 데이터에는 없을 수 있으므로 .get(키, []) 사용)
-                        rel_companies = keyword_data.get('related_companies', [])
-                        key_techs = keyword_data.get('key_technologies', [])
-                        tgt_countries = keyword_data.get('target_countries', [])
-                        
-                        if isinstance(rel_companies, list):
-                            all_companies.extend([c for c in rel_companies if c])
-                            
-                        if isinstance(key_techs, list):
-                            for tech in key_techs:
-                                if not tech: continue
-                                # 기술 통합 규칙 적용 (소문자 변환 후 매핑)
-                                norm_tech = TECH_SYNONYMS.get(tech.lower(), tech)
-                                all_technologies.append(norm_tech)
-                                
-                        if isinstance(tgt_countries, list):
-                            all_countries.extend([c for c in tgt_countries if c])
-                            
-                    except Exception:
-                        continue
-            
-            if all_keywords:
-                keyword_freq = Counter([kw['term'] for kw in all_keywords])
-                top_keywords = keyword_freq.most_common(30)
-                
-                col_kw1, col_kw2 = st.columns(2)
-                
-                with col_kw1:
-                    st.markdown("**📊 TOP 20 키워드**")
-                    
-                    df_keywords = pd.DataFrame(top_keywords[:20], columns=['키워드', '빈도'])
-                    
-                    fig_keywords = px.bar(
-                        df_keywords,
-                        x='빈도',
-                        y='키워드',
-                        orientation='h',
-                        title="",
-                        color='빈도',
-                        color_continuous_scale='Viridis',
-                        text='빈도'
-                    )
-                    fig_keywords.update_layout(
-                        height=500,
-                        yaxis={'categoryorder': 'total ascending'},
-                        showlegend=False
-                    )
-                    fig_keywords.update_traces(textposition='outside')
-                    
-                    st.plotly_chart(fig_keywords, use_container_width=True)
-                
-                with col_kw2:
-                    st.markdown("**📂 카테고리별 분포**")
-                    
-                    df_categories = pd.DataFrame(
-                        keyword_categories.most_common(),
-                        columns=['카테고리', '개수']
-                    )
-                    
-                    fig_categories = px.pie(
-                        df_categories,
-                        values='개수',
-                        names='카테고리',
-                        title="",
-                        color_discrete_sequence=px.colors.qualitative.Set3,
-                        hole=0.4
-                    )
-                    fig_categories.update_layout(height=500)
-                    fig_categories.update_traces(textposition='inside', textinfo='percent+label')
-                    
-                    st.plotly_chart(fig_categories, use_container_width=True)
-                
-                st.markdown("**⭐ 키워드 중요도 분포**")
-                
-                col_imp1, col_imp2, col_imp3 = st.columns(3)
-                
-                total_kw = sum(importance_counts.values())
-                
-                with col_imp1:
-                    high_ratio = (importance_counts['high'] / total_kw * 100) if total_kw > 0 else 0
-                    st.metric("High 중요도", f"{importance_counts['high']}개", f"{high_ratio:.1f}%")
-                
-                with col_imp2:
-                    medium_ratio = (importance_counts['medium'] / total_kw * 100) if total_kw > 0 else 0
-                    st.metric("Medium 중요도", f"{importance_counts['medium']}개", f"{medium_ratio:.1f}%")
-                
-                with col_imp3:
-                    low_ratio = (importance_counts['low'] / total_kw * 100) if total_kw > 0 else 0
-                    st.metric("Low 중요도", f"{importance_counts['low']}개", f"{low_ratio:.1f}%")
-                
-                st.markdown("---")
-                st.markdown("**🏷️ 키워드 태그 (중요도별)**")
-                
-                high_keywords = [kw['term'] for kw in all_keywords if kw['importance'] == 'high']
-                medium_keywords = [kw['term'] for kw in all_keywords if kw['importance'] == 'medium']
-                
-                if high_keywords:
-                    st.markdown("**🔴 High 중요도**")
-                    high_freq = Counter(high_keywords).most_common(15)
-                    tags_html = " ".join([
-                        f'<span style="display:inline-block; background: linear-gradient(135deg, #ef4444 0%, #991b1b 100%); color:white; '
-                        f'padding:6px 14px; margin:4px; border-radius:20px; font-size:13px; font-weight:600; '
-                        f'box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2); word-wrap:break-word; overflow:hidden; max-width:200px;">'
-                        f'🔥 {term[:15] + "…" if len(term) > 15 else term} <span style="opacity:0.8; font-weight:400; margin-left:4px;">{count}</span></span>'
-                        for term, count in high_freq
-                    ])
-                    st.markdown(tags_html, unsafe_allow_html=True)
-
-                if medium_keywords:
-                    st.markdown("**🟡 Medium 중요도**")
-                    medium_freq = Counter(medium_keywords).most_common(15)
-                    tags_html = " ".join([
-                        f'<span style="display:inline-block; background: linear-gradient(135deg, #f59e0b 0%, #b45309 100%); color:white; '
-                        f'padding:6px 14px; margin:4px; border-radius:20px; font-size:13px; font-weight:600; '
-                        f'box-shadow: 0 2px 4px rgba(245, 158, 11, 0.2); word-wrap:break-word; overflow:hidden; max-width:200px;">'
-                        f'✨ {term[:15] + "…" if len(term) > 15 else term} <span style="opacity:0.8; font-weight:400; margin-left:4px;">{count}</span></span>'
-                        for term, count in medium_freq
-                    ])
-                    st.markdown(tags_html, unsafe_allow_html=True)
-                
-                with st.expander("📋 전체 키워드 목록 (복사용)"):
-                    keyword_list = ", ".join([kw for kw, _ in top_keywords])
-                    st.text_area(
-                        "키워드 목록 (Ctrl+A → Ctrl+C로 복사)",
-                        value=keyword_list,
-                        height=100,
-                        key="ai_keyword_copy"
-                    )
-                
-                # ===== 🗺️ 인텔리전스 매트릭스 (다차원 엔티티 뷰) =====
-                st.markdown("---")
-                st.markdown("#### 🧭 인텔리전스 매트릭스 (심층 엔티티 분석)")
-
-                if all_companies or all_technologies or all_countries:
-                    # ── 1. Top 5 요약 테이블 (기존 유지) ──────────────────────
-                    em_col1, em_col2, em_col3 = st.columns(3)
-
-                    with em_col1:
-                        st.markdown("**🏢 핫 모멘텀 기업 Top 5**")
-                        if all_companies:
-                            comp_top = Counter(all_companies).most_common(5)
-                            comp_df = pd.DataFrame(comp_top, columns=['기업 (Company)', '등장 빈도'])
-                            st.dataframe(comp_df, hide_index=True, use_container_width=True)
-                        else:
-                            st.info("데이터 없음")
-
-                    with em_col2:
-                        st.markdown("**🛠️ 부상하는 핵심기술 Top 5**")
-                        if all_technologies:
-                            tech_top = Counter(all_technologies).most_common(5)
-                            tech_df = pd.DataFrame(tech_top, columns=['기술 (Tech/Standard)', '등장 빈도'])
-                            st.dataframe(tech_df, hide_index=True, use_container_width=True)
-                        else:
-                            st.info("데이터 없음")
-
-                    with em_col3:
-                        st.markdown("**🌍 정책/규제 활성 국가 Top 5**")
-                        if all_countries:
-                            country_top = Counter(all_countries).most_common(5)
-                            country_df = pd.DataFrame(country_top, columns=['국가 (Country)', '등장 빈도'])
-                            st.dataframe(country_df, hide_index=True, use_container_width=True)
-                        else:
-                            st.info("데이터 없음")
-
-                    # ── 2. 공출현 히트맵 + 지식 그래프 ───────────────────────
-                    try:
-                        from knowledge_graph import (
-                            build_entity_graph,
-                            render_graph_html,
-                            get_co_occurrence_matrix,
-                            detect_surge_entities,
-                            get_graph_stats,
-                        )
-                        _KG_AVAILABLE = True
-                    except ImportError:
-                        _KG_AVAILABLE = False
-
-                    if _KG_AVAILABLE:
-                        st.markdown("---")
-
-                        _kg_tab1, _kg_tab2, _kg_tab3, _kg_tab4 = st.tabs([
-                            "🔥 급등 알림",
-                            "🔲 공출현 히트맵",
-                            "🕸️ 지식 그래프",
-                            "📊 주간 키워드 비교",
-                        ])
-
-                        # ── 탭 1: 급등 알림 ──────────────────────────────────
-                        with _kg_tab1:
-                            _prev_days = keyword_days * 2
-                            _news_prev_raw = load_news_from_db(days=_prev_days, is_analyzed=True)
-                            _news_prev = [n for n in _news_prev_raw if n.get('extracted_keywords')]
-                            # 현재 기간 = 최근 keyword_days, 이전 기간 = 그 이전 keyword_days
-                            import datetime as _dt
-                            _cutoff = _dt.datetime.now() - _dt.timedelta(days=keyword_days)
-                            _news_prev_only = [
-                                n for n in _news_prev
-                                if n.get('collected_at') and str(n['collected_at']) < str(_cutoff)
-                            ]
-
-                            _surges = detect_surge_entities(
-                                news_current=news_with_keywords,
-                                news_prev=_news_prev_only,
-                                tech_synonyms=TECH_SYNONYMS,
-                                threshold=0.5,
-                                min_current=2,
-                            )
-
-                            if _surges:
-                                _type_icon = {'company': '🏢', 'tech': '🛠️', 'country': '🌍'}
-                                for s in _surges[:8]:
-                                    _icon = _type_icon.get(s['node_type'], '📌')
-                                    _pct = s['pct_change']
-                                    _pct_str = f"+{_pct*100:.0f}%" if _pct != float('inf') else "신규 등장"
-                                    _color = "#ef4444" if _pct >= 1.0 else "#f59e0b"
-                                    st.markdown(
-                                        f'<div style="display:flex;align-items:center;gap:12px;'
-                                        f'padding:10px 16px;margin:6px 0;border-radius:8px;'
-                                        f'background:rgba(255,255,255,0.04);border-left:4px solid {_color};">'
-                                        f'<span style="font-size:1.2em">{_icon}</span>'
-                                        f'<span style="font-weight:600;flex:1">{s["name"]}</span>'
-                                        f'<span style="color:{_color};font-weight:700;font-size:1.1em">{_pct_str}</span>'
-                                        f'<span style="color:#888;font-size:0.85em">'
-                                        f'{s["prev_count"]}→{s["curr_count"]}회</span>'
-                                        f'</div>',
-                                        unsafe_allow_html=True,
-                                    )
-                            else:
-                                st.info("이전 기간 대비 급등한 엔티티가 없습니다. 분석된 기사가 충분히 누적되면 표시됩니다.")
-
-                        # ── 탭 2: 공출현 히트맵 ──────────────────────────────
-                        with _kg_tab2:
-                            _heatmap_n = st.slider(
-                                "표시할 상위 N개 (기업·기술 각각)",
-                                min_value=3, max_value=12, value=7, step=1,
-                                key="heatmap_n_slider",
-                            )
-                            _co_matrix = get_co_occurrence_matrix(
-                                news_with_keywords,
-                                tech_synonyms=TECH_SYNONYMS,
-                                top_companies=_heatmap_n,
-                                top_techs=_heatmap_n,
-                            )
-
-                            if not _co_matrix.empty and _co_matrix.values.sum() > 0:
-                                import plotly.express as px
-                                _fig_heat = px.imshow(
-                                    _co_matrix,
-                                    labels=dict(x="기술 (Technology)", y="기업 (Company)", color="공출현 횟수"),
-                                    color_continuous_scale="Blues",
-                                    aspect="auto",
-                                    text_auto=True,
-                                )
-                                _fig_heat.update_layout(
-                                    height=420,
-                                    plot_bgcolor='rgba(0,0,0,0)',
-                                    paper_bgcolor='rgba(0,0,0,0)',
-                                    font_color='#e8e8e8',
-                                    coloraxis_showscale=True,
-                                    margin=dict(l=20, r=20, t=20, b=20),
-                                )
-                                _fig_heat.update_xaxes(tickangle=-30)
-                                st.plotly_chart(_fig_heat, use_container_width=True)
-                                st.caption("셀 값 = 같은 기사에 함께 등장한 횟수. 색이 진할수록 연관성이 강합니다.")
-                            else:
-                                st.info("공출현 데이터가 부족합니다. 기업·기술이 함께 등장하는 기사가 더 필요합니다.")
-
-                        # ── 탭 3: 지식 그래프 ────────────────────────────────
-                        with _kg_tab3:
-                            _graph_col1, _graph_col2 = st.columns([3, 1])
-
-                            with _graph_col2:
-                                _min_w = st.slider(
-                                    "최소 공출현 횟수",
-                                    min_value=1, max_value=5, value=1, step=1,
-                                    key="kg_min_weight",
-                                    help="이 값 이상 함께 등장한 엔티티 쌍만 연결선으로 표시합니다.",
-                                )
-                                st.markdown(
-                                    "<div style='margin-top:12px'>"
-                                    "<b>범례</b><br>"
-                                    "<span style='color:#4a90e2'>●</span> 🏢 기업<br>"
-                                    "<span style='color:#e74c3c'>◆</span> 🛠️ 기술<br>"
-                                    "<span style='color:#2ecc71'>■</span> 🌍 국가<br>"
-                                    "<small style='color:#888'>노드 크기 = 등장 빈도<br>"
-                                    "선 굵기 = 공출현 횟수</small>"
-                                    "</div>",
-                                    unsafe_allow_html=True,
-                                )
-
-                            with _graph_col1:
-                                _G = build_entity_graph(
-                                    news_with_keywords,
-                                    tech_synonyms=TECH_SYNONYMS,
-                                    min_weight=_min_w,
-                                )
-                                _stats = get_graph_stats(_G)
-
-                                if _stats:
-                                    _s1, _s2, _s3 = st.columns(3)
-                                    _s1.metric("노드 수", _stats['total_nodes'])
-                                    _s2.metric("연결 수", _stats['total_edges'])
-                                    _s3.metric("밀도", f"{_stats['density']:.3f}")
-
-                                _graph_html = render_graph_html(_G, height=520)
-                                import streamlit.components.v1 as _components
-                                _components.html(_graph_html, height=540, scrolling=False)
-
-                                if _stats.get('top_central'):
-                                    with st.expander("📌 중심성 높은 엔티티 Top 5"):
-                                        for _name, _score in _stats['top_central']:
-                                            _ntype = _G.nodes[_name].get('node_type', '') if _G and _name in _G.nodes else ''
-                                            _icon = {'company': '🏢', 'tech': '🛠️', 'country': '🌍'}.get(_ntype, '📌')
-                                            st.write(f"{_icon} **{_name}** — 중심성 {_score:.3f}")
-
-                        # ── 탭 4: 주간 키워드 비교 히트맵 ─────────────────────
-                        with _kg_tab4:
-                            import datetime as _wkdt
-                            _wk_prev_raw = load_news_from_db(days=keyword_days * 2)
-                            _wk_prev_all = [n for n in _wk_prev_raw if n.get('extracted_keywords')]
-                            _wk_cutoff = _wkdt.datetime.now() - _wkdt.timedelta(days=keyword_days)
-                            _wk_prev_only = [
-                                n for n in _wk_prev_all
-                                if n.get('collected_at') and str(n['collected_at']) < str(_wk_cutoff)
-                            ]
-
-                            def _extract_tech_freq(news_list):
-                                from collections import Counter
-                                _ctr = Counter()
-                                for _n in news_list:
-                                    try:
-                                        _kw_raw = _n.get('extracted_keywords', '{}') or '{}'
-                                        _kw_parsed = json.loads(_kw_raw) if isinstance(_kw_raw, str) else _kw_raw
-                                        _techs = _kw_parsed.get('key_technologies', [])
-                                        if isinstance(_techs, list):
-                                            for _t in _techs:
-                                                _k = str(_t).strip()
-                                                if _k:
-                                                    _ctr[TECH_SYNONYMS.get(_k.lower(), _k)] += 1
-                                    except Exception:
-                                        pass
-                                return _ctr
-
-                            if news_with_keywords and _wk_prev_only:
-                                _curr_ctr = _extract_tech_freq(news_with_keywords)
-                                _prev_ctr = _extract_tech_freq(_wk_prev_only)
-                                _all_keys = list(dict.fromkeys(
-                                    [k for k, _ in _curr_ctr.most_common(12)] +
-                                    [k for k, _ in _prev_ctr.most_common(12)]
-                                ))[:15]
-
-                                if _all_keys:
-                                    import plotly.express as px
-                                    import pandas as pd
-                                    _hm_df = pd.DataFrame({
-                                        '키워드': _all_keys,
-                                        f'이번 {keyword_days}일': [_curr_ctr.get(k, 0) for k in _all_keys],
-                                        f'이전 {keyword_days}일': [_prev_ctr.get(k, 0) for k in _all_keys],
-                                    }).set_index('키워드')
-                                    _fig_wk = px.imshow(
-                                        _hm_df.T,
-                                        labels=dict(x="키워드", y="기간", color="등장 횟수"),
-                                        color_continuous_scale="RdYlGn",
-                                        aspect="auto",
-                                        text_auto=True,
-                                    )
-                                    _fig_wk.update_layout(
-                                        height=250,
-                                        plot_bgcolor='rgba(0,0,0,0)',
-                                        paper_bgcolor='rgba(0,0,0,0)',
-                                        font_color='#e8e8e8',
-                                        margin=dict(l=20, r=20, t=20, b=60),
-                                    )
-                                    _fig_wk.update_xaxes(tickangle=-40)
-                                    st.plotly_chart(_fig_wk, use_container_width=True)
-                                    st.caption(
-                                        f"이번 {keyword_days}일과 이전 {keyword_days}일의 기술 키워드 등장 횟수 비교. "
-                                        "초록 = 증가, 빨강 = 감소."
-                                    )
-                                else:
-                                    st.info("기술 키워드 데이터가 부족합니다.")
-                            else:
-                                st.info("비교할 이전 기간 데이터가 부족합니다. 기사가 더 누적되면 표시됩니다.")
-
-                    else:
-                        st.info("💡 지식 그래프 기능을 사용하려면 `pip install networkx pyvis` 를 실행하세요.")
-
-                else:
-                    st.info("ℹ️ 기업, 기술, 국가 엔티티 데이터가 포함된 최근 분석 뉴스가 없습니다. (엔진 업그레이드 이전 데이터만 존재할 수 있습니다)")
-            
-            else:
-                st.info("AI가 추출한 키워드가 없습니다. 뉴스를 먼저 분석하세요.")
-        
-        except Exception as e:
-            st.error(f"키워드 분석 중 오류: {str(e)}")
-            st.error(traceback.format_exc())
-    
-    else:
-        st.info("📭 최근 뉴스 데이터가 없습니다. 뉴스를 먼저 수집하세요.")
-
-    # ===== AI 모델별 품질 대시보드 =====
-    st.markdown("---")
-    st.markdown("#### 🤖 AI 모델별 분석 품질")
-    try:
-        from sqlalchemy import func, case
-        with get_db_session() as _mq_db:
-            _model_rows = (
-                _mq_db.query(
-                    NewsArticle.ai_model,
-                    func.count(NewsArticle.id).label('total'),
-                    func.sum(
-                        case(
-                            (
-                                (NewsArticle.extracted_keywords != None) &
-                                (NewsArticle.extracted_keywords != ''),
-                                1
-                            ),
-                            else_=0
-                        )
-                    ).label('with_kw'),
-                )
-                .filter(NewsArticle.ai_model != None)
-                .group_by(NewsArticle.ai_model)
-                .all()
-            )
-
-        if _model_rows:
-            _mq_cols = st.columns(min(len(_model_rows), 4))
-            _model_icons = {'openai': '🟢', 'claude': '🟠', 'gemini': '🔵', 'perplexity': '🟣'}
-            for _ci, _row in enumerate(_model_rows):
-                _icon = _model_icons.get(str(_row.ai_model).lower(), '⚪')
-                _total = _row.total or 0
-                _with_kw = int(_row.with_kw or 0)
-                _ratio = (_with_kw / _total * 100) if _total > 0 else 0
-                with _mq_cols[_ci % 4]:
-                    st.metric(
-                        label=f"{_icon} {str(_row.ai_model).upper()}",
-                        value=f"{_ratio:.0f}%",
-                        delta=f"키워드 추출 {_with_kw}/{_total}건",
-                        delta_color="normal",
-                        help=f"extracted_keywords 존재 비율. 전체 {_total}건 중 {_with_kw}건 정상 추출."
-                    )
-        else:
-            st.info("AI 모델별 분석 데이터가 없습니다.")
-    except Exception as _mq_err:
-        st.warning(f"모델 품질 집계 오류: {_mq_err}")
 
 
 
@@ -2239,13 +1555,9 @@ elif selected == "📊 리포트":
     
     # ===== 🔥 커스텀 탭 UI =====
     if 'report_tab' not in st.session_state:
-        st.session_state.report_tab = 'daily'
+        st.session_state.report_tab = 'weekly'
 
-    col_tab1, col_tab2, col_tab3, col_tab4, col_spacer = st.columns([1, 1, 1, 1.4, 1])
-
-    with col_tab1:
-        if st.button("📅 일일 리포트", key="tab_daily_report", use_container_width=True):
-            st.session_state.report_tab = 'daily'
+    col_tab2, col_tab3, col_tab4, col_spacer = st.columns([1, 1, 1.4, 1])
 
     with col_tab2:
         if st.button("📆 주간 리포트", key="tab_weekly_report", use_container_width=True):
@@ -2262,40 +1574,7 @@ elif selected == "📊 리포트":
     st.markdown("---")
     
     # 탭 컨텐츠
-    if st.session_state.report_tab == 'daily':
-        st.markdown('<div class="tab-content">', unsafe_allow_html=True)
-        
-        st.markdown("""
-        <div class="info-card">
-            <div class="info-card-title">📅 일일 리포트</div>
-            <div class="info-card-content">
-                오늘 수집한 뉴스를 분석하여 리포트를 생성하고 이메일로 발송합니다.<br>
-                • <strong>대상:</strong> 오늘 수집된 뉴스<br>
-                • <strong>형식:</strong> Google Docs + 이메일 HTML<br>
-                • <strong>수신자:</strong> 설정된 이메일 목록
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            if st.button("📧 일일 리포트 생성 및 발송", type="primary", use_container_width=True, key="send_daily"):
-                with st.spinner("리포트 생성 중... (1~2분 소요)"):
-                    try:
-                        run_daily_collection()
-                        st.success("✅ 일일 리포트 발송 완료!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"❌ 오류: {str(e)}")
-        
-        with col2:
-            stats = get_db_statistics()
-            st.metric("오늘 수집", f"{stats['today']}개")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    elif st.session_state.report_tab == 'weekly':
+    if st.session_state.report_tab == 'weekly':
         st.markdown('<div class="tab-content">', unsafe_allow_html=True)
         
         st.markdown("""
@@ -2582,6 +1861,33 @@ elif selected == "🔍 AI 검색":
 
         st.markdown("---")
 
+        # ── 단 필터 (검색 범위 선택) ─────────────────────────────────────────
+        _rag_all_units = get_all_units()
+        _rag_unit_label_map = {"🌐 전체 (모든 단)": None}
+        for _ru in _rag_all_units:
+            _rag_unit_label_map[f"🏢 {_ru['display_name']}"] = _ru['id']
+
+        # 비관리자는 자기 단을 기본 선택, 관리자는 전체
+        if _is_admin or _unit_id is None:
+            _rag_default_label = "🌐 전체 (모든 단)"
+        else:
+            _rag_default_label = next(
+                (f"🏢 {_ru['display_name']}" for _ru in _rag_all_units if _ru['id'] == _unit_id),
+                "🌐 전체 (모든 단)",
+            )
+
+        _rag_unit_labels = list(_rag_unit_label_map.keys())
+        _rag_default_idx = _rag_unit_labels.index(_rag_default_label) if _rag_default_label in _rag_unit_labels else 0
+
+        _rag_selected_label = st.selectbox(
+            "🏢 검색 범위 (단 필터)",
+            _rag_unit_labels,
+            index=_rag_default_idx,
+            key="rag_unit_filter",
+            help="특정 단의 기사만 검색하거나 전체 DB를 대상으로 검색합니다.",
+        )
+        _rag_unit_id = _rag_unit_label_map[_rag_selected_label]
+
         with st.form("rag_search_form"):
             query = st.text_area(
                 "검색 질문",
@@ -2591,8 +1897,9 @@ elif selected == "🔍 AI 검색":
             submitted = st.form_submit_button("🔎 검색", use_container_width=True)
 
         if submitted and query.strip():
-            with st.spinner("DB 전체 하이브리드 검색 및 답변 생성 중..."):
-                result = answer_with_rag(query.strip(), top_k=15, days=None)
+            _scope_label = _rag_selected_label.replace("🌐 ", "").replace("🏢 ", "")
+            with st.spinner(f"하이브리드 검색 및 답변 생성 중... (범위: {_scope_label})"):
+                result = answer_with_rag(query.strip(), top_k=15, days=None, unit_id=_rag_unit_id)
 
             st.markdown("### 💬 AI 종합 답변")
             st.markdown(result['answer'])
@@ -2600,7 +1907,11 @@ elif selected == "🔍 AI 검색":
             if result['sources']:
                 n_emb = sum(1 for r in result['sources'] if r.get('search_type') == 'embedding')
                 n_kw  = sum(1 for r in result['sources'] if r.get('search_type') == 'keyword')
-                st.caption(f"참고 기사 {len(result['sources'])}건 — 임베딩 유사도: {n_emb}건 · 키워드 매칭: {n_kw}건")
+                _scope_desc = _rag_selected_label.replace("🌐 ", "").replace("🏢 ", "")
+                st.caption(
+                    f"참고 기사 {len(result['sources'])}건 — 임베딩 유사도: {n_emb}건 · 키워드 매칭: {n_kw}건 "
+                    f"| 검색 범위: {_scope_desc}"
+                )
                 st.markdown("### 📰 참고 기사")
                 _src_cards = []
                 for i, art in enumerate(result['sources'], 1):

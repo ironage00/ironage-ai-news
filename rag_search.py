@@ -186,6 +186,7 @@ def search_similar_articles(
     top_k: int = TOP_K_DEFAULT,
     days: Optional[int] = None,
     min_similarity: float = 0.30,
+    unit_id: Optional[int] = None,
 ) -> List[Dict]:
     """
     자연어 쿼리와 의미적으로 유사한 기사를 검색한다.
@@ -195,11 +196,12 @@ def search_similar_articles(
         top_k: 반환할 최대 기사 수
         days: None이면 전체, 숫자면 최근 N일 내 기사만
         min_similarity: 최소 유사도 임계값
+        unit_id: None이면 전체 단, 숫자면 해당 단 기사만
 
     Returns:
         List[Dict]: 유사도 내림차순 기사 목록
     """
-    log_info(f"🔎 RAG 검색: '{query[:50]}...' (top_k={top_k})")
+    log_info(f"🔎 RAG 검색: '{query[:50]}...' (top_k={top_k}, unit_id={unit_id})")
 
     try:
         # 쿼리 임베딩
@@ -214,6 +216,8 @@ def search_similar_articles(
             if days:
                 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
                 q = q.filter(NewsArticle.collected_at >= cutoff)
+            if unit_id is not None:
+                q = q.filter(NewsArticle.unit_id == unit_id)
 
             rows = q.all()
 
@@ -261,11 +265,13 @@ def _keyword_search_articles(
     query: str,
     top_k: int = 15,
     days: Optional[int] = None,
+    unit_id: Optional[int] = None,
 ) -> List[Dict]:
     """
     쿼리 토큰을 title / analysis_result 에서 LIKE 매칭하여 DB 전체를 커버.
     임베딩 없는 기사도 검색 대상에 포함.
     ICT 키워드 재필터로 비관련 기사 제거.
+    unit_id: None이면 전체 단, 숫자면 해당 단 기사만.
     """
     from news_engine import CONFIG, DEFAULT_ICT_KEYWORDS
     from sqlalchemy import or_
@@ -289,6 +295,8 @@ def _keyword_search_articles(
             if days:
                 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
                 base_q = base_q.filter(NewsArticle.collected_at >= cutoff)
+            if unit_id is not None:
+                base_q = base_q.filter(NewsArticle.unit_id == unit_id)
 
             conditions = []
             for tok in tokens:
@@ -348,26 +356,34 @@ def answer_with_rag(
     query: str,
     top_k: int = TOP_K_DEFAULT,
     days: Optional[int] = None,
+    unit_id: Optional[int] = None,
 ) -> Dict:
     """
-    하이브리드 검색(임베딩 유사도 + 키워드 매칭)으로 DB 전체를 커버한 후
+    하이브리드 검색(임베딩 유사도 + 키워드 매칭)으로 커버한 후
     GPT-4o로 종합 답변을 생성한다.
+
+    Args:
+        query: 검색 질문
+        top_k: 반환할 최대 기사 수
+        days: None이면 전체, 숫자면 최근 N일 내 기사만
+        unit_id: None이면 전체 단, 숫자면 해당 단 기사만
 
     Returns:
         Dict: {answer, sources, query}
     """
-    log_info(f"💬 RAG 하이브리드 검색: '{query[:60]}'")
+    unit_label = f"unit_id={unit_id}" if unit_id is not None else "전체"
+    log_info(f"💬 RAG 하이브리드 검색: '{query[:60]}' ({unit_label})")
 
     # ① 미임베딩 기사 처리 (최대 50개씩)
     embed_unprocessed_articles(limit=EMBED_BATCH_SIZE)
 
     # ② 임베딩 유사도 검색
-    emb_results = search_similar_articles(query, top_k=top_k, days=days)
+    emb_results = search_similar_articles(query, top_k=top_k, days=days, unit_id=unit_id)
     for r in emb_results:
         r['search_type'] = 'embedding'
 
-    # ③ 키워드 텍스트 검색 (DB 전체 커버)
-    kw_results = _keyword_search_articles(query, top_k=top_k, days=days)
+    # ③ 키워드 텍스트 검색 (단 필터 적용)
+    kw_results = _keyword_search_articles(query, top_k=top_k, days=days, unit_id=unit_id)
 
     # ④ 병합 · 중복 제거 — 임베딩 우선, 같은 기사 재등장 시 스코어 최대값 유지
     emb_ids = {r['id'] for r in emb_results}
