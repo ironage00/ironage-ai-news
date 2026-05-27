@@ -5157,28 +5157,262 @@ _UNIT_EMAIL_SUBJECT_MAP = {
 }
 
 
-def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dict:
-    """4개 단 각각의 키워드·RSS로 수집→AI분석→이메일을 순차 실행.
+# ==============================================================================
+# --- 기사->단 분류 헬퍼 (룰 기반, Level 3) ---
+# ==============================================================================
 
-    CLI: python news_engine.py daily
-    단별 독립 수집 후 각 단의 수신자 이메일로 리포트 발송.
+def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
+    """기사 제목을 단별 키워드로 매칭하여 매칭 횟수 반환.
+
+    Args:
+        title: 기사 제목 (소문자 변환 내부 처리)
+        unit_kw_map: {unit_id: [kw_lower, ...]}
+    Returns:
+        {unit_id: match_count} -- 1개 이상 매칭된 단만 포함
+    """
+    title_lower = title.lower()
+    result = {}
+    for uid, kws in unit_kw_map.items():
+        count = sum(1 for kw in kws if kw in title_lower)
+        if count > 0:
+            result[uid] = count
+    return result
+
+
+# ==============================================================================
+# --- Level 3 최적화 파이프라인 ---
+# ==============================================================================
+
+def run_all_units_daily_optimized(ai_model: str = None) -> dict:
+    """3단계 최적화 파이프라인 (Level 3).
+
+    Phase 1: 통합 수집 1회 -- 4단 RSS+키워드 병합 -> 전역 풀
+    Phase 2: 룰 기반 단별 분류 -- AI 호출 없음
+    Phase 3: Unique 기사 병렬 심층 분析 -- ThreadPoolExecutor(workers=5)
+    Phase 4: 단별 리포트/이메일 -- 순차 (socket 안전)
+
+    절감 목표:
+        수집 API 75% 감소  필터AI 100% 제거  분析 약 25% 감소  총 시간 약 60% 단축
+    """
+    if ai_model is None:
+        ai_model = CONFIG.get('ai_model', 'openai')
+
+    log_info("=" * 60)
+    log_info("[Level 3 최적화] 통합 일일 파이프라인 시작")
+    log_info(f"AI 모델: {ai_model.upper()}")
+    log_info("=" * 60)
+
+    # 0. 단 설정 로드 + RSS/키워드 병합
+    all_units   = get_all_units()
+    unit_cfgs   = {}
+    unit_kw_map = {}
+    all_rss       = []
+    all_naver_kws = []
+    _seen_rss = set()
+    _seen_kws = set()
+
+    for unit in all_units:
+        uid  = unit['id']
+        cfg  = load_unit_settings(uid)
+        keywords = cfg.get('keywords', [])
+        rss_list = cfg.get('google_alerts_rss', [])
+        unit_cfgs[uid] = {
+            'display':              unit['display_name'],
+            'name':                 unit['name'],
+            'keywords':             keywords,
+            'email_recipients':     cfg.get('email_recipients', []),
+            'sender_name':          cfg.get('sender_name', '') or f"{unit['display_name']} AI뉴스봇",
+            'email_subject_prefix': cfg.get('email_subject_prefix', '') or f"[TTA {unit['display_name']}]",
+        }
+        unit_kw_map[uid] = [kw.lower() for kw in keywords]
+        for r in rss_list:
+            if r not in _seen_rss:
+                _seen_rss.add(r); all_rss.append(r)
+        for kw in keywords:
+            if kw not in _seen_kws:
+                _seen_kws.add(kw); all_naver_kws.append(kw)
+
+    # Phase 1: 통합 수집
+    log_info("[Phase 1] 통합 수집 시작")
+    global_pool = get_news_data(
+        rss_urls=all_rss or None,
+        naver_queries=all_naver_kws or None,
+    )
+    seen_links = set(); deduped = []
+    for item in global_pool:
+        if item['link'] not in seen_links:
+            seen_links.add(item['link']); deduped.append(item)
+    global_pool = deduped
+    log_info(f"   수집 완료 {len(global_pool)}개 (중복 제거 후)")
+
+    # Phase 2: 룰 기반 단별 분류
+    log_info("[Phase 2] 룰 기반 단별 분류")
+    for item in global_pool:
+        tags = _classify_article_to_units(item['title'], unit_kw_map)
+        item['_unit_tags']       = tags
+        item['_primary_unit_id'] = max(tags, key=tags.get) if tags else None
+
+    unit_pools: dict = {}
+    for uid in unit_cfgs:
+        scored = sorted(
+            [(it, it['_unit_tags'].get(uid, 0)) for it in global_pool if uid in it['_unit_tags']],
+            key=lambda x: -x[1],
+        )
+        unit_pools[uid] = [it for it, _ in scored]
+
+    _FALLBACK_ICT = ['통신', '5g', '6g', '표준', 'ict', '전파', '인공지능', '반도체', '클라우드', '사이버']
+    for uid, pool in unit_pools.items():
+        if len(pool) < 5:
+            existing_links = {it['link'] for it in pool}
+            extra = [
+                it for it in global_pool
+                if it['link'] not in existing_links
+                and any(mk in it['title'].lower() for mk in _FALLBACK_ICT)
+            ]
+            unit_pools[uid] = pool + extra[:20]
+        log_info(f"   {unit_cfgs[uid]['display']}: {len(unit_pools[uid])}개")
+
+    _by_punit: dict = defaultdict(list)
+    for item in global_pool:
+        _by_punit[item['_primary_unit_id']].append(item)
+    for puid, items in _by_punit.items():
+        try:
+            save_news_to_db(items, unit_id=puid)
+        except Exception as _e:
+            log_warning(f"DB 저장 실패 (unit_id={puid}): {_e}")
+
+    # Phase 3: Unique 기사 병렬 심층 분析
+    _TOP = 50
+    _needed: dict = {}
+    for uid, pool in unit_pools.items():
+        for it in pool[:_TOP]:
+            if it['link'] not in _needed:
+                _needed[it['link']] = it
+    unique_candidates = list(_needed.values())
+    log_info(f"[Phase 3] Unique 기사 {len(unique_candidates)}개 병렬 분析 시작")
+
+    def _analyze_one(orig_item: dict):
+        item = dict(orig_item)
+        try:
+            item['content'] = get_article_content(item['link'])
+            if not item.get('content') or len(item['content']) < 100:
+                return None
+            if any(s in item['content'] for s in ('실패', '추출하지 못했습니다', '너무 짧아', '품질이 낮아')):
+                return None
+            analysis = analyze_news_with_ai(item, ai_model=ai_model)
+            if not is_valid_analysis(analysis):
+                return None
+            item['analysis_result'] = analysis
+            with get_db_session() as _s:
+                art = _s.query(NewsArticle).filter_by(link=item['link']).first()
+                if art:
+                    art.is_analyzed = True
+                    art.ai_model    = item.get('ai_model', ai_model)
+                    if item.get('extracted_keywords'):
+                        art.extracted_keywords = item['extracted_keywords']
+                    if item.get('content') and not art.content:
+                        art.content = item['content'][:2000]
+                    _s.commit()
+            return item
+        except Exception as _e:
+            log_warning(f"분析 실패: {item.get('title','')[:40]} -- {_e}")
+            return None
+
+    analysis_cache: dict = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_map = {executor.submit(_analyze_one, it): it['link'] for it in unique_candidates}
+        _done = 0
+        for future in as_completed(future_map):
+            lnk = future_map[future]
+            try:
+                res = future.result()
+            except Exception as _fe:
+                log_warning(f"future 오류: {lnk[:60]} -- {_fe}"); res = None
+            if res:
+                analysis_cache[lnk] = res; _done += 1
+                if _done % 10 == 0:
+                    log_info(f"  분析 완료 {_done}/{len(unique_candidates)}")
+    log_info(f"   분析 캐시 {len(analysis_cache)}개 완성")
+
+    # Phase 4: 단별 리포트/이메일 (순차)
+    import pytz as _pytz_l4
+    _kst_date = datetime.datetime.now(_pytz_l4.timezone('Asia/Seoul')).strftime('%Y년 %m월 %d일')
+    log_info("[Phase 4] 단별 리포트/이메일 순차 발송")
+    summary: dict = {}
+
+    for uid, data in unit_cfgs.items():
+        display = data['display']; name = data['name']
+        unit_result = {'collected': len(unit_pools.get(uid, [])), 'analyzed': 0, 'errors': []}
+        summary[display] = unit_result
+
+        pool = unit_pools.get(uid, [])
+        analyzed = []
+        for it in pool:
+            if it['link'] in analysis_cache and len(analyzed) < 20:
+                analyzed.append(analysis_cache[it['link']])
+
+        if not analyzed:
+            unit_result['errors'].append('분析 결과 없음')
+            log_warning(f"[{display}] 분析 결과 없음 -- 건너뜀")
+            continue
+        unit_result['analyzed'] = len(analyzed)
+
+        _subj = f"[TTA] {_UNIT_EMAIL_SUBJECT_MAP.get(name, f'{display} 동향 보고서')} ({_kst_date})"
+
+        _a = analyzed; _n = name; _d = display
+        doc_url, report_title = safe_execute(
+            lambda a=_a, n=_n, d=_d: generate_google_doc_report(a, unit_name=n, unit_display=d),
+            error_msg=f"[{display}] 구글 문서 실패",
+            default_return=(None, None),
+        )
+        report_title = report_title or (
+            f"[{display}] AI 뉴스 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})")
+
+        other_news = [it for it in pool if it['link'] not in {r['link'] for r in analyzed}]
+        receivers  = data['email_recipients'] if data['email_recipients'] else None
+
+        _rt = report_title; _du = doc_url; _on = other_news
+        _rcv = receivers; _sn = data['sender_name']; _dp = display
+        _esp = data['email_subject_prefix']; _esub = _subj
+        safe_execute(
+            lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub:
+                send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
+                    unit_display=dp, email_subject_prefix=esp, email_subject_override=esub),
+            error_msg=f"[{display}] 이메일 실패",
+            default_return=None,
+        )
+        safe_execute(
+            lambda a=_a: save_analysis_to_weekly_excel(a),
+            error_msg=f"[{display}] 엑셀 저장 실패",
+            default_return=None,
+        )
+        log_info(f"   [{display}] 완료 -- 분析 {len(analyzed)}개")
+
+    log_info("=" * 60)
+    log_info("[Level 3] 통합 일일 파이프라인 완료")
+    log_info("=" * 60)
+    return summary
+
+
+def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dict:
+    """4개 단 수집->AI분析->이메일 파이프라인.
+
+    target_unit_id=None  -> Level 3 최적화 파이프라인 (통합 수집, unique 병렬 분析)
+    target_unit_id!=None -> 단별 독립 실행 (GitHub Actions --unit 배치용)
 
     Returns:
         {unit_display_name: {'collected':int,'analyzed':int,'errors':[str]}, ...}
     """
     if ai_model is None:
         ai_model = CONFIG.get('ai_model', 'openai')
+    if target_unit_id is None:
+        return run_all_units_daily_optimized(ai_model=ai_model)
 
-    if target_unit_id is not None:
-        log_info("=" * 60)
-        log_info(f"🚀 [단별 실행] unit_id={target_unit_id} 수집·분석 파이프라인 시작")
-        log_info(f"🤖 AI 모델: {ai_model.upper()}")
-        log_info("=" * 60)
-    else:
-        log_info("=" * 60)
-        log_info("🚀 [전체 단] 일일 수집·분석 파이프라인 시작")
-        log_info(f"🤖 AI 모델: {ai_model.upper()}")
-        log_info("=" * 60)
+    # 이하: 단별 독립 실행 (target_unit_id 지정 시)
+    log_info("=" * 60)
+    log_info(f"[단별 실행] unit_id={target_unit_id} 수집/분析 파이프라인 시작")
+    log_info(f"AI 모델: {ai_model.upper()}")
+    log_info("=" * 60)
 
     all_units = get_all_units()
     if target_unit_id is not None:

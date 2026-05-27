@@ -25,6 +25,8 @@ def _clean_title(text: str) -> str:
     text = re.sub(r'\s*\|\s*\S+\s*$', '', text)   # 끝 "| 출처명" 패턴 제거
     return text.strip()
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from news_engine import (
     log_info, log_warning, log_error,
     get_db_session, NewsArticle, ArticleEmbedding,
@@ -153,13 +155,21 @@ def embed_unprocessed_articles(limit: int = EMBED_BATCH_SIZE) -> int:
 
             embeddings = _embed_texts(texts)
 
-            for article, emb in zip(articles, embeddings):
-                session.add(ArticleEmbedding(
-                    article_id=article.id,
-                    embedding_json=json.dumps(emb),
-                    model_name=EMBEDDING_MODEL,
-                    embedded_at=datetime.datetime.now(datetime.timezone.utc),
-                ))
+            # ON CONFLICT DO NOTHING: 이미 임베딩된 기사는 건너뜀 (UniqueViolation 방지)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            rows = [
+                {
+                    "article_id": article.id,
+                    "embedding_json": json.dumps(emb),
+                    "model_name": EMBEDDING_MODEL,
+                    "embedded_at": now,
+                }
+                for article, emb in zip(articles, embeddings)
+            ]
+            if rows:
+                stmt = pg_insert(ArticleEmbedding).values(rows)
+                stmt = stmt.on_conflict_do_nothing()
+                session.execute(stmt)
 
         count = len(articles)
         n_analyzed = len(analyzed)

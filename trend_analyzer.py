@@ -19,7 +19,7 @@ IRONAGE AI Analytics System v5.0
 import json
 import datetime
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from collections import Counter, defaultdict
 
 from news_engine import (
@@ -1209,3 +1209,334 @@ def update_gap_status(gap_id: int, status: str, resolution_note: str = ''):
         log_info(f"  ✅ 갭 #{gap_id} 상태 업데이트: {status}")
     except Exception as e:
         log_error(f"❌ 갭 상태 업데이트 실패: {e}")
+
+
+# ==============================================================================
+# --- 로컬 마크다운 보고서 저장 ---
+# ==============================================================================
+
+@performance_monitor
+def save_report_to_markdown(
+    analysis_result: Dict,
+    report_type: str = 'weekly',
+    auto_intel_state: Optional[Dict] = None
+) -> Optional[str]:
+    """
+    트렌드 분석 결과를 마크다운 파일로 로컬 results/ 폴더에 저장한다.
+    파일명 형식: results/[YYMMDD]_[보고서종류].md
+    예: 260522_주간트렌드분석.md
+    """
+    import os
+    from typing import Optional
+    
+    log_info("💾 로컬 마크다운 보고서 저장 중...")
+    try:
+        # 1. 디렉토리 생성
+        output_dir = "results"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 2. 파일명 결정 ([YYMMDD]_[보고서종류].md)
+        today_str = datetime.datetime.now().strftime('%y%m%d')  # YYMMDD
+        
+        if auto_intel_state:
+            report_kind = "자율인텔리전스_주간" if report_type == 'weekly' else "자율인텔리전스_월간"
+        else:
+            report_kind = "주간트렌드분석" if report_type == 'weekly' else "월간인텔리전스"
+            
+        file_name = f"{today_str}_{report_kind}.md"
+        file_path = os.path.join(output_dir, file_name)
+        
+        # 3. 마크다운 본문 구성
+        period_name = "주간" if report_type == 'weekly' else "월간"
+        today_full = datetime.datetime.now().strftime('%Y년 %m월 %d일')
+        
+        title_link_map = analysis_result.get('title_link_map', {})
+        stats = analysis_result.get('statistics', {})
+        chain = analysis_result.get('_analysis_chain', 'AI 자동 분석')
+        
+        md_lines = []
+        md_lines.append(f"# [TTA] {period_name} ICT 트렌드 분석 보고서 ({today_full})")
+        md_lines.append(f"\n- **분석 체계:** {chain}")
+        
+        if auto_intel_state and auto_intel_state.get('doc_url'):
+            md_lines.append(f"- **구글 문서 링크:** [{auto_intel_state.get('doc_url')}]({auto_intel_state.get('doc_url')})")
+        
+        md_lines.append("\n---")
+        
+        # Executive Summary
+        md_lines.append("\n## 📊 Executive Summary")
+        summary_lines = _bullet_lines(analysis_result.get('executive_summary', ''))
+        for line in summary_lines:
+            md_lines.append(line)
+            
+        # 통계
+        md_lines.append("\n## 📈 주요 통계")
+        md_lines.append(f"- **전체 기사 수:** {stats.get('total_articles', 0)}개")
+        md_lines.append(f"- **분석 완료 기사 수:** {stats.get('analyzed_articles', 0)}개")
+        md_lines.append(f"- **평균 품질 점수:** {stats.get('avg_quality_score', 0)}")
+        source_dist = stats.get('source_distribution', {})
+        if source_dist:
+            md_lines.append(f"- **주요 출처:** {', '.join(list(source_dist.keys())[:5])}")
+            
+        # 자율 인텔리전스 - 급등 엔티티 분석 추가
+        if auto_intel_state and auto_intel_state.get('surges'):
+            md_lines.append("\n## 📈 급등 엔티티 심층 분석 (자율 인텔리전스)")
+            md_lines.append("\n### 【 이번 기간 급등 엔티티 】")
+            type_label = {'company': '기업', 'tech': '기술', 'country': '국가'}
+            for s in auto_intel_state['surges']:
+                pct = s['pct_change']
+                pct_str = f"+{pct*100:.0f}%" if pct != float('inf') else "신규 등장"
+                label = type_label.get(s['node_type'], '')
+                md_lines.append(f"- **{s['name']}** ({label}, {pct_str}): {s['prev_count']} → {s['curr_count']}회")
+                
+            if auto_intel_state.get('surge_narrative'):
+                md_lines.append("\n### 【 AI 종합 분석 】")
+                md_lines.append(auto_intel_state['surge_narrative'])
+                
+            if auto_intel_state.get('rag_context'):
+                md_lines.append("\n### 【 엔티티별 RAG 심층 분석 】")
+                for s in auto_intel_state['surges']:
+                    rag = auto_intel_state['rag_context'].get(s['name'], {})
+                    answer = rag.get('answer', '').strip()
+                    if answer:
+                        md_lines.append(f"\n#### **{s['name']}**")
+                        md_lines.append(answer)
+            md_lines.append("\n---")
+            
+        # 핵심 이슈
+        md_lines.append("\n## 🔥 핵심 이슈")
+        issues = analysis_result.get('key_issues', [])
+        for i, issue in enumerate(issues, 1):
+            level = issue.get('impact_level', issue.get('importance', '하'))
+            level_mark = "🔴" if level == '상' else "🟡" if level == '중' else "🟢"
+            md_lines.append(f"\n### {i}. {level_mark} {issue.get('title', '')} [영향도: {level}]")
+            for line in _bullet_lines(issue.get('description', [])):
+                md_lines.append(f"  {line}")
+            if issue.get('standardization_gap'):
+                md_lines.append(f"  - **[표준화 공백]** {issue['standardization_gap']}")
+            if issue.get('tta_action_item'):
+                md_lines.append(f"  - **[TTA 대응]** {issue['tta_action_item']}")
+            if issue.get('weekly_evolution'):
+                md_lines.append(f"  - **[이슈 추이]** {issue['weekly_evolution']}")
+            if issue.get('tta_strategic_direction'):
+                md_lines.append(f"  - **[전략 방향]** {issue['tta_strategic_direction']}")
+            related = _resolve_article_links(issue.get('related_articles', []), title_link_map)
+            if related:
+                md_lines.append("  - **[관련 뉴스]**")
+                for art in related:
+                    link_str = f" ([링크]({art['link']}))" if art['link'] else ""
+                    md_lines.append(f"    - {art['title']}{link_str}")
+                    
+        # 연속 이슈 알림 섹션
+        recurring = analysis_result.get('recurring_issues', [])
+        if recurring:
+            md_lines.append("\n## ⚠️ 연속 등장 이슈 (주의 필요)")
+            for r in recurring:
+                arrow = {'상승': '📈', '유지': '➡️', '하락': '📉', '신규': '🆕'}.get(
+                    r.get('trend_direction', ''), '•')
+                md_lines.append(
+                    f"- **{r['title']}** "
+                    f"({r['occurrence_count']}회 연속 | 중요도: {r['impact_level']} | "
+                    f"추세: {arrow} {r.get('trend_direction','')} | "
+                    f"최초 감지: {r.get('first_seen','')})"
+                )
+                
+        # 트렌드 분석
+        trends = analysis_result.get('trends', [])
+        if trends:
+            md_lines.append("\n## 📍 트렌드 분석")
+            for i, trend in enumerate(trends, 1):
+                md_lines.append(f"\n### Trend {i}. {trend.get('trend', '')}")
+                for line in _bullet_lines(trend.get('description', [])):
+                    md_lines.append(f"  {line}")
+                for line in _bullet_lines(trend.get('prediction', [])):
+                    md_lines.append(f"  {line}")
+                related = _resolve_article_links(trend.get('related_articles', []), title_link_map)
+                if related:
+                    md_lines.append("  - **[관련 뉴스]**")
+                    for art in related:
+                        link_str = f" ([링크]({art['link']}))" if art['link'] else ""
+                        md_lines.append(f"    - {art['title']}{link_str}")
+                        
+        # 월간 전용 섹션
+        if report_type == 'monthly':
+            # 표준화 집중 영역
+            sf_list = analysis_result.get('standardization_focus', [])
+            if sf_list:
+                md_lines.append("\n## 📐 표준화 집중 영역")
+                for sf in sf_list:
+                    md_lines.append(f"\n### ■ {sf.get('area', '')}")
+                    for line in _bullet_lines(sf.get('reason', [])):
+                        md_lines.append(f"  {line}")
+                        
+            # 시장 인사이트
+            market = _bullet_lines(analysis_result.get('market_insights', []))
+            if market:
+                md_lines.append("\n## 💼 시장 인사이트")
+                for line in market:
+                    md_lines.append(line)
+                    
+        # 인사이트
+        insights = _bullet_lines(analysis_result.get('insights', []))
+        if insights:
+            md_lines.append("\n## 💡 인사이트")
+            for line in insights:
+                md_lines.append(line)
+                
+        # 향후 전망
+        outlook = _bullet_lines(analysis_result.get('outlook', []))
+        if outlook:
+            md_lines.append("\n## 🔮 향후 전망")
+            for line in outlook:
+                md_lines.append(line)
+                
+        # 푸터
+        md_lines.append("\n---")
+        md_lines.append("\n**한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀**  ")
+        md_lines.append("본 보고서는 IRONAGE AI Analytics System (v5.0)으로 자동 생성되었습니다.  ")
+        
+        # 파일 저장
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(md_lines))
+            
+        log_info(f"  ✅ 로컬 마크다운 보고서 저장 완료: {file_path}")
+        return file_path
+        
+    except Exception as e:
+        log_error(f"❌ 로컬 마크다운 보고서 저장 실패: {e}")
+        return None
+
+
+# ==============================================================================
+# --- 로컬 심층분석 마크다운 보고서 저장 ---
+# ==============================================================================
+
+@performance_monitor
+def save_analyzed_news_to_markdown(analyzed_data: List[Dict]) -> Optional[str]:
+    """
+    수동 뉴스 심층 분석 결과를 마크다운 파일로 로컬 results/ 폴더에 저장한다.
+    파일명 형식: results/[YYMMDD]_심층분석보고서.md
+    """
+    import os
+    from typing import Optional
+    
+    log_info("💾 로컬 심층분석 마크다운 보고서 저장 중...")
+    try:
+        # 1. 디렉토리 생성
+        output_dir = "results"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 2. 파일명 결정
+        today_str = datetime.datetime.now().strftime('%y%m%d')  # YYMMDD
+        file_name = f"{today_str}_심층분석보고서.md"
+        file_path = os.path.join(output_dir, file_name)
+        
+        # 3. 마크다운 본문 구성
+        today_full = datetime.datetime.now().strftime('%Y년 %m월 %d일')
+        
+        md_lines = []
+        md_lines.append(f"# 전파·이동통신 동향 보고서 ({today_full})")
+        md_lines.append(f"\n- **작성일:** {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}")
+        md_lines.append("- **작성 기관:** 한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀")
+        md_lines.append("\n---")
+        
+        # 안내사항
+        md_lines.append("\n## 📌 안내사항")
+        md_lines.append("> 본 보고서는 IRONAGE AI Analytics System이 자동으로 생성한 분석 보고서입니다. AI가 수집한 뉴스를 기반으로 작성되었습니다.")
+        
+        # Phase 7: 전주 대비 급등 키워드 TOP 5 섹션
+        try:
+            from knowledge_graph import detect_surge_entities
+            _now = datetime.datetime.now()
+            _prev_start = _now - datetime.timedelta(days=14)
+            _prev_end = _now - datetime.timedelta(days=7)
+            
+            # DB 세션
+            from news_engine import get_db_session, NewsArticle
+            with get_db_session() as _db:
+                _prev_rows = _db.query(NewsArticle).filter(
+                    NewsArticle.collected_at >= _prev_start,
+                    NewsArticle.collected_at < _prev_end
+                ).all()
+                _prev_data = [
+                    {
+                        'title': a.title or '',
+                        'analysis_result': a.analysis_result or '',
+                        'extracted_keywords': a.extracted_keywords or '',
+                    }
+                    for a in _prev_rows
+                ]
+            _surge_entities = detect_surge_entities(analyzed_data, _prev_data)[:5]
+            if _surge_entities:
+                md_lines.append("\n## 📈 전주 대비 급등 키워드 TOP 5")
+                for _rank, _ent in enumerate(_surge_entities, 1):
+                    _name = _ent.get('name', '')
+                    _ntype = _ent.get('node_type', '')
+                    _prev_c = _ent.get('prev_count', 0)
+                    _curr_c = _ent.get('curr_count', 0)
+                    _pct = _ent.get('pct_change', 0)
+                    if _pct == float('inf'):
+                        _pct_str = "신규 등장"
+                    else:
+                        _pct_str = f"+{_pct*100:.0f}%" if _pct >= 0 else f"{_pct*100:.0f}%"
+                    md_lines.append(f"- **{_name}** ({_ntype}) | 전주 {_prev_c}회 → 이번주 {_curr_c}회 ({_pct_str})")
+        except Exception as _e:
+            log_warning(f"급등 키워드 섹션 생성 실패: {_e}")
+            
+        # 목차
+        md_lines.append("\n## 📋 목차")
+        for i, data in enumerate(analyzed_data[:10], 1):
+            md_lines.append(f"{i}. {data['title'][:60]}...")
+            
+        # 영향도 요약 섹션 (Critical / High)
+        from news_engine import _get_impact_info, IMPACT_LEVEL_ICON, IMPACT_LEVEL_ORDER
+        critical_high = [
+            (d, _get_impact_info(d))
+            for d in analyzed_data
+            if _get_impact_info(d)['impact_level'] in ('Critical', 'High')
+        ]
+        critical_high.sort(key=lambda x: IMPACT_LEVEL_ORDER.get(x[1]['impact_level'], 2))
+        
+        if critical_high:
+            md_lines.append("\n## 🔔 주요 조치 필요 항목 (Critical / High)")
+            for art, info in critical_high:
+                icon = IMPACT_LEVEL_ICON.get(info['impact_level'], '📋')
+                level = info['impact_level']
+                tta = info['tta_action_item'] or '추가 모니터링 필요'
+                md_lines.append(f"- {icon} **[{level}]** {art['title'][:80]}  \n  → **TTA 조치:** {tta}")
+                
+        # 각 뉴스 아이템 상세 분석
+        md_lines.append("\n## 📰 상세 뉴스 분석")
+        for i, data in enumerate(analyzed_data, 1):
+            md_lines.append(f"\n### 【 {i} 】 {data['title']}")
+            md_lines.append(f"- **출처:** {data['source']} | **발행일:** {data['published']}")
+            md_lines.append(f"- **원문 링크:** [{data['link']}]({data['link']})")
+            
+            impact_info = _get_impact_info(data)
+            impact_level = impact_info['impact_level']
+            impact_icon = IMPACT_LEVEL_ICON.get(impact_level, '📋')
+            md_lines.append(f"- **{impact_icon} 영향도:** {impact_level}")
+            
+            if impact_info.get('tta_action_item'):
+                md_lines.append(f"- **💼 TTA 조치 사항:** {impact_info['tta_action_item']}")
+            if impact_info.get('standardization_gap'):
+                md_lines.append(f"- **📐 표준화 공백 영역:** {impact_info['standardization_gap']}")
+                
+            md_lines.append("\n**📝 AI 분석 내용:**")
+            analysis_text = data.get('analysis_result', '').strip()
+            if analysis_text:
+                md_lines.append(analysis_text)
+            else:
+                md_lines.append("상세 분석 내용이 없습니다.")
+            md_lines.append("\n---")
+            
+        # 파일 저장
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(md_lines))
+            
+        log_info(f"  ✅ 로컬 심층분석 마크다운 보고서 저장 완료: {file_path}")
+        return file_path
+        
+    except Exception as e:
+        log_error(f"❌ 로컬 심층분석 마크다운 보고서 저장 실패: {e}")
+        return None

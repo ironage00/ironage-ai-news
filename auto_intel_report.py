@@ -402,6 +402,23 @@ def run_auto_intel_report(
             state['errors'].append(f"{node_fn.__name__}: {e}")
             break   # 후속 노드 실행 중단
 
+    # ✅ 로컬 마크다운 파일 저장 (results/ 폴더 및 규약 적용)
+    if state.get('analysis_result'):
+        try:
+            from trend_analyzer import save_report_to_markdown
+            md_path = save_report_to_markdown(
+                analysis_result=state['analysis_result'],
+                report_type=period,
+                auto_intel_state=state
+            )
+            if md_path:
+                _log(state, f"  💾 [로컬 저장 완료] {md_path}")
+            else:
+                _log(state, "  ⚠️ [로컬 저장 실패] 마크다운 파일이 저장되지 않았습니다.")
+        except Exception as e:
+            log_warning(f"로컬 마크다운 저장 중 예외 발생: {e}")
+            state['errors'].append(f"local_markdown_save: {e}")
+
     # 결과 요약 로그
     _log(state, f"\n{'='*50}")
     _log(state, f"✅ 자율 인텔리전스 리포트 완료")
@@ -413,3 +430,24 @@ def run_auto_intel_report(
     _log(state, f"{'='*50}")
 
     return state
+
+
+if __name__ == '__main__':
+    import sys
+    import io
+    
+    # Windows 한글 출력 인코딩 방어
+    if sys.platform.startswith('win'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+    log_info("🚀 자율 인텔리전스 리포트 CLI 실행기 기동")
+    
+    import argparse
+    parser = argparse.ArgumentParser(description="IRONAGE AI 자율 인텔리전스 리포트 CLI")
+    parser.add_argument('--period', type=str, default='weekly', choices=['weekly', 'monthly'], help="리포트 기간 (weekly 또는 monthly)")
+    parser.add_argument('--skip-email', action='store_true', help="이메일 발송 단계 생략 (테스트용)")
+    args = parser.parse_args()
+    
+    log_info(f"👉 설정: 기간={args.period}, 이메일생략={args.skip_email}")
+    run_auto_intel_report(period=args.period, skip_email=args.skip_email)

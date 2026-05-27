@@ -1,4 +1,4 @@
-# IRONAGE AI Analytics System v4.0
+# IRONAGE AI Analytics System v5.0
 # 필수 Python 패키지
 
 # 웹 스크래핑 및 RSS
