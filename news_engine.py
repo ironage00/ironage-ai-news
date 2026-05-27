@@ -1,4 +1,4 @@
-﻿"""
+"""
 IRONAGE AI Analytics System v5.0
 뉴스 수집 및 분석 엔진 (오류 수정 버전)
 """
@@ -88,6 +88,8 @@ PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 # Google Drive 보고서 저장 폴더 ID (공유 드라이브)
 # https://drive.google.com/drive/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT
 REPORT_FOLDER_ID = "15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT"
+# 일일 동향 보고서 저장 하위 폴더명 (REPORT_FOLDER_ID 안에 자동 생성)
+DAILY_SUBFOLDER_NAME = "99_일일동향"
 
 # ==============================================================================
 # --- SSL 경고 무시 설정 ---
@@ -451,6 +453,8 @@ def check_and_migrate_database():
                     schedule_weekly BOOLEAN DEFAULT TRUE,
                     unit_id INTEGER,
                     google_alerts_rss TEXT DEFAULT '[]',
+                    sender_name TEXT DEFAULT '',
+                    email_subject_prefix TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -463,6 +467,8 @@ def check_and_migrate_database():
             missing_us = {
                 'unit_id':          'INTEGER',
                 'google_alerts_rss': "TEXT DEFAULT '[]'",
+                'sender_name':         "TEXT DEFAULT ''",
+                'email_subject_prefix': "TEXT DEFAULT ''",
             }
             with DB_ENGINE.connect() as conn:
                 for col, col_type in missing_us.items():
@@ -1738,9 +1744,11 @@ def _phase5_retry_call(model_name: str, retry_prompt: str) -> str:
 
 
 def filter_news_by_ai(
-    news_items: List[Dict], 
-    ai_model: str = 'openai', 
-    max_results: int = 60
+    news_items: List[Dict],
+    ai_model: str = 'openai',
+    max_results: int = 60,
+    unit_keywords: List[str] = None,
+    unit_display: str = None,
 ) -> List[Dict]:
     """
     AI를 사용하여 중요한 뉴스 선별 (중복 제거 강화)
@@ -1784,17 +1792,48 @@ def filter_news_by_ai(
     ict_keywords_lower = [kw.lower() for kw in ict_keywords]
     ict_min = CONFIG.get('ict_min_articles', 25)
 
-    ict_news = [
-        item for item in news_items
-        if any(kw in item['title'].lower() for kw in ict_keywords_lower)
-    ]
-    non_ict_count = len(news_items) - len(ict_news)
-
-    if len(ict_news) < ict_min:
-        log_warning(f"  ⚠️ ICT 관련 뉴스 {len(ict_news)}개 < 최소 기준 {ict_min}개. 전체 뉴스({len(news_items)}개)로 대체합니다.")
-        ict_news = news_items
+    # 단별 키워드 기반 이중 게이트 필터 (unit_keywords 지정 시)
+    if unit_keywords:
+        unit_kws_lower = [kw.lower() for kw in unit_keywords]
+        CORE_ICT_MARKERS = [
+            '통신', '5g', '6g', 'lte', '이동통신', '주파수', '3gpp', 'itu', 'etsi', 'ict',
+            '정보통신', '표준화', '국제표준', '과기정통부', '전파', 'horizon europe', '호라이젠',
+            '인공지능', '반도체', '사이버보안', '클라우드', '메타버스', '양자',
+            '위성', '자율주행', '스마트', '디지털', '네트워크', '플랫폼',
+        ]
+        SPECIFIC_UNIT_KWS = [
+            kw for kw in unit_kws_lower if len(kw) >= 4 and kw not in {'표준', 'ai', 'ict'}
+        ]
+        unit_ict_confirmed, unit_specific_only, ict_only = [], [], []
+        for item in news_items:
+            tl = item['title'].lower()
+            has_unit    = any(kw in tl for kw in unit_kws_lower)
+            has_spec    = any(kw in tl for kw in SPECIFIC_UNIT_KWS)
+            has_ict     = any(mk in tl for mk in CORE_ICT_MARKERS)
+            if has_unit and has_ict:
+                unit_ict_confirmed.append(item)
+            elif has_spec:
+                unit_specific_only.append(item)
+            elif has_ict:
+                ict_only.append(item)
+        ict_news = unit_ict_confirmed + unit_specific_only + ict_only
+        log_info(f"  • Stage 1 단별 이중 게이트 [{unit_display or '?'}]: {len(news_items)}개 → {len(ict_news)}개 "
+                 f"(단+ICT {len(unit_ict_confirmed)}, 단특화 {len(unit_specific_only)}, ICT전용 {len(ict_only)})")
+        if not ict_news:
+            log_warning(f"  ⚠️ [{unit_display}] 단별 필터 결과 없음. 전체 뉴스로 대체.")
+            ict_news = news_items
+        ict_min = 5  # 단별 실행 시 최소 기준 완화
     else:
-        log_info(f"  • Stage 1 ICT 필터: {len(news_items)}개 → {len(ict_news)}개 (비ICT {non_ict_count}개 제외)")
+        ict_news = [
+            item for item in news_items
+            if any(kw in item['title'].lower() for kw in ict_keywords_lower)
+        ]
+        non_ict_count = len(news_items) - len(ict_news)
+        if len(ict_news) < ict_min:
+            log_warning(f"⚠️ ICT 관련 뉴스 {len(ict_news)}개 < 최소 기준 {ict_min}개. 전체 뉴스({len(news_items)}개)로 대체합니다.")
+            ict_news = news_items
+        else:
+            log_info(f"  • Stage 1 ICT 필터: {len(news_items)}개 → {len(ict_news)}개 (비ICT {non_ict_count}개 제외)")
 
     # =========================================================================
     # Stage 2: 엔티티 클러스터링 — 유사 뉴스 그룹화 후 대표 기사만 AI에 전달
@@ -2866,21 +2905,25 @@ def save_user_settings(user_email: str, settings: dict):
     is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
     upsert_sql = (
         "INSERT INTO user_settings "
-        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, google_alerts_rss, updated_at) "
-        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, CURRENT_TIMESTAMP) "
+        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly,"
+        " google_alerts_rss, sender_name, email_subject_prefix, updated_at) "
+        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, :sname, :esubj, CURRENT_TIMESTAMP) "
         "ON CONFLICT (user_email) DO UPDATE SET "
         "keywords=EXCLUDED.keywords, ai_model=EXCLUDED.ai_model, "
         "email_recipients=EXCLUDED.email_recipients, schedule_daily=EXCLUDED.schedule_daily, "
         "schedule_weekly=EXCLUDED.schedule_weekly, google_alerts_rss=EXCLUDED.google_alerts_rss, "
+        "sender_name=EXCLUDED.sender_name, email_subject_prefix=EXCLUDED.email_subject_prefix, "
         "updated_at=EXCLUDED.updated_at"
     ) if is_pg else (
         "INSERT INTO user_settings "
-        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly, google_alerts_rss, updated_at) "
-        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, CURRENT_TIMESTAMP) "
+        "(user_email, keywords, ai_model, email_recipients, schedule_daily, schedule_weekly,"
+        " google_alerts_rss, sender_name, email_subject_prefix, updated_at) "
+        "VALUES (:email, :kw, :model, :emails, :daily, :weekly, :rss, :sname, :esubj, CURRENT_TIMESTAMP) "
         "ON CONFLICT (user_email) DO UPDATE SET "
         "keywords=excluded.keywords, ai_model=excluded.ai_model, "
         "email_recipients=excluded.email_recipients, schedule_daily=excluded.schedule_daily, "
         "schedule_weekly=excluded.schedule_weekly, google_alerts_rss=excluded.google_alerts_rss, "
+        "sender_name=excluded.sender_name, email_subject_prefix=excluded.email_subject_prefix, "
         "updated_at=CURRENT_TIMESTAMP"
     )
     try:
@@ -2893,6 +2936,8 @@ def save_user_settings(user_email: str, settings: dict):
                 "daily":  settings.get('schedule_daily', True),
                 "weekly": settings.get('schedule_weekly', True),
                 "rss":    json.dumps(settings.get('google_alerts_rss', []), ensure_ascii=False),
+                "sname":  settings.get('sender_name', '') or '',
+                "esubj":  settings.get('email_subject_prefix', '') or '',
             })
             session.commit()
     except Exception as e:
@@ -2934,7 +2979,8 @@ def load_unit_settings(unit_id: int) -> dict:
     """단별 수집 설정 로드. 가상 단 이메일 행을 우선 조회한다.
     Returns: {'keywords': [], 'google_alerts_rss': [], 'email_recipients': []}
     """
-    _empty = {'keywords': [], 'google_alerts_rss': [], 'email_recipients': []}
+    _empty = {'keywords': [], 'google_alerts_rss': [], 'email_recipients': [],
+              'sender_name': '', 'email_subject_prefix': ''}
     if unit_id is None:
         return _empty
     from sqlalchemy import text as sa_text
@@ -2942,17 +2988,20 @@ def load_unit_settings(unit_id: int) -> dict:
     try:
         with get_db_session() as session:
             row = session.execute(
-                sa_text("SELECT keywords, google_alerts_rss, email_recipients "
-                        "FROM user_settings WHERE unit_id = :uid "
+                sa_text("SELECT keywords, google_alerts_rss, email_recipients,"
+                        " sender_name, email_subject_prefix"
+                        " FROM user_settings WHERE unit_id = :uid "
                         "ORDER BY CASE WHEN user_email = :ve THEN 0 ELSE 1 END LIMIT 1"),
                 {"uid": unit_id, "ve": virtual_email}
             ).fetchone()
         if row is None:
             return _empty
         return {
-            'keywords':          json.loads(row[0] or '[]'),
-            'google_alerts_rss': json.loads(row[1] or '[]'),
-            'email_recipients':  json.loads(row[2] or '[]'),
+            'keywords':              json.loads(row[0] or '[]'),
+            'google_alerts_rss':     json.loads(row[1] or '[]'),
+            'email_recipients':      json.loads(row[2] or '[]'),
+            'sender_name':           row[3] or '',
+            'email_subject_prefix':  row[4] or '',
         }
     except Exception as e:
         log_warning(f"load_unit_settings 오류 (unit_id={unit_id}): {e}")
@@ -2967,12 +3016,14 @@ def save_unit_settings(unit_id: int, settings: dict) -> bool:
     virtual_email = f"__unit_{unit_id}__@system"
     try:
         save_user_settings(virtual_email, {
-            'keywords':          settings.get('keywords', []),
-            'google_alerts_rss': settings.get('google_alerts_rss', []),
-            'email_recipients':  settings.get('email_recipients', []),
-            'ai_model':          'gemini',
-            'schedule_daily':    True,
-            'schedule_weekly':   True,
+            'keywords':              settings.get('keywords', []),
+            'google_alerts_rss':     settings.get('google_alerts_rss', []),
+            'email_recipients':      settings.get('email_recipients', []),
+            'sender_name':           settings.get('sender_name', ''),
+            'email_subject_prefix':  settings.get('email_subject_prefix', ''),
+            'ai_model':              'gemini',
+            'schedule_daily':        True,
+            'schedule_weekly':       True,
         })
         assign_user_unit(virtual_email, unit_id)
         return True
@@ -3009,13 +3060,45 @@ def assign_user_unit(user_email: str, unit_id) -> bool:
         return False
 
 
+
+def _get_or_create_subfolder(drive_service, parent_id: str, folder_name: str) -> str:
+    """parent_id 안에 folder_name 폴더를 찾아 반환. 없으면 생성 후 반환."""
+    try:
+        q = (
+            f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+            f" and '{parent_id}' in parents and trashed=false"
+        )
+        results = drive_service.files().list(
+            q=q,
+            fields='files(id, name)',
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute()
+        files = results.get('files', [])
+        if files:
+            return files[0]['id']
+        meta = {
+            'name': folder_name,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent_id],
+        }
+        folder = drive_service.files().create(
+            body=meta, supportsAllDrives=True, fields='id',
+        ).execute()
+        log_info(f"  > 하위 폴더 생성: {folder_name}")
+        return folder['id']
+    except Exception as e:
+        log_warning(f"  ⚠️ 하위 폴더 조회/생성 실패 ({folder_name}): {e}")
+        return parent_id
+
+
 def _utf16_len(s: str) -> int:
     """Google Docs API는 UTF-16 코드 유닛 기준으로 위치를 계산함. 이모지(U+10000+)는 2유닛."""
     return len(s.encode('utf-16-le')) // 2
 
 
 @performance_monitor
-def generate_google_doc_report(analyzed_data):
+def generate_google_doc_report(analyzed_data, unit_name=None, unit_display=None):
     """세련된 디자인의 구글 문서 보고서를 생성"""
     try:
         docs_service, drive_service = get_google_docs_service()
@@ -3026,16 +3109,25 @@ def generate_google_doc_report(analyzed_data):
         log_error(f"  (오류) 구글 서비스 연결에 실패했습니다: {e}")
         return None, None
         
-    current_date = datetime.date.today().strftime('%Y년 %m월 %d일')
-    document_title = f"전파·이동통신 동향 보고서 ({current_date})"
+    _kst_tz_doc = pytz.timezone('Asia/Seoul')
+    _kst_now_doc = datetime.datetime.now(_kst_tz_doc)
+    _kst_date_doc = _kst_now_doc.strftime('%Y년 %m월 %d일')
+    _subj_body_doc = (
+        _UNIT_EMAIL_SUBJECT_MAP.get(unit_name or '', '')
+        or f'{(unit_display or "").strip()} 동향 보고서'.strip()
+    )
+    document_title = f"[TTA] {_subj_body_doc} ({_kst_date_doc})"
 
     try:
         try:
-            # 공유 드라이브 폴더에 직접 생성 (Drive API files().create 사용)
+            # 99_일일동향 하위 폴더에 저장
+            _daily_folder_id = _get_or_create_subfolder(
+                drive_service, REPORT_FOLDER_ID, DAILY_SUBFOLDER_NAME
+            )
             file_meta = {
                 'name': document_title,
                 'mimeType': 'application/vnd.google-apps.document',
-                'parents': [REPORT_FOLDER_ID],
+                'parents': [_daily_folder_id],
             }
             _created_file = drive_service.files().create(
                 body=file_meta,
@@ -3085,7 +3177,11 @@ def generate_google_doc_report(analyzed_data):
         index += _utf16_len(title_text)
         
         # 부제목
-        subtitle_text = f"한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀\n작성일: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}\n"
+        _unit_subtitle = unit_display or '표준화본부'
+        subtitle_text = (
+            f'한국정보통신기술협회(TTA) {_unit_subtitle}\n'
+            f'작성일: {_kst_now_doc.strftime("%Y년 %m월 %d일 %H:%M")} (KST)\n'
+        )
         requests_list.append({'insertText': {'location': {'index': index}, 'text': subtitle_text}})
         requests_list.append({
             'updateParagraphStyle': {
@@ -3121,71 +3217,6 @@ def generate_google_doc_report(analyzed_data):
         })
         index += _utf16_len(divider_text)
 
-        # Phase 7: 전주 대비 급등 키워드 TOP 5 섹션
-        try:
-            from knowledge_graph import detect_surge_entities
-            _now = datetime.datetime.now()
-            _prev_start = _now - datetime.timedelta(days=14)
-            _prev_end = _now - datetime.timedelta(days=7)
-            with get_db_session() as _db:
-                _prev_rows = _db.query(NewsArticle).filter(
-                    NewsArticle.collected_at >= _prev_start,
-                    NewsArticle.collected_at < _prev_end
-                ).all()
-                _prev_data = [
-                    {
-                        'title': a.title or '',
-                        'analysis_result': a.analysis_result or '',
-                        'extracted_keywords': a.extracted_keywords or '',
-                    }
-                    for a in _prev_rows
-                ]
-            _surge_entities = detect_surge_entities(analyzed_data, _prev_data)[:5]
-            if _surge_entities:
-                surge_header = "📈 전주 대비 급등 키워드 TOP 5\n"
-                requests_list.append({'insertText': {'location': {'index': index}, 'text': surge_header}})
-                requests_list.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(surge_header)},
-                        'textStyle': {
-                            'fontSize': {'magnitude': 13, 'unit': 'PT'},
-                            'bold': True,
-                            'foregroundColor': {'color': {'rgbColor': {'red': 0.07, 'green': 0.42, 'blue': 0.07}}}
-                        },
-                        'fields': 'fontSize,bold,foregroundColor'
-                    }
-                })
-                index += _utf16_len(surge_header)
-                for _rank, _ent in enumerate(_surge_entities, 1):
-                    _name = _ent.get('name', '')
-                    _ntype = _ent.get('node_type', '')
-                    _prev_c = _ent.get('prev_count', 0)
-                    _curr_c = _ent.get('curr_count', 0)
-                    _pct = _ent.get('pct_change', 0)
-                    if _pct == float('inf'):
-                        _pct_str = "신규 등장"
-                    else:
-                        _pct_str = f"+{_pct*100:.0f}%" if _pct >= 0 else f"{_pct*100:.0f}%"
-                    _row = f"  {_rank}. {_name} ({_ntype})  |  전주 {_prev_c}회 → 이번주 {_curr_c}회  ({_pct_str})\n"
-                    requests_list.append({'insertText': {'location': {'index': index}, 'text': _row}})
-                    requests_list.append({
-                        'updateTextStyle': {
-                            'range': {'startIndex': index, 'endIndex': index + len(_row)},
-                            'textStyle': {
-                                'fontSize': {'magnitude': 11, 'unit': 'PT'},
-                                'foregroundColor': {'color': {'rgbColor': {'red': 0.1, 'green': 0.1, 'blue': 0.1}}}
-                            },
-                            'fields': 'fontSize,foregroundColor'
-                        }
-                    })
-                    index += _utf16_len(_row)
-                _surge_gap = "\n"
-                requests_list.append({'insertText': {'location': {'index': index}, 'text': _surge_gap}})
-                index += _utf16_len(_surge_gap)
-        except ImportError:
-            log_warning("  ⚠️ knowledge_graph 모듈 없음 — 급등 키워드 섹션 건너뜀")
-        except Exception as _phase7_err:
-            log_warning(f"  ⚠️ 급등 키워드 섹션 생성 실패: {_phase7_err}")
 
         # AI 분석 고지
         disclaimer_text = "📌 안내사항\n"
@@ -3245,7 +3276,7 @@ def generate_google_doc_report(analyzed_data):
         })
         index += _utf16_len(toc_header)
         
-        for i, data in enumerate(analyzed_data[:10], 1):
+        for i, data in enumerate(analyzed_data[:20], 1):
             toc_item = f"  {i}. {data['title'][:50]}...\n"
             requests_list.append({'insertText': {'location': {'index': index}, 'text': toc_item}})
             requests_list.append({
@@ -3263,53 +3294,6 @@ def generate_google_doc_report(analyzed_data):
         toc_end = "\n"
         requests_list.append({'insertText': {'location': {'index': index}, 'text': toc_end}})
         index += _utf16_len(toc_end)
-
-        # ── 영향도 요약 섹션 (Critical / High 우선 노출) ──────────────────
-        critical_high = [
-            (d, _get_impact_info(d))
-            for d in analyzed_data
-            if _get_impact_info(d)['impact_level'] in ('Critical', 'High')
-        ]
-        critical_high.sort(key=lambda x: IMPACT_LEVEL_ORDER.get(x[1]['impact_level'], 2))
-
-        if critical_high:
-            impact_header = "🔔 주요 조치 필요 항목 (Critical / High)\n"
-            requests_list.append({'insertText': {'location': {'index': index}, 'text': impact_header}})
-            requests_list.append({
-                'updateTextStyle': {
-                    'range': {'startIndex': index, 'endIndex': index + len(impact_header)},
-                    'textStyle': {
-                        'fontSize': {'magnitude': 14, 'unit': 'PT'},
-                        'bold': True,
-                        'foregroundColor': {'color': {'rgbColor': {'red': 0.7, 'green': 0.1, 'blue': 0.1}}}
-                    },
-                    'fields': 'fontSize,bold,foregroundColor'
-                }
-            })
-            index += _utf16_len(impact_header)
-
-            for art, info in critical_high:
-                icon = IMPACT_LEVEL_ICON.get(info['impact_level'], '📋')
-                level = info['impact_level']
-                tta = info['tta_action_item'] or '추가 모니터링 필요'
-                summary_line = f"  {icon} [{level}] {art['title'][:60]}\n       → TTA 조치: {tta}\n"
-                requests_list.append({'insertText': {'location': {'index': index}, 'text': summary_line}})
-                color = IMPACT_LEVEL_COLOR_RGB.get(level, IMPACT_LEVEL_COLOR_RGB['Medium'])
-                requests_list.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(summary_line)},
-                        'textStyle': {
-                            'fontSize': {'magnitude': 10, 'unit': 'PT'},
-                            'foregroundColor': {'color': {'rgbColor': color}}
-                        },
-                        'fields': 'fontSize,foregroundColor'
-                    }
-                })
-                index += _utf16_len(summary_line)
-
-            sep = "\n"
-            requests_list.append({'insertText': {'location': {'index': index}, 'text': sep}})
-            index += _utf16_len(sep)
 
         # 각 뉴스 아이템
         for i, data in enumerate(analyzed_data):
@@ -3368,7 +3352,7 @@ def generate_google_doc_report(analyzed_data):
             })
             index += _utf16_len(link_text)
 
-            # ── 영향도 배지 + TTA 조치 사항 ────────────────────────────
+            # ── 영향도 배지 ────────────────────────────
             impact_info = _get_impact_info(data)
             impact_level = impact_info['impact_level']
             impact_icon = IMPACT_LEVEL_ICON.get(impact_level, '📋')
@@ -3388,50 +3372,6 @@ def generate_google_doc_report(analyzed_data):
                 }
             })
             index += _utf16_len(badge_text)
-
-            tta = impact_info['tta_action_item']
-            if tta:
-                tta_label = "▶ TTA 조치 사항\n"
-                requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_label}})
-                requests_list.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(tta_label)},
-                        'textStyle': {'fontSize': {'magnitude': 11, 'unit': 'PT'}, 'bold': True},
-                        'fields': 'fontSize,bold'
-                    }
-                })
-                requests_list.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(tta_label)},
-                        'paragraphStyle': {
-                            'shading': {'backgroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 0.95, 'blue': 0.88}}}},
-                            'spaceAbove': {'magnitude': 5, 'unit': 'PT'},
-                        },
-                        'fields': 'shading,spaceAbove'
-                    }
-                })
-                index += _utf16_len(tta_label)
-
-                tta_body = f"{tta}\n\n"
-                requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_body}})
-                requests_list.append({
-                    'updateParagraphStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(tta_body)},
-                        'paragraphStyle': {
-                            'indentFirstLine': {'magnitude': 20, 'unit': 'PT'},
-                            'shading': {'backgroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 0.97, 'blue': 0.92}}}},
-                        },
-                        'fields': 'indentFirstLine,shading'
-                    }
-                })
-                requests_list.append({
-                    'updateTextStyle': {
-                        'range': {'startIndex': index, 'endIndex': index + len(tta_body)},
-                        'textStyle': {'fontSize': {'magnitude': 10, 'unit': 'PT'}},
-                        'fields': 'fontSize'
-                    }
-                })
-                index += _utf16_len(tta_body)
 
             std_gap = impact_info['standardization_gap']
             if std_gap and std_gap != '기사에서 표준화 현황 정보 미확인':
@@ -3547,6 +3487,52 @@ def generate_google_doc_report(analyzed_data):
                 })
                 index += _utf16_len(section_body)
             
+            # ── TTA 조치사항 (뉴스 마지막 배치) ────────────────
+            tta = impact_info['tta_action_item']
+            if tta:
+                tta_label = "▶ TTA 조치 사항\n"
+                requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_label}})
+                requests_list.append({
+                    'updateTextStyle': {
+                        'range': {'startIndex': index, 'endIndex': index + len(tta_label)},
+                        'textStyle': {'fontSize': {'magnitude': 11, 'unit': 'PT'}, 'bold': True},
+                        'fields': 'fontSize,bold'
+                    }
+                })
+                requests_list.append({
+                    'updateParagraphStyle': {
+                        'range': {'startIndex': index, 'endIndex': index + len(tta_label)},
+                        'paragraphStyle': {
+                            'shading': {'backgroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 0.95, 'blue': 0.88}}}},
+                            'spaceAbove': {'magnitude': 5, 'unit': 'PT'},
+                        },
+                        'fields': 'shading,spaceAbove'
+                    }
+                })
+                index += _utf16_len(tta_label)
+
+                tta_body = f"{tta}\n\n"
+                requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_body}})
+                requests_list.append({
+                    'updateParagraphStyle': {
+                        'range': {'startIndex': index, 'endIndex': index + len(tta_body)},
+                        'paragraphStyle': {
+                            'indentFirstLine': {'magnitude': 20, 'unit': 'PT'},
+                            'shading': {'backgroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 0.97, 'blue': 0.92}}}},
+                        },
+                        'fields': 'indentFirstLine,shading'
+                    }
+                })
+                requests_list.append({
+                    'updateTextStyle': {
+                        'range': {'startIndex': index, 'endIndex': index + len(tta_body)},
+                        'textStyle': {'fontSize': {'magnitude': 10, 'unit': 'PT'}},
+                        'fields': 'fontSize'
+                    }
+                })
+                index += _utf16_len(tta_body)
+
+
             if i < len(analyzed_data) - 1:
                 separator = "\n" + "─" * 40 + "\n"
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': separator}})
@@ -3563,9 +3549,10 @@ def generate_google_doc_report(analyzed_data):
                 index += _utf16_len(separator)
 
         # 문서 푸터
+        _footer_unit = unit_display or '표준화본부'
         footer_text = f"\n\n{'=' * 60}\n"
-        footer_text += f"문서 작성 완료: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}\n"
-        footer_text += "한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀\n"
+        footer_text += f"문서 작성 완료: {_kst_now_doc.strftime('%Y년 %m월 %d일 %H:%M:%S')} (KST)\n"
+        footer_text += f"한국정보통신기술협회(TTA) {_footer_unit}\n"
         footer_text += "IRONAGE AI Analytics System v5.0\n"
         footer_text += "© 2024 TTA. All rights reserved.\n"
         
@@ -3703,9 +3690,18 @@ def get_weekly_subscribers() -> list:
         return list(RECEIVER_EMAIL)
 
 
-def send_gmail_report(report_title, analyzed_data, doc_url, other_news, receivers=None):
+def send_gmail_report(
+    report_title, analyzed_data, doc_url, other_news,
+    receivers=None,
+    sender_name: str = None,
+    unit_display: str = None,
+    email_subject_prefix: str = None,
+    email_subject_override: str = None,
+):
     """분석 리포트를 개선된 디자인의 이메일로 전송.
-    receivers: 수신자 목록 (None이면 전역 RECEIVER_EMAIL 사용)"""
+    receivers: 수신자 목록 (None이면 전역 RECEIVER_EMAIL 사용)
+    email_subject_override: 이 값이 있으면 제목 완전 대체
+    """
 
     # 영향도 우선순위(Critical→High→Medium→Low)로 정렬
     sorted_data = sorted(
@@ -4251,7 +4247,7 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news, receiver
             <div class="footer">
                 <div class="footer-content">
                     <strong>한국정보통신기술협회(TTA)</strong><br>
-                    표준화본부 이동통신표준팀
+                    {unit_display or '표준화본부'}
                 </div>
                 <div class="footer-divider"></div>
                 <div class="footer-copyright">
@@ -4269,9 +4265,20 @@ def send_gmail_report(report_title, analyzed_data, doc_url, other_news, receiver
         log_warning("  ⚠️ 이메일 수신자가 없습니다. 발송 건너뜀.")
         return
 
+    _unit_label = unit_display or 'TTA'
+    _from_display = (sender_name.strip() if sender_name else '') or f'{_unit_label} AI'
+    _from_header = f'{_from_display} <{SENDER_EMAIL}>'
+    if email_subject_override:
+        _subject = email_subject_override.strip()
+    elif email_subject_prefix:
+        _subject = f'{email_subject_prefix.strip()} {report_title}'
+    elif unit_display:
+        _subject = f'[TTA {unit_display}] {report_title}'
+    else:
+        _subject = f'[TTA] {report_title}'
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[TTA] {report_title}"
-    msg["From"] = SENDER_EMAIL
+    msg["Subject"] = _subject
+    msg["From"] = _from_header
     msg["To"] = ", ".join(actual_receivers)
     msg["Date"] = formatdate(localtime=True)
     msg.attach(MIMEText(html_body, 'html', 'utf-8'))
@@ -5123,7 +5130,16 @@ def run_unit_collection(unit_id: int, ai_model: str = None) -> dict:
 # --- 4개 단 통합 일일 파이프라인 ---
 # ==============================================================================
 
-def run_all_units_daily(ai_model: str = None) -> dict:
+# 단 name → 이메일 제목 본문 (날짜는 run_all_units_daily에서 동적으로 붙임)
+_UNIT_EMAIL_SUBJECT_MAP = {
+    'standards_planning':   '표준전략 동향 보고서',
+    'standards_innovation': '표준혁신 동향 보고서',
+    'ai_convergence':       'AI 융합 동향 보고서',
+    'radio_network':        '전파·네트워크 동향 보고서',
+}
+
+
+def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dict:
     """4개 단 각각의 키워드·RSS로 수집→AI분析→이메일을 순차 실행.
 
     CLI: python news_engine.py daily
@@ -5135,12 +5151,20 @@ def run_all_units_daily(ai_model: str = None) -> dict:
     if ai_model is None:
         ai_model = CONFIG.get('ai_model', 'openai')
 
-    log_info("=" * 60)
-    log_info("🚀 [전체 단] 일일 수집·분析 파이프라인 시작")
-    log_info(f"🤖 AI 모델: {ai_model.upper()}")
-    log_info("=" * 60)
+    if target_unit_id is not None:
+        log_info("=" * 60)
+        log_info(f"🚀 [단별 실행] unit_id={target_unit_id} 수집·분析 파이프라인 시작")
+        log_info(f"🤖 AI 모델: {ai_model.upper()}")
+        log_info("=" * 60)
+    else:
+        log_info("=" * 60)
+        log_info("🚀 [전체 단] 일일 수집·분析 파이프라인 시작")
+        log_info(f"🤖 AI 모델: {ai_model.upper()}")
+        log_info("=" * 60)
 
     all_units = get_all_units()
+    if target_unit_id is not None:
+        all_units = [u for u in all_units if u['id'] == target_unit_id]
     summary = {}
 
     for unit in all_units:
@@ -5148,9 +5172,11 @@ def run_all_units_daily(ai_model: str = None) -> dict:
         unit_display = unit['display_name']
         unit_name    = unit['name']
         unit_cfg     = load_unit_settings(unit_id)
-        rss_urls     = unit_cfg.get('google_alerts_rss', [])
-        keywords     = unit_cfg.get('keywords', [])
-        email_rcpts  = unit_cfg.get('email_recipients', [])
+        rss_urls             = unit_cfg.get('google_alerts_rss', [])
+        keywords             = unit_cfg.get('keywords', [])
+        email_rcpts          = unit_cfg.get('email_recipients', [])
+        sender_name          = unit_cfg.get('sender_name', '') or f'{unit_display} AI뉴스봇'
+        email_subject_prefix = unit_cfg.get('email_subject_prefix', '') or f'[TTA {unit_display}]'
 
         unit_result = {'collected': 0, 'saved': 0, 'analyzed': 0, 'errors': []}
         summary[unit_display] = unit_result
@@ -5199,7 +5225,13 @@ def run_all_units_daily(ai_model: str = None) -> dict:
 
         # ── 3. AI 선별 ──────────────────────────────────────────────
         try:
-            selected = filter_news_by_ai(news_items, ai_model=ai_model, max_results=50)
+            selected = filter_news_by_ai(
+                news_items,
+                ai_model=ai_model,
+                max_results=50,
+                unit_keywords=keywords,
+                unit_display=unit_display,
+            )
             log_info(f"   🤖 AI 선별 {len(selected)}개")
         except Exception as e:
             unit_result['errors'].append(f"AI 선별 실패: {e}")
@@ -5244,9 +5276,18 @@ def run_all_units_daily(ai_model: str = None) -> dict:
             except Exception as _e:
                 log_warning(f"⚠️ 분析 결과 저장 실패: {res.get('title','')[:40]} — {_e}")
 
+        # ── 5-b. 메일 제목 생성 (단별 고정 형식) ───────────
+        import pytz as _pytz
+        _kst_tz   = _pytz.timezone('Asia/Seoul')
+        _kst_date = datetime.datetime.now(_kst_tz).strftime('%Y년 %m월 %d일')
+        _subj_body = _UNIT_EMAIL_SUBJECT_MAP.get(unit_name, f'{unit_display} 동향 보고서')
+        _email_subject = f'[TTA] {_subj_body} ({_kst_date})'
+
         # ── 6. 리포트 생성 ──────────────────────────────────────────
         doc_url, report_title = safe_execute(
-            lambda: generate_google_doc_report(analyzed),
+            lambda: generate_google_doc_report(
+                analyzed, unit_name=unit_name, unit_display=unit_display
+            ),
             error_msg=f"[{unit_display}] 구글 문서 생성 실패",
             default_return=(None, None)
         )
@@ -5263,7 +5304,14 @@ def run_all_units_daily(ai_model: str = None) -> dict:
         other_news = [it for it in selected if it['link'] not in {r['link'] for r in analyzed}]
         receivers  = email_rcpts if email_rcpts else None   # None → 전역 RECEIVER_EMAIL
         safe_execute(
-            lambda: send_gmail_report(report_title, analyzed, doc_url, other_news, receivers=receivers),
+            lambda: send_gmail_report(
+                report_title, analyzed, doc_url, other_news,
+                receivers=receivers,
+                sender_name=sender_name,
+                unit_display=unit_display,
+                email_subject_prefix=email_subject_prefix,
+                email_subject_override=_email_subject,
+            ),
             error_msg=f"[{unit_display}] 이메일 발송 실패",
             default_return=None
         )
