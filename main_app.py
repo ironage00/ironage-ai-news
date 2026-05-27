@@ -628,7 +628,7 @@ with st.sidebar:
         st.markdown("---")
     # ─────────────────────────────────────────────────────────────────────────
 
-    _user_options = ["🏠 홈", "🔍 AI 검색", "⚙️ 내 설정"]
+    _user_options = ["🏠 홈", "🔍 AI 검색", "📊 인텔리전스", "⚙️ 내 설정"]
     _admin_options = ["⚙️ 시스템 설정"]
 
     _all_options = _user_options + (_admin_options if _is_admin else [])
@@ -651,35 +651,42 @@ with st.sidebar:
 
 
 # ===== 홈 페이지 헬퍼 =====
-def _render_unit_articles(articles: list, unit_display: str, max_cards: int = 8):
-    """단별 분석 기사 카드를 렌더링한다."""
-    analyzed = [a for a in articles if a.get('is_analyzed')][:max_cards]
-    if not analyzed:
-        st.info(f"최근 3일간 **{unit_display}** 분석 기사가 없습니다.\n\n"
-                "⚙️ 시스템 설정에서 RSS/키워드를 확인하거나 관리자에게 수집 실행을 요청하세요.")
-        return
-    cards = []
-    for art in analyzed:
+def _render_article_card(art: dict) -> str:
+    """단일 기사 HTML 카드 반환."""
+    try:
+        data = json.loads(art.get('analysis_result') or '{}')
+    except Exception:
+        data = {}
+    title    = art.get('title', '제목 없음')
+    source   = art.get('source', '')
+    raw_main = data.get('main_content', '') or ''
+    summary  = (raw_main[:300] + '…') if len(raw_main) > 300 else raw_main
+    link     = art.get('link', '')
+    date_str = _to_kst_str(art.get('collected_at', ''))
+    impact   = data.get('impact_level', '')
+    impact_color = {'Critical': '#dc2626', 'High': '#ea580c',
+                    'Medium': '#2563eb', 'Low': '#64748b'}.get(impact, '#64748b')
+    impact_badge = (f'<span style="background:{impact_color};color:#fff;'
+                    f'font-size:0.7rem;padding:1px 7px;border-radius:99px;'
+                    f'font-weight:600;">{impact}</span> ') if impact else ''
+    link_tag = (f'<a href="{link}" target="_blank" '
+                f'style="color:#005aab;text-decoration:none;font-size:0.82rem;">🔗 원문</a>'
+                if link else '')
+    # 키워드 뱃지
+    kw_raw = data.get('keywords', []) or []
+    if isinstance(kw_raw, str):
         try:
-            data = json.loads(art.get('analysis_result') or '{}')
+            kw_raw = json.loads(kw_raw)
         except Exception:
-            data = {}
-        title    = art.get('title', '제목 없음')
-        source   = art.get('source', '')
-        raw_main = data.get('main_content', '') or ''
-        summary  = (raw_main[:280] + '…') if len(raw_main) > 280 else raw_main
-        link     = art.get('link', '')
-        date_str = _to_kst_str(art.get('collected_at', ''))
-        impact   = data.get('impact_level', '')
-        impact_color = {'Critical': '#dc2626', 'High': '#ea580c',
-                        'Medium': '#2563eb', 'Low': '#64748b'}.get(impact, '#64748b')
-        impact_badge = (f'<span style="background:{impact_color};color:#fff;'
-                        f'font-size:0.7rem;padding:1px 7px;border-radius:99px;'
-                        f'font-weight:600;">{impact}</span> ') if impact else ''
-        link_tag = (f'<a href="{link}" target="_blank" '
-                    f'style="color:#005aab;text-decoration:none;font-size:0.82rem;">🔗 원문</a>'
-                    if link else '')
-        cards.append(f"""
+            kw_raw = [k.strip() for k in kw_raw.split(',') if k.strip()]
+    kw_badges = ''.join(
+        f'<span style="background:#f0f4ff;color:#3b5bdb;font-size:0.72rem;'
+        f'padding:1px 7px;border-radius:99px;margin:2px;display:inline-block;">'
+        f'{k}</span>'
+        for k in kw_raw[:6]
+    )
+    kw_block = f'<div style="margin-top:6px;">{kw_badges}</div>' if kw_badges else ''
+    return f"""
 <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;
             margin-bottom:10px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
   <div style="font-size:0.76rem;font-weight:700;color:#005aab;
@@ -688,11 +695,45 @@ def _render_unit_articles(articles: list, unit_display: str, max_cards: int = 8)
               line-height:1.5;margin-bottom:7px;">{title}</div>
   <div style="font-size:0.87rem;color:#475569;line-height:1.65;
               margin-bottom:9px;">{summary}</div>
-  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+  {kw_block}
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px;">
     {link_tag}
     <span style="color:#94a3b8;font-size:0.76rem;">수집: {date_str}</span>
   </div>
-</div>""")
+</div>"""
+
+
+def _render_unit_articles_by_date(articles: list, unit_display: str, tab_key: str):
+    """단별 기사를 일자별로 나눠 최대 20개 렌더링한다."""
+    analyzed = [a for a in articles if a.get('is_analyzed')]
+    if not analyzed:
+        st.info(f"**{unit_display}** 분析 기사가 없습니다.\n\n"
+                "관리자에게 뉴스 수집/분析 실행을 요청하세요.")
+        return
+
+    # 일자별 그룹핑 (KST 날짜 기준)
+    from collections import defaultdict as _ddict
+    _by_date = _ddict(list)
+    for a in analyzed:
+        _d = _to_kst_str(a.get('collected_at', ''), fmt='%Y-%m-%d')
+        _by_date[_d].append(a)
+
+    # 날짜 내림차순 정렬
+    _dates = sorted(_by_date.keys(), reverse=True)
+
+    # 날짜 선택
+    _date_labels = [f"{d} ({len(_by_date[d])}건)" for d in _dates]
+    _sel_label = st.selectbox(
+        "📅 날짜 선택",
+        _date_labels,
+        index=0,
+        key=f"date_sel_{tab_key}",
+    )
+    _sel_date = _dates[_date_labels.index(_sel_label)]
+    _day_arts = _by_date[_sel_date][:20]  # 최대 20개
+
+    st.caption(f"**{_sel_date}** 분析 기사 {len(_day_arts)}건 / 전체 {len(_by_date[_sel_date])}건")
+    cards = [_render_article_card(a) for a in _day_arts]
     st.markdown('\n'.join(cards), unsafe_allow_html=True)
 
 
@@ -825,20 +866,20 @@ if selected == "🏠 홈":
 
         for _tab, _unit in zip(_tabs, _ALL_UNITS):
             with _tab:
-                # 단별 최근 3일 기사 로드
+                # 단별 최근 30일 기사 로드 (일자별 선택 가능하도록 충분히)
                 if _unit.get('name') == 'radio_network':
-                    _unit_news = load_news_from_db(days=3, unit_id=_unit['id'])
-                    _legacy = load_news_from_db(days=3, unit_id=-1)
+                    _unit_news = load_news_from_db(days=30, unit_id=_unit['id'])
+                    _legacy = load_news_from_db(days=30, unit_id=-1)
                     _seen_lnk = {a['link'] for a in _unit_news}
                     for _la in _legacy:
                         if _la['link'] not in _seen_lnk:
                             _unit_news.append(_la)
                             _seen_lnk.add(_la['link'])
                 else:
-                    _unit_news = load_news_from_db(days=3, unit_id=_unit['id'])
+                    _unit_news = load_news_from_db(days=30, unit_id=_unit['id'])
                 _analyzed_count = sum(1 for a in _unit_news if a.get('is_analyzed'))
 
-                # GAP 2: 단 설명 + 키워드 현황 + 기사 수 통계
+                # 단 설명 + 키워드 현황 + 기사 수 통계
                 _desc = _unit.get('description', '')
                 _unit_cfg = load_unit_settings(_unit['id'])
                 _unit_kws = _unit_cfg.get('keywords', [])
@@ -858,28 +899,19 @@ if selected == "🏠 홈":
                             f"**🔑 모니터링 키워드:** {_kw_badges}", unsafe_allow_html=True
                         )
                     else:
-                        st.caption("⚠️ 키워드 미설정 — ⚙️ 시스템 설정에서 단 키워드를 추가하세요.")
+                        st.caption("⚠️ 키워드 미설정 — ⚙️ 내 설정에서 단 키워드를 추가하세요.")
                 with _col_cnt:
                     st.metric(
                         label="수집/분析",
                         value=f"{len(_unit_news)}건",
                         delta=f"분析 {_analyzed_count}건",
                         delta_color="normal",
-                        help="최근 3일 기준"
+                        help="최근 30일 기준"
                     )
 
-                _render_unit_articles(_unit_news, _unit['display_name'])
-
-    # ── GAP 3: 인텔리전스 대시보드 ────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("### 📊 인텔리전스 대시보드")
-    if _INTEL_WIDGET_OK:
-        render_keyword_intelligence("home")
-    else:
-        st.warning(
-            "⚠️ intelligence_widgets.py 모듈을 불러오지 못했습니다. "
-            "운영 대시보드에서 확인하세요."
-        )
+                _render_unit_articles_by_date(
+                    _unit_news, _unit['display_name'], tab_key=f"u{_unit['id']}"
+                )
 
 
 # ===== AI 검색 (RAG) 페이지 =====
@@ -1054,6 +1086,61 @@ elif selected == "🔍 AI 검색":
         st.error(f"RAG 모듈 로드 실패: {e}")
     except Exception as e:
         st.error(f"오류 발생: {e}")
+
+
+# ===== 📊 인텔리전스 대시보드 페이지 =====
+elif selected == "📊 인텔리전스":
+    st.markdown('<h1 class="main-header">📊 인텔리전스 대시보드</h1>', unsafe_allow_html=True)
+    st.markdown("키워드 트렌드 · 영향도 히트맵 · 급등 알림을 종합 분석합니다.")
+    st.markdown("---")
+
+    if _INTEL_WIDGET_OK:
+        render_keyword_intelligence("intel_page")
+    else:
+        st.warning("⚠️ intelligence_widgets.py 모듈을 불러오지 못했습니다.")
+        st.info("프로젝트 폴더에 `intelligence_widgets.py` 파일이 있는지 확인하세요.")
+
+    st.markdown("---")
+    # ── 엑셀 리포트 다운로드 ──────────────────────────────────────────────────
+    st.markdown("### 📥 엑셀 리포트 다운로드")
+    st.caption(
+        "저장 위치: `data/reports/` — 뉴스 분析 (`news_analysis_YYYY_WNN.xlsx`)"
+        " / 키워드 통계 (`keyword_summary_YYYY_WNN.xlsx`)"
+    )
+    _rpt_dir = Path("data/reports")
+    if _rpt_dir.exists():
+        _xlsx_files = sorted(_rpt_dir.glob("*.xlsx"), reverse=True)
+        if _xlsx_files:
+            _dl_col1, _dl_col2 = st.columns(2)
+            _news_files = [f for f in _xlsx_files if f.name.startswith("news_analysis")]
+            _kw_files   = [f for f in _xlsx_files if f.name.startswith("keyword_summary")]
+
+            with _dl_col1:
+                st.markdown("**📊 뉴스 분析 엑셀**")
+                for _xf in _news_files[:5]:
+                    with open(_xf, "rb") as _fh:
+                        st.download_button(
+                            label=f"⬇️ {_xf.name}",
+                            data=_fh.read(),
+                            file_name=_xf.name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_news_{_xf.stem}",
+                        )
+            with _dl_col2:
+                st.markdown("**🔑 키워드 통계 엑셀**")
+                for _xf in _kw_files[:5]:
+                    with open(_xf, "rb") as _fh:
+                        st.download_button(
+                            label=f"⬇️ {_xf.name}",
+                            data=_fh.read(),
+                            file_name=_xf.name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_kw_{_xf.stem}",
+                        )
+        else:
+            st.info("아직 생성된 엑셀 파일이 없습니다. 전체 프로세스를 실행하면 자동 저장됩니다.")
+    else:
+        st.info("`data/reports/` 폴더가 없습니다. 전체 프로세스 실행 시 자동 생성됩니다.")
 
 
 # ===== 내 설정 페이지 =====
