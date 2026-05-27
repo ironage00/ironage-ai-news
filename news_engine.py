@@ -2931,29 +2931,54 @@ def get_all_units() -> list:
 
 
 def load_unit_settings(unit_id: int) -> dict:
-    """단별 수집 설정 로드 (해당 unit_id를 가진 user_settings 첫 번째 행).
-    단 담당자가 아직 설정을 저장하지 않은 경우 빈 설정을 반환(오류 아님).
-    Returns: {'keywords': [], 'google_alerts_rss': []}
+    """단별 수집 설정 로드. 가상 단 이메일 행을 우선 조회한다.
+    Returns: {'keywords': [], 'google_alerts_rss': [], 'email_recipients': []}
     """
+    _empty = {'keywords': [], 'google_alerts_rss': [], 'email_recipients': []}
     if unit_id is None:
-        return {'keywords': [], 'google_alerts_rss': []}
+        return _empty
     from sqlalchemy import text as sa_text
+    virtual_email = f"__unit_{unit_id}__@system"
     try:
         with get_db_session() as session:
             row = session.execute(
-                sa_text("SELECT keywords, google_alerts_rss "
-                        "FROM user_settings WHERE unit_id = :uid LIMIT 1"),
-                {"uid": unit_id}
+                sa_text("SELECT keywords, google_alerts_rss, email_recipients "
+                        "FROM user_settings WHERE unit_id = :uid "
+                        "ORDER BY CASE WHEN user_email = :ve THEN 0 ELSE 1 END LIMIT 1"),
+                {"uid": unit_id, "ve": virtual_email}
             ).fetchone()
         if row is None:
-            return {'keywords': [], 'google_alerts_rss': []}
+            return _empty
         return {
             'keywords':          json.loads(row[0] or '[]'),
             'google_alerts_rss': json.loads(row[1] or '[]'),
+            'email_recipients':  json.loads(row[2] or '[]'),
         }
     except Exception as e:
         log_warning(f"load_unit_settings 오류 (unit_id={unit_id}): {e}")
-        return {'keywords': [], 'google_alerts_rss': []}
+        return _empty
+
+
+def save_unit_settings(unit_id: int, settings: dict) -> bool:
+    """단 수준 설정 저장.
+    user_settings 테이블의 가상 이메일 __unit_{unit_id}__@system 행을 upsert.
+    load_unit_settings()가 해당 행을 우선 조회하게 된다.
+    """
+    virtual_email = f"__unit_{unit_id}__@system"
+    try:
+        save_user_settings(virtual_email, {
+            'keywords':          settings.get('keywords', []),
+            'google_alerts_rss': settings.get('google_alerts_rss', []),
+            'email_recipients':  settings.get('email_recipients', []),
+            'ai_model':          'gemini',
+            'schedule_daily':    True,
+            'schedule_weekly':   True,
+        })
+        assign_user_unit(virtual_email, unit_id)
+        return True
+    except Exception as e:
+        log_warning(f"save_unit_settings 오류 (unit_id={unit_id}): {e}")
+        return False
 
 
 def assign_user_unit(user_email: str, unit_id) -> bool:
