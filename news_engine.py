@@ -1795,33 +1795,42 @@ def filter_news_by_ai(
     # 단별 키워드 기반 이중 게이트 필터 (unit_keywords 지정 시)
     if unit_keywords:
         unit_kws_lower = [kw.lower() for kw in unit_keywords]
+        # ICT 핵심 마커 — '플랫폼','디지털','스마트','네트워크' 등 과도하게 포괄적인 단어 제거
         CORE_ICT_MARKERS = [
             '통신', '5g', '6g', 'lte', '이동통신', '주파수', '3gpp', 'itu', 'etsi', 'ict',
-            '정보통신', '표준화', '국제표준', '과기정통부', '전파', 'horizon europe', '호라이젠',
-            '인공지능', '반도체', '사이버보안', '클라우드', '메타버스', '양자',
-            '위성', '자율주행', '스마트', '디지털', '네트워크', '플랫폼',
+            '정보통신', '표준화', '국제표준', '과기정통부', '전파', 'horizon europe', '호라이즌',
+            '인공지능', '반도체', '사이버보안', '클라우드', '양자컴퓨팅', '양자통신',
+            '위성통신', '자율주행차', 'ai 표준', '데이터주권', 'o-ran', 'open ran',
         ]
+        # SPECIFIC_UNIT_KWS: 길이 3 이상, 너무 짧거나 범용적인 단어 제외
         SPECIFIC_UNIT_KWS = [
-            kw for kw in unit_kws_lower if len(kw) >= 4 and kw not in {'표준', 'ai', 'ict'}
+            kw for kw in unit_kws_lower if len(kw) >= 3 and kw not in {'표준', 'ai', 'ict'}
         ]
-        unit_ict_confirmed, unit_specific_only, ict_only = [], [], []
+        # ── 게이트 분류 ─────────────────────────────────────────────────────
+        # A등급: 단 키워드 + ICT 마커 동시 포함  (가장 확실한 관련 기사)
+        # B등급: 4글자 이상 단 특화 키워드 포함  (단 도메인 특화 기사)
+        # ict_only(단 키워드 없이 ICT 마커만) 는 제외 — 너무 광범위
+        unit_ict_confirmed, unit_specific_only = [], []
         for item in news_items:
             tl = item['title'].lower()
-            has_unit    = any(kw in tl for kw in unit_kws_lower)
-            has_spec    = any(kw in tl for kw in SPECIFIC_UNIT_KWS)
-            has_ict     = any(mk in tl for mk in CORE_ICT_MARKERS)
+            has_unit = any(kw in tl for kw in unit_kws_lower)
+            has_spec = any(kw in tl for kw in SPECIFIC_UNIT_KWS)
+            has_ict  = any(mk in tl for mk in CORE_ICT_MARKERS)
             if has_unit and has_ict:
                 unit_ict_confirmed.append(item)
-            elif has_spec:
+            elif has_spec and has_ict:
+                # 특화 키워드 + ICT 마커 동시 보유 시만 B등급 허용
                 unit_specific_only.append(item)
-            elif has_ict:
-                ict_only.append(item)
-        ict_news = unit_ict_confirmed + unit_specific_only + ict_only
+        ict_news = unit_ict_confirmed + unit_specific_only
         log_info(f"  • Stage 1 단별 이중 게이트 [{unit_display or '?'}]: {len(news_items)}개 → {len(ict_news)}개 "
-                 f"(단+ICT {len(unit_ict_confirmed)}, 단특화 {len(unit_specific_only)}, ICT전용 {len(ict_only)})")
+                 f"(A등급 {len(unit_ict_confirmed)}, B등급 {len(unit_specific_only)})")
         if not ict_news:
-            log_warning(f"  ⚠️ [{unit_display}] 단별 필터 결과 없음. 전체 뉴스로 대체.")
-            ict_news = news_items
+            log_warning(f"  ⚠️ [{unit_display}] 단별 필터 결과 없음 — ICT 마커만 있는 기사로 1차 완화.")
+            # fallback: ict_only (ICT 마커 있는 기사)로만 구성
+            ict_news = [
+                item for item in news_items
+                if any(mk in item['title'].lower() for mk in CORE_ICT_MARKERS)
+            ] or news_items
         ict_min = 5  # 단별 실행 시 최소 기준 완화
     else:
         ict_news = [
@@ -1868,11 +1877,20 @@ def filter_news_by_ai(
 
     # ✅ 수정: max_results를 프롬프트에 반영
     target_count = max_results
-    
-    # ✅ 수정: 중복 제거 강화 프롬프트
+
+    # 단별 도메인 설명 (AI 선별 프롬프트에 주입)
+    _unit_label = unit_display or 'TTA 표준화본부'
+    _unit_kw_hint = ''
+    if unit_keywords:
+        _unit_kw_hint = (
+            f"\n담당 부서: {_unit_label}"
+            f"\n핵심 관심 키워드: {', '.join(unit_keywords[:10])}"
+        )
+
+    # ✅ 수정: 중복 제거 강화 + 단별 도메인 인식 프롬프트
     prompt = f"""
-당신은 ICT 표준 정책 최고 전문가의 수석 보좌관입니다.
-당신의 임무는 아래 뉴스 목록에서 **중복을 철저히 제거**한 뒤, '표준 정책 입안자'의 관점에서 가장 중요한 뉴스 {target_count}개를 선별하는 것입니다.
+당신은 ICT 표준 정책 최고 전문가의 수석 보좌관입니다.{_unit_kw_hint}
+당신의 임무는 아래 뉴스 목록에서 **중복을 철저히 제거**한 뒤, '{_unit_label}' 관점에서 가장 중요한 뉴스 {target_count}개를 선별하는 것입니다.
 
 [작업 절차]
 1. **1차 중복 제거 (매우 엄격하게 적용):**
@@ -5239,10 +5257,8 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
             selected = news_items[:20]
 
         # ── 4. 심층 분석 (최대 20개) ────────────────────────────────
-        _pool = selected[20:] + [
-            it for it in news_items
-            if it['link'] not in {n['link'] for n in selected}
-        ]
+        # 대체 풀: AI가 선별한 21~50위 기사만 사용 (필터링 안 된 원본 풀 제외)
+        _pool = selected[20:]
         try:
             analyzed = analyze_news_with_replacement(
                 selected[:20], _pool, target_count=20, ai_model=ai_model
