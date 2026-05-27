@@ -772,8 +772,8 @@ def _render_unit_articles_by_date(articles: list, unit_display: str, tab_key: st
     """단별 기사를 일자별로 나눠 최대 20개 렌더링한다."""
     analyzed = [a for a in articles if a.get('is_analyzed')]
     if not analyzed:
-        st.info(f"**{unit_display}** 분析 기사가 없습니다.\n\n"
-                "관리자에게 뉴스 수집/분析 실행을 요청하세요.")
+        st.info(f"**{unit_display}** 분석 기사가 없습니다.\n\n"
+                "관리자에게 뉴스 수집/분석 실행을 요청하세요.")
         return
 
     # 일자별 그룹핑 (KST 날짜 기준)
@@ -797,7 +797,7 @@ def _render_unit_articles_by_date(articles: list, unit_display: str, tab_key: st
     _sel_date = _dates[_date_labels.index(_sel_label)]
     _day_arts = _by_date[_sel_date][:20]  # 최대 20개
 
-    st.caption(f"**{_sel_date}** 분析 기사 {len(_day_arts)}건 / 전체 {len(_by_date[_sel_date])}건")
+    st.caption(f"**{_sel_date}** 분석 기사 {len(_day_arts)}건 / 전체 {len(_by_date[_sel_date])}건")
     cards = [_render_article_card(a) for a in _day_arts]
     st.markdown('\n'.join(cards), unsafe_allow_html=True)
 
@@ -812,7 +812,7 @@ if selected == "🏠 홈":
     _hs = get_db_statistics()
     _hc1, _hc2, _hc3, _hc4 = st.columns(4)
     _hc1.metric("오늘 수집", _hs['today'])
-    _hc2.metric("분析 완료", _hs['analyzed'])
+    _hc2.metric("분석 완료", _hs['analyzed'])
     _hc3.metric("전체 기사", _hs['total'])
     _hc4.metric("대기 중", _hs['pending'])
 
@@ -824,13 +824,13 @@ if selected == "🏠 홈":
             _home_model = _home_cfg.get('ai_model', 'openai')
 
             st.markdown(f"""
-각 단의 키워드·RSS로 **단별 독립 수집→AI분析→이메일**을 순차 실행합니다.
+각 단의 키워드·RSS로 **단별 독립 수집→AI분석→이메일**을 순차 실행합니다.
 
 | 단계 | 내용 |
 |------|------|
 | 1 | 단별 키워드·RSS로 뉴스 수집 (키워드 혼합 없음) |
 | 2 | AI 선별 (중요도 상위 50개) |
-| 3 | 심층 분析 (최대 20건) |
+| 3 | 심층 분석 (최대 20건) |
 | 4 | Google Docs 리포트 생성 |
 | 5 | 단별 수신자 이메일 발송 |
 | 6 | 주간 엑셀 누적 저장 |
@@ -862,7 +862,7 @@ if selected == "🏠 홈":
                         else:
                             st.success(
                                 f"✅ [{_uname}] 수집 {_r['collected']}건 / "
-                                f"저장 {_r['saved']}건 / 분析 {_r['analyzed']}건"
+                                f"저장 {_r['saved']}건 / 분석 {_r['analyzed']}건"
                             )
                     st.balloons()
                 except Exception as _home_err:
@@ -923,12 +923,74 @@ if selected == "🏠 홈":
                         st.caption("⚠️ 키워드 미설정 — ⚙️ 내 설정에서 단 키워드를 추가하세요.")
                 with _col_cnt:
                     st.metric(
-                        label="수집/분析",
+                        label="수집/분석",
                         value=f"{len(_unit_news)}건",
-                        delta=f"분析 {_analyzed_count}건",
+                        delta=f"분석 {_analyzed_count}건",
                         delta_color="normal",
                         help="최근 30일 기준"
                     )
+
+                # ── 관리자 전용: 이 단만 수집·분석 실행 ──────────────────
+                if _is_admin:
+                    with st.expander(
+                        f"🚀 [{_unit['display_name']}] 수집·분석 실행 (관리자)",
+                        expanded=False
+                    ):
+                        _ucol1, _ucol2 = st.columns([2, 1])
+                        with _ucol1:
+                            _unit_model_opts = ["gemini-2.5-flash", "gpt-4o",
+                                                "claude-sonnet-4-6", "sonar-pro"]
+                            _unit_run_model = st.selectbox(
+                                "AI 모델", _unit_model_opts,
+                                key=f"unit_model_{_unit['id']}"
+                            )
+                        with _ucol2:
+                            st.markdown("<div style='margin-top:28px'></div>",
+                                        unsafe_allow_html=True)
+                            _run_unit_btn = st.button(
+                                "▶ 지금 실행",
+                                key=f"run_unit_{_unit['id']}",
+                                type="primary",
+                                use_container_width=True
+                            )
+
+                        if _run_unit_btn:
+                            if not _unit_kws and not _unit_cfg.get('rss_urls'):
+                                st.warning(
+                                    "⚠️ 이 단의 키워드·RSS가 설정되지 않아 실행할 수 없습니다. "
+                                    "⚙️ 내 설정에서 먼저 키워드를 추가하세요."
+                                )
+                            else:
+                                _unit_status = st.empty()
+                                _unit_status.info(
+                                    f"⏳ [{_unit['display_name']}] 수집·분석 중…"
+                                )
+                                try:
+                                    # run_all_units_daily를 이 단 ID만 target으로 실행
+                                    _u_summary = run_all_units_daily(
+                                        ai_model=_unit_run_model,
+                                        target_unit_id=_unit['id']
+                                    )
+                                    _unit_status.empty()
+                                    _ur = _u_summary.get(
+                                        _unit['display_name'],
+                                        _u_summary.get(list(_u_summary.keys())[0], {})
+                                        if _u_summary else {}
+                                    )
+                                    if _ur.get('errors') and not _ur.get('analyzed'):
+                                        st.error(
+                                            f"❌ 오류: {_ur['errors'][0]}"
+                                        )
+                                    else:
+                                        st.success(
+                                            f"✅ 완료! 수집 {_ur.get('collected', 0)}건 / "
+                                            f"저장 {_ur.get('saved', 0)}건 / "
+                                            f"분석 {_ur.get('analyzed', 0)}건"
+                                        )
+                                        st.rerun()
+                                except Exception as _ue:
+                                    _unit_status.empty()
+                                    st.error(f"❌ 오류: {str(_ue)}")
 
                 _render_unit_articles_by_date(
                     _unit_news, _unit['display_name'], tab_key=f"u{_unit['id']}"
@@ -1125,7 +1187,7 @@ elif selected == "📊 인텔리전스":
     # ── 엑셀 리포트 다운로드 ──────────────────────────────────────────────────
     st.markdown("### 📥 엑셀 리포트 다운로드")
     st.caption(
-        "저장 위치: `data/reports/` — 뉴스 분析 (`news_analysis_YYYY_WNN.xlsx`)"
+        "저장 위치: `data/reports/` — 뉴스 분석 (`news_analysis_YYYY_WNN.xlsx`)"
         " / 키워드 통계 (`keyword_summary_YYYY_WNN.xlsx`)"
     )
     _rpt_dir = Path("data/reports")
@@ -1137,7 +1199,7 @@ elif selected == "📊 인텔리전스":
             _kw_files   = [f for f in _xlsx_files if f.name.startswith("keyword_summary")]
 
             with _dl_col1:
-                st.markdown("**📊 뉴스 분析 엑셀**")
+                st.markdown("**📊 뉴스 분석 엑셀**")
                 for _xf in _news_files[:5]:
                     with open(_xf, "rb") as _fh:
                         st.download_button(
@@ -1201,14 +1263,14 @@ elif selected == "⚙️ 내 설정":
             _sc1, _sc2 = st.columns(2)
             with _sc1:
                 st.subheader("🔑 모니터링 키워드")
-                st.caption("네이버 뉴스 검색 키워드 (줄바꿼으로 구분)")
+                st.caption("네이버 뉴스 검색 키워드 (줄바꿈으로 구분)")
                 _kw_in = st.text_area(
                     "키워드", label_visibility="collapsed", height=200,
                     value="\n".join(u_cfg.get("keywords") or []),
                     key=f"s_kw_{uid}"
                 )
                 st.subheader("📡 Google Alerts RSS")
-                st.caption("RSS URL (줄바꿼으로 구분)")
+                st.caption("RSS URL (줄바꿈으로 구분)")
                 _rss_in = st.text_area(
                     "RSS", label_visibility="collapsed", height=130,
                     value="\n".join(u_cfg.get("google_alerts_rss") or []),
@@ -1216,21 +1278,55 @@ elif selected == "⚙️ 내 설정":
                     placeholder="https://www.google.co.kr/alerts/feeds/..."
                 )
             with _sc2:
-                st.subheader("📧 리포트 수신 이메일")
-                st.caption("수신자 목록 (줄바꿼으로 구분)")
+                st.subheader("📧 이메일 발송 설정")
+
+                # ── 실제 발송 제목 미리보기 (읽기 전용) ──────────────
+                from news_engine import _UNIT_EMAIL_SUBJECT_MAP
+                import datetime, pytz as _pytz
+                _kst_tz     = _pytz.timezone('Asia/Seoul')
+                _today_str  = datetime.datetime.now(_kst_tz).strftime('%Y년 %m월 %d일')
+                _subj_body  = _UNIT_EMAIL_SUBJECT_MAP.get(
+                    unit.get('name', ''),
+                    f"{unit['display_name']} 동향 보고서"
+                )
+                _preview_subject = f"[TTA] {_subj_body} ({_today_str})"
+                st.markdown(
+                    "**✉️ 실제 발송되는 이메일 제목**",
+                )
+                st.code(_preview_subject, language=None)
+
+                # ── 발신자 표시명 ─────────────────────────────────────
+                st.caption("📤 발신자 표시명")
+                _sender_in = st.text_input(
+                    "발신자명", label_visibility="collapsed",
+                    value=u_cfg.get("sender_name") or "",
+                    key=f"s_sname_{uid}",
+                    placeholder=f"{unit['display_name']} AI뉴스봇"
+                )
+                st.caption(
+                    "수신자에게 보이는 보내는 사람 이름입니다. "
+                    f"비워두면 '{unit['display_name']} AI'로 자동 설정됩니다."
+                )
+
+                # ── 수신자 목록 ───────────────────────────────────────
+                st.caption("📥 수신자 이메일 목록 (줄바꿈으로 구분)")
                 _email_in = st.text_area(
-                    "이메일", label_visibility="collapsed", height=360,
+                    "이메일", label_visibility="collapsed", height=210,
                     value="\n".join(u_cfg.get("email_recipients") or []),
                     key=f"s_em_{uid}",
-                    placeholder="name@example.com"
+                    placeholder="name@tta.or.kr"
                 )
+                _subj_in = ""  # email_subject_prefix 미사용 (고정 형식으로 자동 생성)
+
             st.markdown('---')
             if st.button("💾 설정 저장", type="primary", key=f"s_save_{uid}"):
                 from news_engine import save_unit_settings as _sus
                 _ok = _sus(uid, {
-                    "keywords":          [k.strip() for k in _kw_in.split("\n") if k.strip()],
-                    "google_alerts_rss": [u.strip() for u in _rss_in.split("\n") if u.strip()],
-                    "email_recipients":  [e.strip() for e in _email_in.split("\n") if e.strip()],
+                    "keywords":              [k.strip() for k in _kw_in.split("\n") if k.strip()],
+                    "google_alerts_rss":     [u.strip() for u in _rss_in.split("\n") if u.strip()],
+                    "email_recipients":      [e.strip() for e in _email_in.split("\n") if e.strip()],
+                    "sender_name":           _sender_in.strip(),
+                    "email_subject_prefix":  _subj_in.strip(),
                 })
                 if _ok:
                     st.success(f"✅ {unit['display_name']} 설정 저장 완료.")

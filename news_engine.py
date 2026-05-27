@@ -5140,7 +5140,7 @@ _UNIT_EMAIL_SUBJECT_MAP = {
 
 
 def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dict:
-    """4개 단 각각의 키워드·RSS로 수집→AI분析→이메일을 순차 실행.
+    """4개 단 각각의 키워드·RSS로 수집→AI분석→이메일을 순차 실행.
 
     CLI: python news_engine.py daily
     단별 독립 수집 후 각 단의 수신자 이메일로 리포트 발송.
@@ -5153,12 +5153,12 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
 
     if target_unit_id is not None:
         log_info("=" * 60)
-        log_info(f"🚀 [단별 실행] unit_id={target_unit_id} 수집·분析 파이프라인 시작")
+        log_info(f"🚀 [단별 실행] unit_id={target_unit_id} 수집·분석 파이프라인 시작")
         log_info(f"🤖 AI 모델: {ai_model.upper()}")
         log_info("=" * 60)
     else:
         log_info("=" * 60)
-        log_info("🚀 [전체 단] 일일 수집·분析 파이프라인 시작")
+        log_info("🚀 [전체 단] 일일 수집·분석 파이프라인 시작")
         log_info(f"🤖 AI 모델: {ai_model.upper()}")
         log_info("=" * 60)
 
@@ -5238,7 +5238,7 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
             log_error(f"❌ [{unit_display}] AI 선별 실패: {e}")
             selected = news_items[:20]
 
-        # ── 4. 심층 분析 (최대 20개) ────────────────────────────────
+        # ── 4. 심층 분석 (최대 20개) ────────────────────────────────
         _pool = selected[20:] + [
             it for it in news_items
             if it['link'] not in {n['link'] for n in selected}
@@ -5248,17 +5248,17 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
                 selected[:20], _pool, target_count=20, ai_model=ai_model
             )
             unit_result['analyzed'] = len(analyzed)
-            log_info(f"   📝 분析 완료 {len(analyzed)}개")
+            log_info(f"   📝 분석 완료 {len(analyzed)}개")
         except Exception as e:
             unit_result['errors'].append(f"분석 실패: {e}")
-            log_error(f"❌ [{unit_display}] 분析 실패: {e}")
+            log_error(f"❌ [{unit_display}] 분석 실패: {e}")
             analyzed = []
 
         if not analyzed:
-            log_warning(f"⚠️ [{unit_display}] 분析 결과 없음 — 리포트 생략")
+            log_warning(f"⚠️ [{unit_display}] 분석 결과 없음 — 리포트 생략")
             continue
 
-        # ── 5. 분析 결과 DB 업데이트 ────────────────────────────────
+        # ── 5. 분석 결과 DB 업데이트 ────────────────────────────────
         for res in analyzed:
             try:
                 with get_db_session() as _s:
@@ -5274,7 +5274,7 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
                             art.unit_id = unit_id
                         _s.commit()
             except Exception as _e:
-                log_warning(f"⚠️ 분析 결과 저장 실패: {res.get('title','')[:40]} — {_e}")
+                log_warning(f"⚠️ 분석 결과 저장 실패: {res.get('title','')[:40]} — {_e}")
 
         # ── 5-b. 메일 제목 생성 (단별 고정 형식) ───────────
         import pytz as _pytz
@@ -5331,7 +5331,7 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
     log_info("=" * 60)
     for name, r in summary.items():
         err_str = f" | 오류: {r['errors']}" if r['errors'] else ""
-        log_info(f"  {name}: 수집 {r['collected']} / 저장 {r['saved']} / 분析 {r['analyzed']}{err_str}")
+        log_info(f"  {name}: 수집 {r['collected']} / 저장 {r['saved']} / 분석 {r['analyzed']}{err_str}")
 
     return summary
 
@@ -5752,7 +5752,7 @@ if __name__ == "__main__":
 
     if command == "daily":
         if _args.unit:
-            # 단별 수집 전용 (분析 없음 — 테스트/디버그 목적)
+            # 단별 수집 전용 (분석 없음 — 테스트/디버그 목적)
             from sqlalchemy import text as _sa_text
             with get_db_session() as _sess:
                 _unit_row = _sess.execute(
@@ -5766,7 +5766,7 @@ if __name__ == "__main__":
             _result = run_unit_collection(_unit_row[0], ai_model=_args.model)
             log_info(f"수집 결과: {_result}")
         else:
-            # 기본: 4개 단 통합 파이프라인 (수집→분析→이메일)
+            # 기본: 4개 단 통합 파이프라인 (수집→분석→이메일)
             run_all_units_daily(ai_model=_args.model)
     elif command == "weekly":
         run_weekly_report()
