@@ -362,48 +362,112 @@ st.markdown("""
         line-height: 1.7;
     }
 
-    /* 사이드바 스타일링 */
+    /* ═══════════════════════════════════════════════════
+       사이드바 — 전체 재설계
+       ═══════════════════════════════════════════════════ */
     section[data-testid="stSidebar"] {
-        background-color: #0f172a;
-        color: white;
+        background: linear-gradient(180deg, #1e2d4f 0%, #162040 100%) !important;
+        border-right: 1px solid rgba(255,255,255,0.08) !important;
     }
 
-    section[data-testid="stSidebar"] .stMarkdown h1,
-    section[data-testid="stSidebar"] .stMarkdown h3,
-    section[data-testid="stSidebar"] .stMarkdown p,
-    section[data-testid="stSidebar"] .stMarkdown strong {
-        color: white !important;
+    /* 사이드바 내 모든 텍스트 기본색 */
+    section[data-testid="stSidebar"],
+    section[data-testid="stSidebar"] * {
+        color: #e2e8f0 !important;
     }
 
-    /* 사이드바 라디오 버튼 — 메뉴 스타일 */
+    /* 헤딩 */
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+        letter-spacing: -0.02em !important;
+    }
+
+    /* 캡션·소문자 */
+    section[data-testid="stSidebar"] .stCaption,
+    section[data-testid="stSidebar"] small,
+    section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+        color: #94a3b8 !important;
+        font-size: 0.82rem !important;
+    }
+
+    /* 구분선 */
+    section[data-testid="stSidebar"] hr {
+        border-color: rgba(255,255,255,0.12) !important;
+        margin: 0.6rem 0 !important;
+    }
+
+    /* 로그아웃·일반 버튼 */
+    section[data-testid="stSidebar"] .stButton > button {
+        background: rgba(255,255,255,0.08) !important;
+        color: #e2e8f0 !important;
+        border: 1px solid rgba(255,255,255,0.15) !important;
+        border-radius: 8px !important;
+        font-size: 0.88rem !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,0.16) !important;
+        color: #ffffff !important;
+    }
+
+    /* 셀렉트박스 — 테스트 유저 전환 */
+    section[data-testid="stSidebar"] .stSelectbox > div > div {
+        background: rgba(255,255,255,0.08) !important;
+        border: 1px solid rgba(255,255,255,0.18) !important;
+        border-radius: 8px !important;
+        color: #e2e8f0 !important;
+    }
+    section[data-testid="stSidebar"] .stSelectbox svg {
+        fill: #94a3b8 !important;
+    }
+
+    /* ── 메뉴 라디오 버튼 ── */
     section[data-testid="stSidebar"] .stRadio > div {
         gap: 2px !important;
     }
-    section[data-testid="stSidebar"] .stRadio label {
+    section[data-testid="stSidebar"] .stRadio > div > label {
         display: flex !important;
         align-items: center !important;
-        padding: 8px 14px !important;
+        padding: 9px 14px !important;
         border-radius: 8px !important;
         color: #cbd5e1 !important;
         font-size: 0.95rem !important;
         font-weight: 500 !important;
         cursor: pointer !important;
-        transition: background 0.15s, color 0.15s !important;
+        transition: background 0.15s, color 0.15s, border-left 0.15s !important;
         width: 100% !important;
+        border-left: 3px solid transparent !important;
+        margin-bottom: 2px !important;
     }
-    section[data-testid="stSidebar"] .stRadio label:hover {
-        background-color: rgba(255,255,255,0.08) !important;
-        color: white !important;
+    section[data-testid="stSidebar"] .stRadio > div > label:hover {
+        background: rgba(255,255,255,0.09) !important;
+        color: #ffffff !important;
+        border-left-color: rgba(0,90,171,0.6) !important;
     }
-    section[data-testid="stSidebar"] .stRadio label[data-checked="true"],
-    section[data-testid="stSidebar"] .stRadio input:checked + div {
-        background-color: rgba(0,90,171,0.55) !important;
-        color: white !important;
+    /* 선택된 메뉴 항목 — 파란 좌측 바 + 배경 강조 */
+    section[data-testid="stSidebar"] .stRadio > div > label[data-checked="true"],
+    section[data-testid="stSidebar"] .stRadio input[type="radio"]:checked ~ div label {
+        background: rgba(0, 90, 171, 0.30) !important;
+        color: #ffffff !important;
         font-weight: 700 !important;
+        border-left: 3px solid #4da6ff !important;
     }
-    /* 라디오 동그라미 숨기기 — 메뉴처럼 보이도록 */
+    /* 라디오 원형 버튼 숨김 */
     section[data-testid="stSidebar"] .stRadio input[type="radio"] {
         display: none !important;
+    }
+    /* 라디오 div wrapper — 배경 없애기 */
+    section[data-testid="stSidebar"] .stRadio > div > label > div:first-child {
+        display: none !important;
+    }
+
+    /* 메뉴 섹션 레이블 ("메뉴" 텍스트) */
+    section[data-testid="stSidebar"] .stMarkdown strong {
+        color: #94a3b8 !important;
+        font-size: 0.75rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.08em !important;
     }
 
     /* 버튼 스타일 조정 */

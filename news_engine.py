@@ -1524,7 +1524,7 @@ def get_news_data(rss_urls=None, naver_queries=None):
         log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
     else:
         _active_queries = get_all_active_keywords()
-        log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (전역 {len(NAVER_QUERIES)}개 + 사용자 키워드)")
+        log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (단별 DB 설정)")
 
     for i, query in enumerate(_active_queries, 1):
         if not query.strip():
@@ -3630,9 +3630,11 @@ def generate_google_doc_report(analyzed_data):
 # ==============================================================================
 
 def get_all_active_keywords() -> list:
-    """전역 NAVER_QUERIES + user_settings에 등록된 모든 사용자 키워드의 합집합 반환."""
+    """DB 단별 user_settings에 등록된 키워드 합집합 반환.
+    config.json NAVER_QUERIES는 사용하지 않음 — 단별 설정 우선.
+    """
     from sqlalchemy import text as sa_text
-    keywords = set(NAVER_QUERIES)
+    keywords = set()   # ← NAVER_QUERIES 제거
     try:
         with get_db_session() as session:
             rows = session.execute(
@@ -3649,6 +3651,10 @@ def get_all_active_keywords() -> list:
                 pass
     except Exception as e:
         log_warning(f"get_all_active_keywords 오류: {e}")
+    # 단별 키워드가 하나도 없으면 config.json 를 최후 fallback으로 사용
+    if not keywords:
+        log_warning("⚠️ 단별 키워드 없음 — config.json NAVER_QUERIES fallback 사용")
+        keywords = set(NAVER_QUERIES)
     return sorted(keywords)
 
 
