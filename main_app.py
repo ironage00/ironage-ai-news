@@ -80,6 +80,7 @@ try:
         load_unit_settings,
         assign_user_unit,
         run_unit_collection,
+        run_all_units_daily,
         IMPACT_LEVEL_ORDER,
         IMPACT_LEVEL_COLOR_RGB,
 

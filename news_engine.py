@@ -5113,6 +5113,175 @@ def run_unit_collection(unit_id: int, ai_model: str = None) -> dict:
     return result
 
 
+# ==============================================================================
+# --- 4개 단 통합 일일 파이프라인 ---
+# ==============================================================================
+
+def run_all_units_daily(ai_model: str = None) -> dict:
+    """4개 단 각각의 키워드·RSS로 수집→AI분析→이메일을 순차 실행.
+
+    CLI: python news_engine.py daily
+    단별 독립 수집 후 각 단의 수신자 이메일로 리포트 발송.
+
+    Returns:
+        {unit_display_name: {'collected':int,'analyzed':int,'errors':[str]}, ...}
+    """
+    if ai_model is None:
+        ai_model = CONFIG.get('ai_model', 'openai')
+
+    log_info("=" * 60)
+    log_info("🚀 [전체 단] 일일 수집·분析 파이프라인 시작")
+    log_info(f"🤖 AI 모델: {ai_model.upper()}")
+    log_info("=" * 60)
+
+    all_units = get_all_units()
+    summary = {}
+
+    for unit in all_units:
+        unit_id      = unit['id']
+        unit_display = unit['display_name']
+        unit_name    = unit['name']
+        unit_cfg     = load_unit_settings(unit_id)
+        rss_urls     = unit_cfg.get('google_alerts_rss', [])
+        keywords     = unit_cfg.get('keywords', [])
+        email_rcpts  = unit_cfg.get('email_recipients', [])
+
+        unit_result = {'collected': 0, 'saved': 0, 'analyzed': 0, 'errors': []}
+        summary[unit_display] = unit_result
+
+        log_info("")
+        log_info(f"{'='*50}")
+        log_info(f"🏢 [{unit_display}] 처리 시작")
+        log_info(f"{'='*50}")
+
+        # ── 키워드/RSS 없으면 스킵 ──────────────────────────────────
+        if not rss_urls and not keywords:
+            msg = "키워드/RSS 미설정 — 건너뜀"
+            log_warning(f"⚠️ [{unit_display}] {msg}")
+            unit_result['errors'].append(msg)
+            continue
+
+        log_info(f"   🔑 키워드 {len(keywords)}개 / 📡 RSS {len(rss_urls)}개")
+
+        # ── 1. 수집 ─────────────────────────────────────────────────
+        try:
+            news_items = get_news_data(
+                rss_urls=rss_urls or None,
+                naver_queries=keywords or None,
+            )
+            unit_result['collected'] = len(news_items)
+            log_info(f"   ✅ 수집 {len(news_items)}개")
+        except Exception as e:
+            unit_result['errors'].append(f"수집 실패: {e}")
+            log_error(f"❌ [{unit_display}] 수집 실패: {e}")
+            continue
+
+        if not news_items:
+            unit_result['errors'].append("수집 결과 없음")
+            log_warning(f"⚠️ [{unit_display}] 수집된 뉴스 없음")
+            continue
+
+        # ── 2. DB 저장 (unit_id 태깅) ───────────────────────────────
+        try:
+            saved = save_news_to_db(news_items, unit_id=unit_id)
+            unit_result['saved'] = saved
+            log_info(f"   💾 DB 저장 {saved}개 (unit_id={unit_id})")
+        except Exception as e:
+            unit_result['errors'].append(f"DB 저장 실패: {e}")
+            log_error(f"❌ [{unit_display}] DB 저장 실패: {e}")
+            continue
+
+        # ── 3. AI 선별 ──────────────────────────────────────────────
+        try:
+            selected = filter_news_by_ai(news_items, ai_model=ai_model, max_results=50)
+            log_info(f"   🤖 AI 선별 {len(selected)}개")
+        except Exception as e:
+            unit_result['errors'].append(f"AI 선별 실패: {e}")
+            log_error(f"❌ [{unit_display}] AI 선별 실패: {e}")
+            selected = news_items[:20]
+
+        # ── 4. 심층 분析 (최대 20개) ────────────────────────────────
+        _pool = selected[20:] + [
+            it for it in news_items
+            if it['link'] not in {n['link'] for n in selected}
+        ]
+        try:
+            analyzed = analyze_news_with_replacement(
+                selected[:20], _pool, target_count=20, ai_model=ai_model
+            )
+            unit_result['analyzed'] = len(analyzed)
+            log_info(f"   📝 분析 완료 {len(analyzed)}개")
+        except Exception as e:
+            unit_result['errors'].append(f"분석 실패: {e}")
+            log_error(f"❌ [{unit_display}] 분析 실패: {e}")
+            analyzed = []
+
+        if not analyzed:
+            log_warning(f"⚠️ [{unit_display}] 분析 결과 없음 — 리포트 생략")
+            continue
+
+        # ── 5. 분析 결과 DB 업데이트 ────────────────────────────────
+        for res in analyzed:
+            try:
+                with get_db_session() as _s:
+                    art = _s.query(NewsArticle).filter_by(link=res['link']).first()
+                    if art:
+                        art.is_analyzed    = True
+                        art.analysis_result = res.get('analysis_result', '')
+                        art.ai_model       = res.get('ai_model', ai_model)
+                        if res.get('extracted_keywords'):
+                            art.extracted_keywords = res['extracted_keywords']
+                        # unit_id가 NULL이면 이 단으로 태깅
+                        if art.unit_id is None:
+                            art.unit_id = unit_id
+                        _s.commit()
+            except Exception as _e:
+                log_warning(f"⚠️ 분析 결과 저장 실패: {res.get('title','')[:40]} — {_e}")
+
+        # ── 6. 리포트 생성 ──────────────────────────────────────────
+        doc_url, report_title = safe_execute(
+            lambda: generate_google_doc_report(analyzed),
+            error_msg=f"[{unit_display}] 구글 문서 생성 실패",
+            default_return=(None, None)
+        )
+        report_title = (
+            report_title
+            or f"[{unit_display}] AI 뉴스 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
+        )
+        if doc_url:
+            log_info(f"   📄 Google Doc 생성 완료")
+        else:
+            log_warning(f"   ⚠️ [{unit_display}] Google Doc 생성 실패")
+
+        # ── 7. 이메일 발송 ──────────────────────────────────────────
+        other_news = [it for it in selected if it['link'] not in {r['link'] for r in analyzed}]
+        receivers  = email_rcpts if email_rcpts else None   # None → 전역 RECEIVER_EMAIL
+        safe_execute(
+            lambda: send_gmail_report(report_title, analyzed, doc_url, other_news, receivers=receivers),
+            error_msg=f"[{unit_display}] 이메일 발송 실패",
+            default_return=None
+        )
+        log_info(f"   📧 이메일 발송 완료 → {receivers or '전역 수신자'}")
+
+        # ── 8. 주간 엑셀 누적 저장 ──────────────────────────────────
+        safe_execute(
+            lambda: save_analysis_to_weekly_excel(analyzed),
+            error_msg=f"[{unit_display}] 엑셀 저장 실패",
+            default_return=None
+        )
+
+    # ── 요약 ────────────────────────────────────────────────────────
+    log_info("")
+    log_info("=" * 60)
+    log_info("📊 [전체 단] 일일 파이프라인 완료 요약")
+    log_info("=" * 60)
+    for name, r in summary.items():
+        err_str = f" | 오류: {r['errors']}" if r['errors'] else ""
+        log_info(f"  {name}: 수집 {r['collected']} / 저장 {r['saved']} / 분析 {r['analyzed']}{err_str}")
+
+    return summary
+
+
 # --- 메인 실행 함수 ---
 # ==============================================================================
 
@@ -5529,7 +5698,7 @@ if __name__ == "__main__":
 
     if command == "daily":
         if _args.unit:
-            # 단별 수집 모드
+            # 단별 수집 전용 (분析 없음 — 테스트/디버그 목적)
             from sqlalchemy import text as _sa_text
             with get_db_session() as _sess:
                 _unit_row = _sess.execute(
@@ -5543,7 +5712,8 @@ if __name__ == "__main__":
             _result = run_unit_collection(_unit_row[0], ai_model=_args.model)
             log_info(f"수집 결과: {_result}")
         else:
-            run_daily_collection(ai_model=_args.model)
+            # 기본: 4개 단 통합 파이프라인 (수집→분析→이메일)
+            run_all_units_daily(ai_model=_args.model)
     elif command == "weekly":
         run_weekly_report()
     elif command == "monthly":
