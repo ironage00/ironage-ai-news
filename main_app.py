@@ -121,11 +121,20 @@ st.set_page_config(
 
 # ===== Google OAuth 인증 =====
 # st.user (Streamlit 1.37.0+) — st.experimental_user는 1.50.0에서 제거됨.
-# Google OAuth client_id/secret이 secrets에 없으면 _auth_enabled=False (로컬 모드).
+# [auth.google] / [auth.microsoft] 등 provider 섹션이 있어야 st.login() 호출 가능.
+# provider 미설정 시 _auth_enabled=False → 로컬/테스트 모드로 폴백.
 _auth_enabled = False
 try:
-    if hasattr(st, 'user'):
-        _auth_enabled = hasattr(st.user, 'is_logged_in')
+    if hasattr(st, 'user') and hasattr(st.user, 'is_logged_in'):
+        # OAuth provider 실설정 여부 확인 — [auth.google] 등이 없으면 st.login() 실패
+        try:
+            _auth_cfg = dict(st.secrets.get("auth", {}))
+            _has_provider = any(
+                k in _auth_cfg for k in ("google", "microsoft", "okta", "auth0")
+            )
+            _auth_enabled = _has_provider
+        except Exception:
+            _auth_enabled = False
 except Exception:
     _auth_enabled = False
 
