@@ -25,15 +25,20 @@ def _clean_title(text: str) -> str:
     text = re.sub(r'\s*\|\s*\S+\s*$', '', text)   # 끝 "| 출처명" 패턴 제거
     return text.strip()
 
+from sqlalchemy import text as _sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from news_engine import (
     log_info, log_warning, log_error,
     get_db_session, NewsArticle, ArticleEmbedding,
+    DB_ENGINE,
     performance_monitor,
     get_openai_client,
     OPENAI_MODEL_DEFAULT,
 )
+
+# PostgreSQL(Supabase) 여부 — pgvector INSERT/SEARCH 분기에 사용
+_IS_PG = not DB_ENGINE.url.drivername.startswith('sqlite')
 
 EMBEDDING_MODEL = 'text-embedding-3-small'
 EMBED_BATCH_SIZE = 50     # 한 번에 임베딩할 기사 수
@@ -160,16 +165,28 @@ def embed_unprocessed_articles(limit: int = EMBED_BATCH_SIZE) -> int:
             rows = [
                 {
                     "article_id": article.id,
-                    "embedding_json": json.dumps(emb),
+                    # PostgreSQL: str(list) → '[0.1,0.2,...]' (pgvector literal 호환)
+                    # SQLite: json.dumps(list) → '[0.1, 0.2, ...]' (JSON text)
+                    "embedding": str(emb) if _IS_PG else json.dumps(emb),
                     "model_name": EMBEDDING_MODEL,
                     "embedded_at": now,
                 }
                 for article, emb in zip(articles, embeddings)
             ]
             if rows:
-                stmt = pg_insert(ArticleEmbedding).values(rows)
-                stmt = stmt.on_conflict_do_nothing()
-                session.execute(stmt)
+                if _IS_PG:
+                    # PostgreSQL + pgvector: vector(1536) 타입으로 직접 INSERT
+                    session.execute(_sa_text(
+                        'INSERT INTO article_embeddings '
+                        '(article_id, embedding, model_name, embedded_at) '
+                        'VALUES (:article_id, CAST(:embedding AS vector), :model_name, :embedded_at) '
+                        'ON CONFLICT (article_id) DO NOTHING'
+                    ), rows)
+                else:
+                    # SQLite 폴백: JSON 텍스트 그대로 저장
+                    stmt = pg_insert(ArticleEmbedding).values(rows)
+                    stmt = stmt.on_conflict_do_nothing()
+                    session.execute(stmt)
 
         count = len(articles)
         n_analyzed = len(analyzed)
@@ -217,49 +234,99 @@ def search_similar_articles(
         # 쿼리 임베딩
         query_emb = _embed_texts([query])[0]
 
-        with get_db_session() as session:
-            # 임베딩 + 기사 조인
-            q = (
-                session.query(ArticleEmbedding, NewsArticle)
-                .join(NewsArticle, NewsArticle.id == ArticleEmbedding.article_id)
-            )
+        if _IS_PG:
+            # ── PostgreSQL + pgvector: <=> 코사인 거리 연산자 (HNSW 인덱스 활용) ──
+            query_str = str(query_emb)   # '[0.1, 0.2, ...]' 형식
+
+            # 필터 조건 동적 구성
+            where_clauses = ['1=1']
+            params: dict = {
+                'q':       query_str,
+                'fetch_k': top_k * 10,   # 후보 여유있게 확보 후 min_similarity 필터링
+            }
             if days:
                 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
-                q = q.filter(NewsArticle.collected_at >= cutoff)
+                where_clauses.append('na.collected_at >= :cutoff')
+                params['cutoff'] = cutoff
             if unit_id is not None:
-                q = q.filter(NewsArticle.unit_id == unit_id)
+                where_clauses.append('na.unit_id = :unit_id')
+                params['unit_id'] = unit_id
 
-            rows = q.all()
+            where_sql = ' AND '.join(where_clauses)
+            sql = _sa_text(f"""
+                SELECT na.id, na.title, na.link, na.source, na.published,
+                       na.analysis_result,
+                       1 - (ae.embedding <=> CAST(:q AS vector)) AS similarity
+                FROM   article_embeddings ae
+                JOIN   news_articles na ON ae.article_id = na.id
+                WHERE  {where_sql}
+                ORDER  BY ae.embedding <=> CAST(:q AS vector)
+                LIMIT  :fetch_k
+            """)
 
-        if not rows:
-            log_warning("  ⚠️ 임베딩된 기사가 없습니다. embed_unprocessed_articles()를 먼저 실행하세요.")
-            return []
+            with DB_ENGINE.connect() as conn:
+                db_rows = conn.execute(sql, params).fetchall()
 
-        # 코사인 유사도 계산
-        scored = []
-        for emb_row, article in rows:
-            vec = json.loads(emb_row.embedding_json)
-            sim = _cosine_similarity(query_emb, vec)
-            if sim >= min_similarity:
-                scored.append((sim, article))
+            if not db_rows:
+                log_warning("  ⚠️ 검색 결과 없음.")
+                return []
 
-        # 유사도 내림차순 정렬
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top = scored[:top_k]
+            results = []
+            for r in db_rows:
+                sim = float(r.similarity)
+                if sim < min_similarity:
+                    continue
+                results.append({
+                    'id':              r.id,
+                    'title':           _clean_title(r.title or ''),
+                    'link':            r.link or '',
+                    'source':          r.source or '',
+                    'published':       r.published.strftime('%Y-%m-%d') if r.published else '',
+                    'analysis_result': r.analysis_result or '',
+                    'similarity':      round(sim, 4),
+                })
+                if len(results) >= top_k:
+                    break
 
-        results = []
-        for sim, a in top:
-            results.append({
-                'id': a.id,
-                'title': _clean_title(a.title or ''),
-                'link': a.link or '',
-                'source': a.source or '',
-                'published': a.published.strftime('%Y-%m-%d') if a.published else '',
-                'analysis_result': a.analysis_result or '',
-                'similarity': round(sim, 4),
-            })
+        else:
+            # ── SQLite 폴백: Python 코사인 유사도 계산 (기존 방식) ──
+            with get_db_session() as session:
+                q = (
+                    session.query(ArticleEmbedding, NewsArticle)
+                    .join(NewsArticle, NewsArticle.id == ArticleEmbedding.article_id)
+                )
+                if days:
+                    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+                    q = q.filter(NewsArticle.collected_at >= cutoff)
+                if unit_id is not None:
+                    q = q.filter(NewsArticle.unit_id == unit_id)
+                rows = q.all()
 
-        log_info(f"  ✅ {len(results)}개 결과 반환 (전체 {len(rows)}개 중)")
+            if not rows:
+                log_warning("  ⚠️ 임베딩된 기사가 없습니다.")
+                return []
+
+            scored = []
+            for emb_row, article in rows:
+                vec = json.loads(emb_row.embedding)
+                sim = _cosine_similarity(query_emb, vec)
+                if sim >= min_similarity:
+                    scored.append((sim, article))
+            scored.sort(key=lambda x: x[0], reverse=True)
+
+            results = []
+            for sim, a in scored[:top_k]:
+                results.append({
+                    'id':              a.id,
+                    'title':           _clean_title(a.title or ''),
+                    'link':            a.link or '',
+                    'source':          a.source or '',
+                    'published':       a.published.strftime('%Y-%m-%d') if a.published else '',
+                    'analysis_result': a.analysis_result or '',
+                    'similarity':      round(sim, 4),
+                })
+
+        log_info(f"  ✅ {len(results)}개 결과 반환")
         return results
 
     except Exception as e:

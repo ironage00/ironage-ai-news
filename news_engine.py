@@ -305,7 +305,7 @@ class ArticleEmbedding(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     article_id = Column(Integer, nullable=False, index=True, unique=True)
-    embedding_json = Column(Text, nullable=False)   # JSON float array
+    embedding = Column(Text, nullable=False)   # PostgreSQL: vector(1536) / SQLite: JSON text
     embedded_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     model_name = Column(String(100), default='text-embedding-3-small')
 
