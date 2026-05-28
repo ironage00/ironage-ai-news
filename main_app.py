@@ -82,6 +82,8 @@ try:
         assign_user_unit,
         run_unit_collection,
         run_all_units_daily,
+        log_user_activity,
+        get_activity_logs,
         IMPACT_LEVEL_ORDER,
         IMPACT_LEVEL_COLOR_RGB,
 
@@ -173,6 +175,13 @@ if _AUTH_PASSWORD and not _logged_in:
                     _inp_pw == _ADMIN_PASSWORD or
                     _final_email in {"ironage@tta.or.kr", "local@tta.or.kr"}
                 )
+                # 접속 로그 기록
+                try:
+                    log_user_activity(_final_email, 'login', {
+                        'is_admin': st.session_state["_session_is_admin"]
+                    })
+                except Exception:
+                    pass
                 st.rerun()
             elif not _email_ok:
                 st.error("❌ @tta.or.kr 이메일 주소만 접속 가능합니다.")
@@ -716,6 +725,10 @@ with st.sidebar:
     # 로그아웃 버튼 — APP_PASSWORD 설정 시(= 인증 모드)에만 표시
     if st.secrets.get("APP_PASSWORD", ""):
         if st.button("🚪 로그아웃", use_container_width=True, key="sidebar_logout"):
+            try:
+                log_user_activity(_user_email, 'logout')
+            except Exception:
+                pass
             st.session_state.clear()
             st.rerun()
     st.markdown("---")
@@ -914,6 +927,7 @@ if selected == "🏠 홈":
                 _home_status = st.empty()
                 _home_status.info("⏳ 실행 중... 단별로 순차 처리합니다. 완료까지 수분~수십분 소요될 수 있습니다.")
                 try:
+                    log_user_activity(_user_email, 'daily_run', {'model': _home_model})
                     _summary = run_all_units_daily(ai_model=_home_model)
                     _home_status.empty()
 
@@ -1174,6 +1188,9 @@ elif selected == "🔍 AI 검색":
 
         if submitted and query.strip():
             _scope_label = _rag_selected_label.replace("🌐 ", "").replace("🏢 ", "")
+            log_user_activity(_user_email, 'rag_search', {
+                'query': query.strip()[:100], 'scope': _scope_label
+            })
             with st.spinner(f"하이브리드 검색 및 답변 생성 중... (범위: {_scope_label})"):
                 result = answer_with_rag(query.strip(), top_k=15, days=None, unit_id=_rag_unit_id)
 
@@ -1413,8 +1430,8 @@ elif selected == "⚙️ 시스템 설정":
     # ===== 🔥 커스텀 탭 UI =====
     if 'settings_tab' not in st.session_state or st.session_state.settings_tab in ('keywords', 'email'):
         st.session_state.settings_tab = 'api'
-    
-    col_tab1, col_tab2, col_tab3 = st.columns(3)
+
+    col_tab1, col_tab2, col_tab3, col_tab4 = st.columns(4)
 
     with col_tab1:
         if st.button("🔑 API 키", key="tab_api_settings", use_container_width=True):
@@ -1427,7 +1444,11 @@ elif selected == "⚙️ 시스템 설정":
     with col_tab3:
         if st.button("🏢 단 멤버십", key="tab_units_settings", use_container_width=True):
             st.session_state.settings_tab = 'units'
-    
+
+    with col_tab4:
+        if st.button("📋 사용자 로그", key="tab_log_settings", use_container_width=True):
+            st.session_state.settings_tab = 'logs'
+
     st.markdown("---")
     
     # 탭 컨텐츠
@@ -1709,5 +1730,91 @@ python news_engine.py monthly
                                 st.rerun()
                             else:
                                 st.error("해제 실패.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.settings_tab == 'logs':
+        st.markdown('<div class="tab-content">', unsafe_allow_html=True)
+        st.markdown("### 📋 사용자 활동 로그")
+        st.caption("접속 및 주요 기능 사용 이력을 조회합니다.")
+        st.markdown("---")
+
+        # ── 필터 ─────────────────────────────────────────────────────────────
+        _lf_col1, _lf_col2, _lf_col3 = st.columns([2, 2, 1])
+        with _lf_col1:
+            _lf_email = st.text_input(
+                "이메일 필터",
+                placeholder="전체 (비워두면 전체 조회)",
+                key="log_filter_email",
+            )
+        with _lf_col2:
+            _ACTION_LABELS = {
+                "전체": None,
+                "login (로그인)": "login",
+                "logout (로그아웃)": "logout",
+                "daily_run (일일수집)": "daily_run",
+                "rag_search (AI검색)": "rag_search",
+                "weekly_report (주간리포트)": "weekly_report",
+                "monthly_report (월간리포트)": "monthly_report",
+                "settings_save (설정저장)": "settings_save",
+                "batch_analyze (배치분석)": "batch_analyze",
+            }
+            _lf_action_label = st.selectbox(
+                "액션 필터",
+                list(_ACTION_LABELS.keys()),
+                key="log_filter_action",
+            )
+            _lf_action = _ACTION_LABELS[_lf_action_label]
+        with _lf_col3:
+            _lf_days = st.number_input(
+                "최근 N일",
+                min_value=1, max_value=365, value=30,
+                key="log_filter_days",
+            )
+
+        # ── 조회 ─────────────────────────────────────────────────────────────
+        _logs = get_activity_logs(
+            limit=500,
+            user_email=_lf_email.strip() or None,
+            action=_lf_action,
+            days=int(_lf_days),
+        )
+
+        if _logs:
+            _sm1, _sm2, _sm3, _sm4 = st.columns(4)
+            _unique_users = len({r['user_email'] for r in _logs})
+            _login_cnt    = sum(1 for r in _logs if r['action'] == 'login')
+            _run_cnt      = sum(1 for r in _logs if r['action'] == 'daily_run')
+            _search_cnt   = sum(1 for r in _logs if r['action'] == 'rag_search')
+            _sm1.metric("총 기록", f"{len(_logs):,}건")
+            _sm2.metric("접속 사용자", f"{_unique_users}명")
+            _sm3.metric("일일수집 실행", f"{_run_cnt}회")
+            _sm4.metric("AI 검색", f"{_search_cnt}회")
+            st.markdown("---")
+
+            import pandas as _pd_log
+            _log_df = _pd_log.DataFrame(_logs)
+            _log_df['created_at'] = _pd_log.to_datetime(_log_df['created_at'])
+            _log_df = _log_df.rename(columns={
+                'id': 'ID', 'user_email': '사용자',
+                'action': '액션', 'detail': '상세',
+                'created_at': '시각',
+            })
+            _log_df['시각'] = _log_df['시각'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            st.dataframe(
+                _log_df[['시각', '사용자', '액션', '상세']],
+                use_container_width=True,
+                height=500,
+                hide_index=True,
+            )
+            _csv_buf = _log_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                "⬇️ CSV 다운로드",
+                data=_csv_buf,
+                file_name=f"user_activity_log_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("조회된 로그가 없습니다.")
 
         st.markdown('</div>', unsafe_allow_html=True)

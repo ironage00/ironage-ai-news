@@ -478,6 +478,22 @@ def check_and_migrate_database():
                         conn.commit()
                         log_info(f"✅ user_settings.{col} 추가 완료")
 
+        # 7. user_activity_logs 테이블 생성
+        id_col_log = 'BIGSERIAL PRIMARY KEY' if is_pg else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+        with DB_ENGINE.connect() as conn:
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS user_activity_logs (
+                    id {id_col_log},
+                    user_email  VARCHAR(255) NOT NULL,
+                    action      VARCHAR(100) NOT NULL,
+                    detail      TEXT,
+                    ip_address  VARCHAR(50),
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+        log_info("✅ user_activity_logs 테이블 확인 완료")
+
         log_info("✅ DB 스키마 최신 상태 (멀티유닛 v5)")
 
     except Exception as e:
@@ -2960,6 +2976,79 @@ def save_user_settings(user_email: str, settings: dict):
             session.commit()
     except Exception as e:
         log_warning(f"save_user_settings 오류: {e}")
+
+
+def log_user_activity(user_email: str, action: str, detail: dict = None):
+    """사용자 활동을 user_activity_logs 테이블에 기록.
+    실패 시 경고만 출력하고 무시 — 로그 실패가 앱 동작에 영향 없음.
+
+    action 예시:
+        'login', 'logout',
+        'daily_run', 'weekly_report', 'monthly_report',
+        'rag_search', 'batch_embed', 'batch_analyze',
+        'settings_save', 'unit_assign'
+    """
+    try:
+        detail_str = json.dumps(detail, ensure_ascii=False) if detail else None
+        is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
+        sql = (
+            "INSERT INTO user_activity_logs (user_email, action, detail) "
+            "VALUES (:email, :action, :detail)"
+        )
+        with DB_ENGINE.connect() as conn:
+            conn.execute(text(sql), {
+                'email':  user_email,
+                'action': action,
+                'detail': detail_str,
+            })
+            conn.commit()
+    except Exception as _e:
+        log_warning(f"⚠️ 활동 로그 기록 실패 (무시): {_e}")
+
+
+def get_activity_logs(
+    limit: int = 200,
+    user_email: str = None,
+    action: str = None,
+    days: int = 30,
+) -> list:
+    """user_activity_logs 조회. 관리자 화면용.
+    Returns: list of dicts {id, user_email, action, detail, created_at}
+    """
+    from sqlalchemy import text as _t
+    conditions = ["created_at >= CURRENT_TIMESTAMP - INTERVAL ':days days'"
+                  if not DB_ENGINE.url.drivername.startswith('sqlite')
+                  else f"created_at >= datetime('now', '-{days} days')"]
+    params: dict = {'limit': limit}
+
+    if DB_ENGINE.url.drivername.startswith('sqlite'):
+        conditions = [f"created_at >= datetime('now', '-{days} days')"]
+    else:
+        conditions = ["created_at >= NOW() - INTERVAL '1 day' * :days"]
+        params['days'] = days
+
+    if user_email:
+        conditions.append("user_email = :email")
+        params['email'] = user_email
+    if action:
+        conditions.append("action = :action")
+        params['action'] = action
+
+    where = " AND ".join(conditions)
+    sql = f"SELECT id, user_email, action, detail, created_at FROM user_activity_logs WHERE {where} ORDER BY created_at DESC LIMIT :limit"
+    try:
+        with DB_ENGINE.connect() as conn:
+            rows = conn.execute(_t(sql), params).fetchall()
+        return [
+            {
+                'id': r[0], 'user_email': r[1], 'action': r[2],
+                'detail': r[3], 'created_at': r[4],
+            }
+            for r in rows
+        ]
+    except Exception as _e:
+        log_warning(f"⚠️ 활동 로그 조회 실패: {_e}")
+        return []
 
 
 def get_unit_display_name(unit_id: int) -> str:
