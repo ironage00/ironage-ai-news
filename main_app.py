@@ -1142,8 +1142,8 @@ elif selected == "📰 뉴스 현황":
             if not kw:
                 return True
             kw_l = kw.lower()
-            title_ok   = kw_l in (a.get('title')  or '').lower()
-            source_ok  = kw_l in (a.get('source') or '').lower()
+            title_ok  = kw_l in (a.get('title')  or '').lower()
+            source_ok = kw_l in (a.get('source') or '').lower()
             kw_ok = False
             try:
                 _kws = json.loads(a.get('extracted_keywords') or '[]')
@@ -1154,50 +1154,99 @@ elif selected == "📰 뉴스 현황":
 
         _nv_filtered = [a for a in _nv_all if _nv_match(a, _nv_search)]
 
-        # ── 상태 배지 함수 ───────────────────────────────────────────────────────
-        def _nv_status(a):
+        # ── 상태 레이블 / 배지색 ─────────────────────────────────────────────────
+        def _nv_status_label(a):
             if a.get('is_analyzed'):
-                return '🔬 분석완료'
+                return '🔬 분석완료', '#1976D2', '#E3F2FD'
             if (a.get('quality_score') or 0) > 0.5:
-                return '✅ 선별됨'
-            return '📥 수집됨'
+                return '✅ 선별됨',   '#388E3C', '#E8F5E9'
+            return '📥 수집됨',       '#757575', '#FAFAFA'
 
-        # ── 통합 테이블 ──────────────────────────────────────────────────────────
-        _nv_df = _pd_nv.DataFrame([{
-            '수집시각': a['collected_at'],
-            '제목':     (a.get('title') or '')[:70],
-            '출처':     a.get('source') or '',
-            '단':       get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류',
-            '품질점수': round(a.get('quality_score') or 0, 2),
-            '상태':     _nv_status(a),
-        } for a in _nv_filtered])
+        # ── HTML 테이블 (제목 = 원문 링크, 행 색상 구분) ─────────────────────────
+        _nv_display = _nv_filtered[:200]   # 최대 200건 표시
+        _nv_rows_html = []
+        for _a in _nv_display:
+            _title   = (_a.get('title')  or '제목 없음')
+            _url     = _a.get('link')    or '#'
+            _src     = (_a.get('source') or '')
+            _dt      = (_a.get('collected_at') or '')[:16]
+            _unit    = get_unit_display_name(_a['unit_id']) if _a['unit_id'] else '미분류'
+            _score   = _a.get('quality_score') or 0
+            _pct     = int(_score * 100)
+            _lbl, _badge_color, _row_bg = _nv_status_label(_a)
 
-        st.dataframe(
-            _nv_df,
-            use_container_width=True,
-            height=420,
-            hide_index=True,
-            column_config={
-                '품질점수': st.column_config.ProgressColumn(
-                    '품질점수', min_value=0, max_value=1, format="%.2f"
-                ),
-                '상태': st.column_config.TextColumn('상태', width='small'),
-            },
-        )
-        _nv_kw_note = f'  ·  키워드: "{_nv_search}"' if _nv_search else ''
+            # 분석완료면 제목 색상을 진하게
+            _title_style = 'font-weight:600; color:#1565C0;' if _a.get('is_analyzed') else 'color:#212121;'
+
+            _nv_rows_html.append(f"""
+<tr style="background:{_row_bg}; border-bottom:1px solid #e0e0e0;">
+  <td style="padding:7px 10px; font-size:12px; color:#888; white-space:nowrap;">{_dt}</td>
+  <td style="padding:7px 10px; max-width:480px;">
+    <a href="{_url}" target="_blank"
+       style="{_title_style} text-decoration:none; font-size:13px; line-height:1.4;"
+       title="{_title}">{_title[:80]}</a>
+  </td>
+  <td style="padding:7px 10px; font-size:12px; color:#555; white-space:nowrap;">{_src}</td>
+  <td style="padding:7px 10px; font-size:12px; color:#555; white-space:nowrap;">{_unit}</td>
+  <td style="padding:7px 10px; white-space:nowrap;">
+    <div style="display:flex; align-items:center; gap:4px;">
+      <div style="background:#e0e0e0; border-radius:3px; width:48px; height:8px;">
+        <div style="background:#42A5F5; width:{_pct}%; height:100%; border-radius:3px;"></div>
+      </div>
+      <span style="font-size:11px; color:#666;">{_score:.2f}</span>
+    </div>
+  </td>
+  <td style="padding:7px 10px; white-space:nowrap;">
+    <span style="background:{_badge_color}; color:#fff; padding:2px 7px;
+                 border-radius:10px; font-size:11px;">{_lbl}</span>
+  </td>
+</tr>""")
+
+        _nv_table_html = f"""
+<div style="overflow-x:auto; max-height:520px; overflow-y:auto;
+            border:1px solid #e0e0e0; border-radius:8px;">
+  <table style="width:100%; border-collapse:collapse; font-family:sans-serif;">
+    <thead>
+      <tr style="background:#F5F5F5; position:sticky; top:0; z-index:1;">
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd; white-space:nowrap;">수집시각</th>
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd;">제목 (클릭 시 원문 이동)</th>
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd;">출처</th>
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd;">단</th>
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd;">품질</th>
+        <th style="padding:9px 10px; text-align:left; font-size:12px;
+                   color:#555; border-bottom:2px solid #ddd;">상태</th>
+      </tr>
+    </thead>
+    <tbody>
+      {''.join(_nv_rows_html)}
+    </tbody>
+  </table>
+</div>"""
+        st.markdown(_nv_table_html, unsafe_allow_html=True)
+
+        _nv_kw_note = f'  ·  검색어: "{_nv_search}"' if _nv_search else ''
+        _cnt_analyzed = sum(1 for a in _nv_filtered if a.get('is_analyzed'))
+        _cnt_sel      = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
+        _cnt_raw      = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) <= 0.5)
         st.caption(
-            f"총 {len(_nv_filtered):,}건 표시{_nv_kw_note}  |  "
-            f"🔬 분석완료: {sum(1 for a in _nv_filtered if a.get('is_analyzed'))}건  "
-            f"✅ 선별됨: {sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)}건  "
-            f"📥 수집됨: {sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) <= 0.5)}건"
+            f"총 {len(_nv_filtered):,}건{_nv_kw_note}"
+            f"  |  🔬 분석완료 {_cnt_analyzed}건"
+            f"  ·  ✅ 선별됨 {_cnt_sel}건"
+            f"  ·  📥 수집됨 {_cnt_raw}건"
+            + (f"  (상위 200건 표시)" if len(_nv_filtered) > 200 else "")
         )
 
-        # ── 분석 결과 보기 ───────────────────────────────────────────────────────
+        # ── 분석 결과 expander (분석완료 기사만) ─────────────────────────────────
         _nv_analyzed_filtered = [a for a in _nv_filtered if a.get('is_analyzed')]
         if _nv_analyzed_filtered:
             st.markdown("---")
             st.markdown(f"#### 🔬 분석 결과  ({len(_nv_analyzed_filtered):,}건)")
-            st.caption("분석이 완료된 기사를 펼치면 AI 분석 내용을 확인할 수 있습니다.")
+            st.caption("아래 항목을 클릭하면 AI 분석 내용이 펼쳐집니다.")
 
             # 단별 집계
             _nv_ucnt = _nv_Cnt(
@@ -1212,29 +1261,37 @@ elif selected == "📰 뉴스 현황":
                     _nv_uc_cols[_ci % len(_nv_uc_cols)].metric(_uname, f"{_ucnt}건")
 
             for _a in _nv_analyzed_filtered:
-                _a_title = (_a.get('title') or '제목 없음')[:80]
+                _a_title = (_a.get('title') or '제목 없음')
                 _a_src   = _a.get('source') or ''
-                _a_time  = _a.get('collected_at') or ''
+                _a_time  = (_a.get('collected_at') or '')[:16]
+                _a_url   = _a.get('link') or '#'
 
                 # 키워드 배지
-                _kw_str = ''
+                _kw_tags = ''
                 try:
                     _kws = json.loads(_a.get('extracted_keywords') or '[]')
-                    _kw_str = '  '.join(f'`{k}`' for k in _kws[:6]) if _kws else ''
+                    _kw_tags = '  '.join(f'`{k}`' for k in _kws[:6]) if _kws else ''
                 except Exception:
                     pass
 
                 with st.expander(
-                    f"🔬 **{_a_title}**  |  {_a_src}  |  {_a_time}",
+                    f"🔬 **{_a_title[:75]}**  ·  {_a_src}  ·  {_a_time}",
                     expanded=False,
                 ):
-                    if _kw_str:
-                        st.markdown(f"**키워드**: {_kw_str}")
+                    # 원문 링크를 expander 맨 위에도 노출
+                    st.markdown(
+                        f'<a href="{_a_url}" target="_blank" '
+                        f'style="font-size:13px; font-weight:600; color:#1565C0; '
+                        f'text-decoration:none;">🔗 {_a_title}</a>',
+                        unsafe_allow_html=True,
+                    )
+                    if _kw_tags:
+                        st.markdown(f"**키워드**: {_kw_tags}")
+                    st.markdown("---")
                     if _a.get('analysis_result'):
                         st.markdown(_a['analysis_result'])
                     else:
                         st.caption("분석 결과 없음")
-                    st.markdown(f"[🔗 원문 보기]({_a.get('link', '#')})")
 
 
 # ===== AI 검색 (RAG) 페이지 =====
