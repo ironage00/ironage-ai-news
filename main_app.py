@@ -1806,6 +1806,7 @@ python news_engine.py monthly
             st.markdown("---")
 
             import pandas as _pd_log
+            import json as _json_log
             _log_df = _pd_log.DataFrame(_logs)
             _log_df['created_at'] = _pd_log.to_datetime(_log_df['created_at'])
             _log_df = _log_df.rename(columns={
@@ -1814,8 +1815,21 @@ python news_engine.py monthly
                 'created_at': '시각',
             })
             _log_df['시각'] = _log_df['시각'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            # detail JSON에서 session_duration 추출 → 세션 시간 컬럼
+            def _extract_session(detail_str):
+                if not detail_str:
+                    return ''
+                try:
+                    d = _json_log.loads(detail_str)
+                    return d.get('session_duration', '')
+                except Exception:
+                    return ''
+
+            _log_df['세션 시간'] = _log_df['상세'].apply(_extract_session)
+
             st.dataframe(
-                _log_df[['시각', '사용자', '액션', '상세']],
+                _log_df[['시각', '사용자', '액션', '세션 시간', '상세']],
                 use_container_width=True,
                 height=500,
                 hide_index=True,
