@@ -781,7 +781,7 @@ with st.sidebar:
         st.markdown("---")
     # ─────────────────────────────────────────────────────────────────────────
 
-    _user_options = ["🏠 홈", "🔍 AI 검색", "📊 인텔리전스", "⚙️ 내 설정"]
+    _user_options = ["🏠 홈", "📰 뉴스 현황", "🔍 AI 검색", "📊 인텔리전스", "⚙️ 내 설정"]
     _admin_options = ["⚙️ 시스템 설정"]
 
     _all_options = _user_options + (_admin_options if _is_admin else [])
@@ -1084,6 +1084,172 @@ if selected == "🏠 홈":
                 _render_unit_articles_by_date(
                     _unit_news, _unit['display_name'], tab_key=f"u{_unit['id']}"
                 )
+
+
+# ===== 📰 뉴스 현황 페이지 =====
+elif selected == "📰 뉴스 현황":
+    st.markdown('<h1 class="main-header">📰 뉴스 파이프라인 현황</h1>', unsafe_allow_html=True)
+    st.markdown("수집 → 선별 → 분석 각 단계별로 어떤 기사가 처리됐는지 확인합니다.")
+    st.markdown("---")
+
+    # ── 공통 필터 ────────────────────────────────────────────────────────────────
+    _nv_c1, _nv_c2 = st.columns([2, 3])
+    with _nv_c1:
+        _nv_days = st.slider("조회 기간 (최근 N일)", 1, 30, 7, key="nv_days")
+    with _nv_c2:
+        _nv_units     = get_all_units()
+        _nv_unit_opts = {"전체": None} | {u['display_name']: u['id'] for u in _nv_units}
+        _nv_unit_label = st.selectbox("단 필터", list(_nv_unit_opts.keys()), key="nv_unit")
+        _nv_unit_id    = _nv_unit_opts[_nv_unit_label]
+
+    # ── 데이터 로드 ───────────────────────────────────────────────────────────────
+    _nv_all      = load_news_from_db(days=_nv_days, unit_id=_nv_unit_id)
+    _nv_selected = [a for a in _nv_all if (a.get('quality_score') or 0) > 0.5]
+    _nv_analyzed = [a for a in _nv_all if a.get('is_analyzed')]
+
+    # ── 파이프라인 요약 지표 ──────────────────────────────────────────────────────
+    _nv_m1, _nv_m2, _nv_m3, _nv_m4 = st.columns(4)
+    _nv_m1.metric("📥 수집됨", f"{len(_nv_all):,}건")
+    _nv_m2.metric(
+        "✅ 선별됨",
+        f"{len(_nv_selected):,}건",
+        delta=f"{len(_nv_selected)/len(_nv_all)*100:.0f}%" if _nv_all else "0%",
+    )
+    _nv_m3.metric(
+        "🔬 분석됨",
+        f"{len(_nv_analyzed):,}건",
+        delta=f"{len(_nv_analyzed)/len(_nv_all)*100:.0f}%" if _nv_all else "0%",
+    )
+    _nv_m4.metric(
+        "📊 분석률",
+        f"{len(_nv_analyzed)/len(_nv_selected)*100:.0f}%" if _nv_selected else "0%",
+        help="선별된 기사 중 실제 분석 완료 비율",
+    )
+    st.markdown("---")
+
+    # ── 탭 ───────────────────────────────────────────────────────────────────────
+    _nv_tab1, _nv_tab2, _nv_tab3 = st.tabs([
+        f"📥 수집됨  ({len(_nv_all):,}건)",
+        f"✅ 선별됨  ({len(_nv_selected):,}건)",
+        f"🔬 분석됨  ({len(_nv_analyzed):,}건)",
+    ])
+
+    # ── [탭1] 수집됨 ─────────────────────────────────────────────────────────────
+    with _nv_tab1:
+        st.caption("AI 선별 전 전체 수집 기사입니다. 품질점수가 낮은 기사는 선별 단계에서 제외됩니다.")
+        if not _nv_all:
+            st.info("해당 기간에 수집된 기사가 없습니다.")
+        else:
+            # 검색 필터
+            _nv_t1_search = st.text_input("제목 검색", placeholder="키워드 입력…", key="nv_t1_search")
+            _nv_t1_data   = _nv_all
+            if _nv_t1_search:
+                _nv_t1_data = [a for a in _nv_t1_data if _nv_t1_search.lower() in a['title'].lower()]
+
+            import pandas as _pd_nv
+            _nv_t1_df = _pd_nv.DataFrame([{
+                '수집시각':   a['collected_at'],
+                '제목':       a['title'],
+                '출처':       a['source'] or '',
+                '단':         get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류',
+                '품질점수':   round(a.get('quality_score') or 0, 2),
+                '선별':       '✅' if (a.get('quality_score') or 0) > 0.5 else '—',
+                '분석':       '🔬' if a.get('is_analyzed') else '—',
+                '링크':       a['link'],
+            } for a in _nv_t1_data])
+
+            st.dataframe(
+                _nv_t1_df.drop(columns=['링크']),
+                use_container_width=True,
+                height=480,
+                hide_index=True,
+                column_config={
+                    '품질점수': st.column_config.ProgressColumn(
+                        '품질점수', min_value=0, max_value=1, format="%.2f"
+                    ),
+                },
+            )
+            st.caption(f"총 {len(_nv_t1_data):,}건 표시")
+
+    # ── [탭2] 선별됨 ─────────────────────────────────────────────────────────────
+    with _nv_tab2:
+        st.caption("품질점수 0.5 초과 기사만 표시합니다. 이 중 상위 20건이 심층 분석 대상이 됩니다.")
+        if not _nv_selected:
+            st.info("선별된 기사가 없습니다.")
+        else:
+            _nv_t2_search = st.text_input("제목 검색", placeholder="키워드 입력…", key="nv_t2_search")
+            _nv_t2_data   = _nv_selected
+            if _nv_t2_search:
+                _nv_t2_data = [a for a in _nv_t2_data if _nv_t2_search.lower() in a['title'].lower()]
+
+            _nv_t2_df = _pd_nv.DataFrame([{
+                '수집시각':   a['collected_at'],
+                '제목':       a['title'],
+                '출처':       a['source'] or '',
+                '단':         get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류',
+                '품질점수':   round(a.get('quality_score') or 0, 2),
+                '분석여부':   '🔬 분석완료' if a.get('is_analyzed') else '⏳ 대기',
+                '링크':       a['link'],
+            } for a in sorted(_nv_t2_data, key=lambda x: -(x.get('quality_score') or 0))])
+
+            st.dataframe(
+                _nv_t2_df.drop(columns=['링크']),
+                use_container_width=True,
+                height=480,
+                hide_index=True,
+                column_config={
+                    '품질점수': st.column_config.ProgressColumn(
+                        '품질점수', min_value=0, max_value=1, format="%.2f"
+                    ),
+                },
+            )
+            st.caption(f"총 {len(_nv_t2_data):,}건 표시 (품질점수 내림차순)")
+
+    # ── [탭3] 분석됨 ─────────────────────────────────────────────────────────────
+    with _nv_tab3:
+        st.caption("AI 심층 분석이 완료된 기사입니다. 각 기사를 펼치면 분석 결과를 볼 수 있습니다.")
+        if not _nv_analyzed:
+            st.info("분석된 기사가 없습니다.")
+        else:
+            _nv_t3_search = st.text_input("제목 검색", placeholder="키워드 입력…", key="nv_t3_search")
+            _nv_t3_data = _nv_analyzed
+            if _nv_t3_search:
+                _nv_t3_data = [a for a in _nv_t3_data if _nv_t3_search.lower() in a['title'].lower()]
+
+            # 단별 집계
+            from collections import Counter as _Cnt
+            _unit_cnt = _Cnt(
+                get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류'
+                for a in _nv_t3_data
+            )
+            _uc_cols = st.columns(min(len(_unit_cnt), 4))
+            for _ci, (_uname, _ucnt) in enumerate(sorted(_unit_cnt.items(), key=lambda x: -x[1])):
+                _uc_cols[_ci % len(_uc_cols)].metric(_uname, f"{_ucnt}건")
+
+            st.markdown("---")
+
+            # 기사 목록 + 분석 결과 expander
+            for _a in _nv_t3_data:
+                _kw_str = ''
+                try:
+                    _kws = json.loads(_a.get('extracted_keywords') or '[]')
+                    _kw_str = '  '.join(f'`{k}`' for k in _kws[:6]) if _kws else ''
+                except Exception:
+                    pass
+
+                with st.expander(
+                    f"**{_a['title'][:80]}**  |  {_a['source'] or ''}  |  {_a['collected_at']}",
+                    expanded=False,
+                ):
+                    if _kw_str:
+                        st.markdown(f"**키워드**: {_kw_str}")
+                    if _a.get('analysis_result'):
+                        st.markdown(_a['analysis_result'])
+                    else:
+                        st.caption("분석 결과 없음")
+                    st.markdown(f"[🔗 원문 보기]({_a['link']})")
+
+            st.caption(f"총 {len(_nv_t3_data):,}건 표시")
 
 
 # ===== AI 검색 (RAG) 페이지 =====
