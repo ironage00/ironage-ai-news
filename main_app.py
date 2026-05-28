@@ -1110,34 +1110,77 @@ elif selected == "📰 뉴스 현황":
         )
 
     # ── 데이터 로드 ───────────────────────────────────────────────────────────────
-    _nv_all      = load_news_from_db(days=_nv_days, unit_id=_nv_unit_id)
-    _nv_selected = [a for a in _nv_all if (a.get('quality_score') or 0) > 0.5]
-    _nv_analyzed = [a for a in _nv_all if a.get('is_analyzed')]
-
-    # ── 파이프라인 요약 지표 ──────────────────────────────────────────────────────
-    _nv_m1, _nv_m2, _nv_m3, _nv_m4 = st.columns(4)
-    _nv_m1.metric("📥 수집됨", f"{len(_nv_all):,}건")
-    _nv_m2.metric(
-        "✅ 선별됨",
-        f"{len(_nv_selected):,}건",
-        delta=f"{len(_nv_selected)/len(_nv_all)*100:.0f}%" if _nv_all else "0%",
-    )
-    _nv_m3.metric(
-        "🔬 분석됨",
-        f"{len(_nv_analyzed):,}건",
-        delta=f"{len(_nv_analyzed)/len(_nv_all)*100:.0f}%" if _nv_all else "0%",
-    )
-    _nv_m4.metric(
-        "📊 분석률",
-        f"{len(_nv_analyzed)/len(_nv_selected)*100:.0f}%" if _nv_selected else "0%",
-        help="선별된 기사 중 실제 분석 완료 비율",
-    )
-    st.markdown("---")
+    _nv_all = load_news_from_db(days=_nv_days, unit_id=_nv_unit_id)
 
     if not _nv_all:
         st.info("해당 기간에 수집된 기사가 없습니다.")
     else:
-        # ── 키워드 검색 필터 (title·source·keywords, None-safe) ────────────────
+        import datetime as _nv_dt
+        import html as _html_mod
+
+        _DAYS_KR = ['월', '화', '수', '목', '금', '토', '일']
+
+        # ── 날짜별 건수 집계 (최근순) ─────────────────────────────────────────
+        _nv_date_counts: dict = {}
+        for _a in _nv_all:
+            _d = (_a.get('collected_at') or '')[:10]
+            if _d:
+                _nv_date_counts[_d] = _nv_date_counts.get(_d, 0) + 1
+
+        _nv_dates_sorted = sorted(_nv_date_counts.keys(), reverse=True)
+
+        def _nv_date_label(d):
+            try:
+                _obj = _nv_dt.date.fromisoformat(d)
+                _dow = _DAYS_KR[_obj.weekday()]
+                return f"{d[5:]} ({_dow})  {_nv_date_counts[d]}건"
+            except Exception:
+                return d
+
+        _nv_date_labels  = [_nv_date_label(d) for d in _nv_dates_sorted]
+        _nv_label_to_date = {_nv_date_label(d): d for d in _nv_dates_sorted}
+
+        # ── 날짜 선택 (라디오, 최근순) ────────────────────────────────────────
+        _nv_picked_label = st.radio(
+            "📅 날짜 선택",
+            _nv_date_labels,
+            horizontal=True,
+            key="nv_date_radio",
+        )
+        _nv_picked_date = _nv_label_to_date.get(_nv_picked_label, _nv_dates_sorted[0])
+
+        st.markdown("---")
+
+        # ── 선택 날짜 기사만 ─────────────────────────────────────────────────
+        _nv_day_all = [
+            a for a in _nv_all
+            if (a.get('collected_at') or '')[:10] == _nv_picked_date
+        ]
+
+        # ── 파이프라인 요약 지표 (선택 날짜 기준) ─────────────────────────────
+        _nv_day_sel = [a for a in _nv_day_all if (a.get('quality_score') or 0) > 0.5]
+        _nv_day_ana = [a for a in _nv_day_all if a.get('is_analyzed')]
+
+        _nv_m1, _nv_m2, _nv_m3, _nv_m4 = st.columns(4)
+        _nv_m1.metric("📥 수집됨", f"{len(_nv_day_all):,}건")
+        _nv_m2.metric(
+            "✅ 선별됨",
+            f"{len(_nv_day_sel):,}건",
+            delta=f"{len(_nv_day_sel)/len(_nv_day_all)*100:.0f}%" if _nv_day_all else "0%",
+        )
+        _nv_m3.metric(
+            "🔬 분석됨",
+            f"{len(_nv_day_ana):,}건",
+            delta=f"{len(_nv_day_ana)/len(_nv_day_all)*100:.0f}%" if _nv_day_all else "0%",
+        )
+        _nv_m4.metric(
+            "📊 분석률",
+            f"{len(_nv_day_ana)/len(_nv_day_sel)*100:.0f}%" if _nv_day_sel else "0%",
+            help="선별된 기사 중 실제 분석 완료 비율",
+        )
+        st.markdown("---")
+
+        # ── 키워드 검색 필터 (None-safe) ──────────────────────────────────────
         def _nv_match(a, kw):
             if not kw:
                 return True
@@ -1150,9 +1193,11 @@ elif selected == "📰 뉴스 현황":
             except Exception:
                 return False
 
-        _nv_filtered = [a for a in _nv_all if _nv_match(a, _nv_search)]
+        _nv_filtered = [a for a in _nv_day_all if _nv_match(a, _nv_search)]
+        # 시간 내림차순 정렬
+        _nv_filtered.sort(key=lambda x: x.get('collected_at') or '', reverse=True)
 
-        # ── 상태 배지 색 ────────────────────────────────────────────────────────
+        # ── 상태 배지 색 ────────────────────────────────────────────────────
         def _nv_badge(a):
             if a.get('is_analyzed'):
                 return '🔬 분석완료', '#1976D2'
@@ -1160,7 +1205,7 @@ elif selected == "📰 뉴스 현황":
                 return '✅ 선별됨',   '#388E3C'
             return '📥 수집됨',       '#757575'
 
-        # ── 카드 HTML 생성 함수 (AI 검색 결과 스타일) ──────────────────────────
+        # ── 카드 HTML 생성 함수 (AI 검색 결과 스타일) ────────────────────────
         def _nv_card(a):
             title  = (a.get('title')  or '제목 없음')
             url    = a.get('link')    or '#'
@@ -1171,18 +1216,15 @@ elif selected == "📰 뉴스 현황":
             lbl, bc = _nv_badge(a)
             pct    = int(score * 100)
 
-            # 분석완료면 제목 파란색
-            title_color = '#1565C0' if a.get('is_analyzed') else '#1e293b'
-            title_weight = '700' if a.get('is_analyzed') else '600'
+            title_color  = '#1565C0' if a.get('is_analyzed') else '#1e293b'
+            title_weight = '700'     if a.get('is_analyzed') else '600'
 
             # 분석 본문 (요약 250자 + 전체 보기 토글)
-            import html as _html_mod
             body_block = ''
             if a.get('is_analyzed'):
                 raw = (a.get('analysis_result') or '').strip()
                 if raw:
-                    snippet = raw[:250] + ('…' if len(raw) > 250 else '')
-                    # HTML 특수문자 이스케이프 + 줄바꿈 보존
+                    snippet   = raw[:250] + ('…' if len(raw) > 250 else '')
                     full_html = _html_mod.escape(raw).replace('\n', '<br>')
                     toggle_block = ''
                     if len(raw) > 250:
@@ -1206,8 +1248,7 @@ elif selected == "📰 뉴스 현황":
 
             # 품질 점수 바
             score_bar = (
-                f'<div style="display:inline-flex;align-items:center;gap:3px;'
-                f'vertical-align:middle;">'
+                f'<div style="display:inline-flex;align-items:center;gap:3px;vertical-align:middle;">'
                 f'<div style="background:#e0e0e0;border-radius:3px;width:36px;height:7px;">'
                 f'<div style="background:#42A5F5;width:{pct}%;height:100%;border-radius:3px;"></div>'
                 f'</div>'
@@ -1229,50 +1270,28 @@ elif selected == "📰 뉴스 현황":
        style="color:#005aab;font-size:0.82rem;text-decoration:none;margin-left:auto;">
        🔗 원문</a>
   </div>
-  <div style="font-weight:{title_weight};color:{title_color};
-              font-size:0.95rem;line-height:1.5;">
-    <a href="{url}" target="_blank"
-       style="color:{title_color};text-decoration:none;">{title}</a>
+  <div style="font-weight:{title_weight};color:{title_color};font-size:0.95rem;line-height:1.5;">
+    <a href="{url}" target="_blank" style="color:{title_color};text-decoration:none;">{title}</a>
   </div>
   {body_block}
 </div>"""
 
-        # ── 일자별 그룹 렌더링 ──────────────────────────────────────────────────
-        # collected_at 기준 내림차순 정렬
-        _nv_sorted = sorted(
-            _nv_filtered,
-            key=lambda x: x.get('collected_at') or '',
-            reverse=True,
-        )
-
-        _nv_kw_note = f'  검색어: **"{_nv_search}"** · ' if _nv_search else ''
+        # ── 카드 렌더링 ───────────────────────────────────────────────────────
+        _nv_kw_note = f'  검색어: **"{_nv_search}"** ·' if _nv_search else ''
         _cnt_a = sum(1 for a in _nv_filtered if a.get('is_analyzed'))
-        _cnt_s = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
-        _cnt_r = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) <= 0.5)
-        st.caption(
-            f"{_nv_kw_note}총 **{len(_nv_filtered):,}건**"
-            f"  |  🔬 분석완료 {_cnt_a}건  ·  ✅ 선별됨 {_cnt_s}건  ·  📥 수집됨 {_cnt_r}건"
-        )
+        _cnt_s = sum(1 for a in _nv_filtered
+                     if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
+        _cnt_r = len(_nv_filtered) - _cnt_a - _cnt_s
 
-        # itertools.groupby 로 날짜별 분리
-        for _date_key, _day_iter in _nv_groupby(
-            _nv_sorted, key=lambda x: (x.get('collected_at') or '')[:10]
-        ):
-            _day_list = list(_day_iter)
-            _day_a = sum(1 for a in _day_list if a.get('is_analyzed'))
-            _day_s = sum(1 for a in _day_list if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
-            _day_r = len(_day_list) - _day_a - _day_s
-
-            st.markdown(
-                f"**📅 {_date_key}** &nbsp; "
-                f"<span style='font-size:0.82rem;color:#666;'>"
-                f"총 {len(_day_list)}건 &nbsp;·&nbsp; "
-                f"🔬 {_day_a} &nbsp;·&nbsp; ✅ {_day_s} &nbsp;·&nbsp; 📥 {_day_r}"
-                f"</span>",
-                unsafe_allow_html=True,
+        if not _nv_filtered:
+            st.info("검색 조건에 맞는 기사가 없습니다." if _nv_search else "해당 날짜에 기사가 없습니다.")
+        else:
+            st.caption(
+                f"{_nv_kw_note} **{len(_nv_filtered):,}건**"
+                f"  |  🔬 분석완료 {_cnt_a}건  ·  ✅ 선별됨 {_cnt_s}건  ·  📥 수집됨 {_cnt_r}건"
             )
             st.markdown(
-                '\n'.join(_nv_card(a) for a in _day_list),
+                '\n'.join(_nv_card(a) for a in _nv_filtered),
                 unsafe_allow_html=True,
             )
 
