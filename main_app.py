@@ -689,13 +689,15 @@ with st.sidebar:
         st.caption("🛠️ 시스템 설정은 관리자 전용입니다.")
     else:
         st.caption("⚠️ 단 미배정")
-    if _auth_enabled:
-        if st.button("로그아웃", use_container_width=True, key="sidebar_logout"):
-            st.logout()
+    # 로그아웃 버튼 — APP_PASSWORD 설정 시(= 인증 모드)에만 표시
+    if st.secrets.get("APP_PASSWORD", ""):
+        if st.button("🚪 로그아웃", use_container_width=True, key="sidebar_logout"):
+            st.session_state.clear()
+            st.rerun()
     st.markdown("---")
 
-    # ── 🧪 테스트 유저 전환 (로컬 모드 전용) ─────────────────────────────────
-    if not _auth_enabled:
+    # ── 🧪 테스트 유저 전환 (로컬 모드 전용 — APP_PASSWORD 미설정 시) ─────────
+    if not st.secrets.get("APP_PASSWORD", ""):
         st.caption("🧪 테스트 유저 전환")
         _TEST_USERS = [
             "local@tta.or.kr",
@@ -713,7 +715,7 @@ with st.sidebar:
             "ai@tta.or.kr (AI융합표준단)",
             "radio@tta.or.kr (전파네트워크표준단)",
         ]
-        _cur_email = st.session_state.get("_test_user_email", "local@tta.or.kr")
+        _cur_email = st.session_state.get("_user_email", "local@tta.or.kr")
         _cur_idx = _TEST_USERS.index(_cur_email) if _cur_email in _TEST_USERS else 0
         _sel_label = st.selectbox(
             "테스트 유저",
@@ -724,7 +726,7 @@ with st.sidebar:
         )
         _sel_email = _TEST_USERS[_TEST_LABELS.index(_sel_label)]
         if _sel_email != _cur_email:
-            st.session_state["_test_user_email"] = _sel_email
+            st.session_state["_user_email"] = _sel_email
             st.rerun()
         st.markdown("---")
     # ─────────────────────────────────────────────────────────────────────────
