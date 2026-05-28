@@ -3,6 +3,7 @@ IRONAGE AI Analytics System v5.0
 Streamlit 웹 대시보드 - 완전판 (수정 버전)
 """
 
+import os
 import sys
 import subprocess
 from pathlib import Path
