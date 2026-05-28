@@ -5388,8 +5388,21 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         )
         log_info(f"   [{display}] 완료 -- 분析 {len(analyzed)}개")
 
+    # ── RAG 임베딩 자동 실행 (전체 단 분析 완료 후 한 번) ──────────────────────
+    log_info("\n[임베딩] RAG 임베딩 자동 처리 중...")
+    _emb_count = 0
+    try:
+        from rag_search import embed_unprocessed_articles as _embed_fn
+        _emb_count = _embed_fn(limit=50)
+        if _emb_count > 0:
+            log_info(f"   ✅ 임베딩 완료: {_emb_count}건 신규 추가")
+        else:
+            log_info("   ℹ️  신규 임베딩 대상 없음 (이미 처리됨)")
+    except Exception as _emb_err:
+        log_warning(f"   ⚠️ 임베딩 처리 중 오류 (파이프라인에 영향 없음): {_emb_err}")
+
     log_info("=" * 60)
-    log_info("[Level 3] 통합 일일 파이프라인 완료")
+    log_info(f"[Level 3] 통합 일일 파이프라인 완료 — 임베딩 {_emb_count}건 추가")
     log_info("=" * 60)
     return summary
 
@@ -5624,14 +5637,14 @@ def run_daily_collection(ai_model: str = None):
         log_warning(f"⚠️ 중복 실행 체크 실패 — 안전을 위해 건너뜀: {_dup_err}")
         return []
 
-    log_info("\n[작업 0/8] 경쟁 기관 (3GPP·ETSI·ITU) 뉴스 수집 중...")
+    log_info("\n[작업 0/9] 경쟁 기관 (3GPP·ETSI·ITU) 뉴스 수집 중...")
     standards_news = safe_execute(
         lambda: get_standards_org_news(days=1),
         error_msg="경쟁 기관 RSS 수집 실패",
         default_return=[]
     )
 
-    log_info("\n[작업 1/8] 뉴스 수집 중...")
+    log_info("\n[작업 1/9] 뉴스 수집 중...")
     unique_news_items = safe_execute(
         lambda: get_news_data(),
         error_msg="뉴스 수집 실패",
@@ -5648,7 +5661,7 @@ def run_daily_collection(ai_model: str = None):
         log_warning("\n⚠️ 수집된 뉴스가 없습니다. 프로그램을 종료합니다.")
         return []
 
-    log_info("\n[작업 2/8] DB 저장 중...")
+    log_info("\n[작업 2/9] DB 저장 중...")
     saved_count = safe_execute(
         lambda: save_news_to_db(unique_news_items),
         error_msg="DB 저장 실패",
@@ -5656,7 +5669,7 @@ def run_daily_collection(ai_model: str = None):
     )
     log_info(f"   ✅ {saved_count}개 저장 완료")
 
-    log_info(f"\n[작업 3/8] AI 선별 + 중복 제거 중 ({ai_model.upper()})...")
+    log_info(f"\n[작업 3/9] AI 선별 + 중복 제거 중 ({ai_model.upper()})...")
     log_info(f"   📊 수집된 뉴스: {len(unique_news_items)}개")
     
     news_to_analyze = safe_execute(
@@ -5668,7 +5681,7 @@ def run_daily_collection(ai_model: str = None):
     log_info(f"   ✅ AI 선별 완료: {len(news_to_analyze)}개 (중복 제거 후)")
     log_info(f"   🔄 중복 제거율: {(1 - len(news_to_analyze) / 50) * 100:.1f}%")
 
-    log_info(f"\n[작업 4/8] 심층 분석 중 ({ai_model.upper()})...")
+    log_info(f"\n[작업 4/9] 심층 분석 중 ({ai_model.upper()})...")
     log_info(f"   🎯 목표: 상위 20개 분석")
 
     # 선별된 50개 중 상위 20개를 먼저 분석 시도.
@@ -5692,7 +5705,7 @@ def run_daily_collection(ai_model: str = None):
         log_error("❌ 분석된 뉴스가 없습니다. 리포트 생성을 건너뜁니다.")
         return []
     
-    log_info("\n[작업 5/8] 분석 결과 저장 중...")
+    log_info("\n[작업 5/9] 분석 결과 저장 중...")
     saved_analysis = 0
     for result in analyzed_results:
         try:
@@ -5715,7 +5728,7 @@ def run_daily_collection(ai_model: str = None):
     
     log_info(f"   ✅ {saved_analysis}개 저장 완료")
     
-    log_info("\n[작업 6/8] 리포트 생성 및 발송 중...")
+    log_info("\n[작업 6/9] 리포트 생성 및 발송 중...")
 
     # 심층 분석된 링크 집합
     analyzed_links = {r['link'] for r in analyzed_results}
@@ -5765,7 +5778,7 @@ def run_daily_collection(ai_model: str = None):
         log_warning(f"⚠️ 긴급 알림 처리 중 오류 (비중요): {_e}")
 
     # ✅ 수정: 작업 7 - 주간 누적 엑셀 저장
-    log_info("\n[작업 7/8] 주간 누적 엑셀 저장 중...")
+    log_info("\n[작업 7/9] 주간 누적 엑셀 저장 중...")
     excel_path = safe_execute(
         lambda: save_analysis_to_weekly_excel(analyzed_results),
         error_msg="엑셀 저장 실패",
@@ -5776,7 +5789,7 @@ def run_daily_collection(ai_model: str = None):
         log_info(f"  ✅ 주간 누적 저장: {excel_path}")
     
     # ✅ 수정: 작업 8 - 주간 키워드 통계 저장
-    log_info("\n[작업 8/8] 주간 키워드 통계 저장 중...")
+    log_info("\n[작업 8/9] 주간 키워드 통계 저장 중...")
     keyword_excel_path = safe_execute(
         lambda: save_keyword_summary_to_weekly_excel(),
         error_msg="키워드 통계 저장 실패",
@@ -5785,7 +5798,21 @@ def run_daily_collection(ai_model: str = None):
     
     if keyword_excel_path:
         log_info(f"  ✅ 키워드 통계 저장: {keyword_excel_path}")
-    
+
+    # ✅ 작업 9 - RAG 임베딩 자동 실행 (분석 완료 기사 즉시 벡터화)
+    # rag_search가 news_engine을 import하므로 순환 참조 방지를 위해 lazy import 사용
+    log_info("\n[작업 9/9] RAG 임베딩 자동 처리 중...")
+    _embedded_count = 0
+    try:
+        from rag_search import embed_unprocessed_articles as _embed_fn
+        # 오늘 분석된 기사(최대 20건) + 미임베딩 여유분까지 한 배치(50건)로 처리
+        _embedded_count = _embed_fn(limit=50)
+        if _embedded_count > 0:
+            log_info(f"   ✅ 임베딩 완료: {_embedded_count}건 신규 추가")
+        else:
+            log_info("   ℹ️  신규 임베딩 대상 없음 (이미 처리됨)")
+    except Exception as _emb_err:
+        log_warning(f"   ⚠️ 임베딩 처리 중 오류 (파이프라인에 영향 없음): {_emb_err}")
 
     log_info("\n" + "=" * 60)
     log_info(f"✅ 일일 뉴스 수집 및 분석이 완료되었습니다! (사용 모델: {ai_model.upper()})")
@@ -5794,8 +5821,9 @@ def run_daily_collection(ai_model: str = None):
     log_info(f"   - AI 선별 (중복 제거 후): {len(news_to_analyze)}개")
     log_info(f"   - 심층 분석: {len(analyzed_results)}개")
     log_info(f"   - 추가 수집 뉴스: {len(other_news)}개")
+    log_info(f"   - RAG 임베딩 추가: {_embedded_count}건")
     log_info("=" * 60)
-    
+
     return analyzed_results
 
 def run_weekly_report():
