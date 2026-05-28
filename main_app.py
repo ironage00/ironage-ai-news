@@ -119,54 +119,81 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ===== Google OAuth 인증 =====
-# st.user (Streamlit 1.37.0+) — st.experimental_user는 1.50.0에서 제거됨.
-# [auth.google] / [auth.microsoft] 등 provider 섹션이 있어야 st.login() 호출 가능.
-# provider 미설정 시 _auth_enabled=False → 로컬/테스트 모드로 폴백.
-_auth_enabled = False
-try:
-    if hasattr(st, 'user') and hasattr(st.user, 'is_logged_in'):
-        # OAuth provider 실설정 여부 확인 — [auth.google] 등이 없으면 st.login() 실패
-        try:
-            _auth_cfg = dict(st.secrets.get("auth", {}))
-            _has_provider = any(
-                k in _auth_cfg for k in ("google", "microsoft", "okta", "auth0")
+# ===== 인증 (패스워드 + 이메일 기반) =====
+# secrets에 APP_PASSWORD 설정 시 로그인 화면 표시.
+# 미설정 시 로컬 개발 모드로 자동 폴백.
+# 관리자: ADMIN_PASSWORD (별도) 또는 ADMIN_EMAILS 목록과 일치.
+
+_AUTH_PASSWORD  = st.secrets.get("APP_PASSWORD", "")   # 일반 접속 비밀번호
+_ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", _AUTH_PASSWORD)  # 관리자 비밀번호
+
+# 로그인 상태 확인
+_logged_in   = st.session_state.get("_logged_in", False)
+_user_email  = st.session_state.get("_user_email", "")
+
+if _AUTH_PASSWORD and not _logged_in:
+    # ── 로그인 화면 ──────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .login-box { max-width: 400px; margin: 80px auto; padding: 2rem;
+                 background: #1e1e2e; border-radius: 12px;
+                 box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    </style>
+    """, unsafe_allow_html=True)
+
+    _lc1, _lc2, _lc3 = st.columns([1, 2, 1])
+    with _lc2:
+        st.markdown("## 🔐 IRONAGE AI Analytics")
+        st.markdown("##### TTA ICT 뉴스 인텔리전스 시스템")
+        st.markdown("---")
+        _inp_email = st.text_input(
+            "이메일 (예: hong@tta.or.kr)",
+            placeholder="yourname@tta.or.kr",
+            key="_login_email",
+        )
+        _inp_pw = st.text_input(
+            "접속 비밀번호",
+            type="password",
+            key="_login_pw",
+        )
+        if st.button("🔑 로그인", use_container_width=True, type="primary"):
+            # 이메일 도메인 검사 (비어 있으면 로컬 계정으로 처리)
+            _email_ok = (
+                _inp_email.strip().endswith("@tta.or.kr")
+                or _inp_email.strip() == ""
             )
-            _auth_enabled = _has_provider
-        except Exception:
-            _auth_enabled = False
-except Exception:
-    _auth_enabled = False
+            _pw_ok = _inp_pw in (_AUTH_PASSWORD, _ADMIN_PASSWORD)
+            if _pw_ok and _email_ok:
+                _final_email = _inp_email.strip() or "local@tta.or.kr"
+                st.session_state["_logged_in"]  = True
+                st.session_state["_user_email"] = _final_email
+                # 관리자 비밀번호로 로그인하거나 관리자 이메일이면 admin 플래그 설정
+                st.session_state["_session_is_admin"] = (
+                    _inp_pw == _ADMIN_PASSWORD or
+                    _final_email in {"ironage@tta.or.kr", "local@tta.or.kr"}
+                )
+                st.rerun()
+            elif not _email_ok:
+                st.error("❌ @tta.or.kr 이메일 주소만 접속 가능합니다.")
+            else:
+                st.error("❌ 비밀번호가 올바르지 않습니다.")
+        st.caption("@tta.or.kr 계정만 접속 가능합니다.")
+    st.stop()
 
-if _auth_enabled:
-    if not st.user.is_logged_in:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown("## IRONAGE AI Analytics")
-            st.markdown("### TTA ICT 뉴스 인텔리전스 시스템")
-            st.markdown("---")
-            if st.button("🔑 Google 계정으로 로그인", use_container_width=True, type="primary"):
-                st.login()
-            st.caption("@tta.or.kr 계정만 접속 가능합니다.")
-        st.stop()
+# 인증 완료 또는 로컬 모드
+if not _user_email:
+    # 로컬 개발 모드 (APP_PASSWORD 미설정) 또는 세션 만료 복구
+    _user_email = "local@tta.or.kr"
+    st.session_state["_user_email"] = _user_email
 
-    _user_email = st.user.email or ""
-    _user_name  = st.user.name  or _user_email
+_user_name = _user_email.split("@")[0]
 
-    if not _user_email.endswith("@tta.or.kr"):
-        st.error(f"접근 거부: {_user_email} 은(는) TTA 임직원 계정이 아닙니다.")
-        st.info("@tta.or.kr 계정으로 다시 로그인해 주세요.")
-        if st.button("로그아웃"):
-            st.logout()
-        st.stop()
-else:
-    # 로컬 개발 모드 또는 OAuth 미설정 — 테스트 유저 전환 가능
-    _user_email = st.session_state.get("_test_user_email", "local@tta.or.kr")
-    _user_name  = f"[테스트] {_user_email.split('@')[0]}"
-
-# 관리자 이메일 목록 — 운영 관리/시스템 설정 탭 접근 가능
+# 관리자 판정 — 이메일 목록 일치 OR 로그인 시 관리자 비밀번호 사용
 _ADMIN_EMAILS = {"ironage@tta.or.kr", "local@tta.or.kr"}
-_is_admin = _user_email in _ADMIN_EMAILS
+_is_admin = (
+    _user_email in _ADMIN_EMAILS
+    or st.session_state.get("_session_is_admin", False)
+)
 
 # ── 단(Unit) 감지 ──────────────────────────────────────────────────────────────
 # 이메일이 바뀔 때마다 (테스트 전환 포함) unit 정보를 새로 로드한다.
