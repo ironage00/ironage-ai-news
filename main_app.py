@@ -637,19 +637,17 @@ CONFIG_FILE = Path("data/config.json")
 
 
 def load_config():
-    """설정 로드"""
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
+    """설정 로드.
+    우선순위: ① Streamlit Secrets (환경변수) → ② data/config.json → ③ 하드코딩 기본값
+    Streamlit Cloud는 파일시스템이 재시작마다 초기화되므로 Secrets가 최우선.
+    """
+    # ① Streamlit Secrets / 환경변수 기반 기본값
+    base = {
         'ai_model': 'openai',
         'openai_api_key': OPENAI_API_KEY,
-        'claude_api_key': '',
-        'gemini_api_key': '',
-        'perplexity_api_key': '',
+        'claude_api_key': os.environ.get('CLAUDE_API_KEY', ''),
+        'gemini_api_key': os.environ.get('GEMINI_API_KEY', ''),
+        'perplexity_api_key': os.environ.get('PERPLEXITY_API_KEY', ''),
         'naver_client_id': NAVER_CLIENT_ID,
         'naver_client_secret': NAVER_CLIENT_SECRET,
         'gmail_sender': SENDER_EMAIL,
@@ -659,16 +657,41 @@ def load_config():
         'naver_queries': NAVER_QUERIES,
         'schedule_daily': '09:00',
         'schedule_weekly': 'Monday 09:00',
-        'schedule_monthly': '1 09:00'
+        'schedule_monthly': '1 09:00',
     }
+    # ② data/config.json이 있으면 덮어쓰기 (로컬 커스텀 설정)
+    # 단, API 키가 비어 있으면 Secrets 값 유지
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                # API 키 항목은 비어있으면 Secrets 값 우선
+                if k.endswith('_key') or k.endswith('_id') or k.endswith('_secret'):
+                    if v:
+                        base[k] = v
+                else:
+                    base[k] = v
+        except Exception:
+            pass
+    return base
 
 
 def save_config(cfg):
-    """설정 저장"""
+    """설정 저장 — 파일 + news_engine.CONFIG 인메모리 딕셔너리 동시 반영"""
     CONFIG_FILE.parent.mkdir(exist_ok=True)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    # 설정 변경 시 AI 클라이언트 캐시 초기화 (API 키 변경 반영)
+
+    # ★ news_engine.CONFIG 인메모리 딕셔너리를 즉시 업데이트
+    # (모듈 로드 시 한 번만 읽히므로, 파일 저장만으로는 현재 세션에 반영 안 됨)
+    try:
+        import news_engine as _ne
+        _ne.CONFIG.update(cfg)
+    except Exception:
+        pass  # 임포트 실패 시 무시 — 다음 재시작에 반영됨
+
+    # 클라이언트 캐시 초기화 (새 API 키로 재생성 유도)
     clear_clients_cache()
 
 
