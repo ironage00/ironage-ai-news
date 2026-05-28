@@ -4,6 +4,21 @@ data/config.json
 credentials.json
 token.json
 ironage-sa.json
+streamlit_secrets.toml
+secrets.toml
+
+# 로컬 로그/디버그
+streamlit_err.log
+streamlit_out.log
+scripts/_dbg*.txt
+scripts/_patch_*.txt
+scripts/_patch_*.py
+scripts/_transform_*.py
+
+# Claude/IDE
+.claude/
+.gstack/
+lib/
 
 # 데이터
 data/news.db
