@@ -1088,13 +1088,13 @@ if selected == "🏠 홈":
 
 # ===== 📰 뉴스 현황 페이지 =====
 elif selected == "📰 뉴스 현황":
-    import pandas as _pd_nv
-    from collections import Counter as _nv_Cnt
+    from itertools import groupby as _nv_groupby
 
     st.markdown('<h1 class="main-header">📰 뉴스 파이프라인 현황</h1>', unsafe_allow_html=True)
     st.markdown("수집 → 선별 → 분석 각 단계의 기사를 한눈에 확인합니다.")
     st.markdown("---")
 
+    # ── 필터 행 ──────────────────────────────────────────────────────────────────
     # ── 필터 행 ──────────────────────────────────────────────────────────────────
     _nv_f1, _nv_f2, _nv_f3 = st.columns([2, 2, 3])
     with _nv_f1:
@@ -1142,156 +1142,122 @@ elif selected == "📰 뉴스 현황":
             if not kw:
                 return True
             kw_l = kw.lower()
-            title_ok  = kw_l in (a.get('title')  or '').lower()
-            source_ok = kw_l in (a.get('source') or '').lower()
-            kw_ok = False
+            if kw_l in (a.get('title')  or '').lower(): return True
+            if kw_l in (a.get('source') or '').lower(): return True
             try:
-                _kws = json.loads(a.get('extracted_keywords') or '[]')
-                kw_ok = any(kw_l in str(k).lower() for k in _kws)
+                return any(kw_l in str(k).lower()
+                           for k in json.loads(a.get('extracted_keywords') or '[]'))
             except Exception:
-                pass
-            return title_ok or source_ok or kw_ok
+                return False
 
         _nv_filtered = [a for a in _nv_all if _nv_match(a, _nv_search)]
 
-        # ── 상태 레이블 / 배지색 ─────────────────────────────────────────────────
-        def _nv_status_label(a):
+        # ── 상태 배지 색 ────────────────────────────────────────────────────────
+        def _nv_badge(a):
             if a.get('is_analyzed'):
-                return '🔬 분석완료', '#1976D2', '#E3F2FD'
+                return '🔬 분석완료', '#1976D2'
             if (a.get('quality_score') or 0) > 0.5:
-                return '✅ 선별됨',   '#388E3C', '#E8F5E9'
-            return '📥 수집됨',       '#757575', '#FAFAFA'
+                return '✅ 선별됨',   '#388E3C'
+            return '📥 수집됨',       '#757575'
 
-        # ── HTML 테이블 (제목 = 원문 링크, 행 색상 구분) ─────────────────────────
-        _nv_display = _nv_filtered[:200]   # 최대 200건 표시
-        _nv_rows_html = []
-        for _a in _nv_display:
-            _title   = (_a.get('title')  or '제목 없음')
-            _url     = _a.get('link')    or '#'
-            _src     = (_a.get('source') or '')
-            _dt      = (_a.get('collected_at') or '')[:16]
-            _unit    = get_unit_display_name(_a['unit_id']) if _a['unit_id'] else '미분류'
-            _score   = _a.get('quality_score') or 0
-            _pct     = int(_score * 100)
-            _lbl, _badge_color, _row_bg = _nv_status_label(_a)
+        # ── 카드 HTML 생성 함수 (AI 검색 결과 스타일) ──────────────────────────
+        def _nv_card(a):
+            title  = (a.get('title')  or '제목 없음')
+            url    = a.get('link')    or '#'
+            src    = a.get('source')  or ''
+            dt     = (a.get('collected_at') or '')[:16]
+            unit   = get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류'
+            score  = a.get('quality_score') or 0
+            lbl, bc = _nv_badge(a)
+            pct    = int(score * 100)
 
-            # 분석완료면 제목 색상을 진하게
-            _title_style = 'font-weight:600; color:#1565C0;' if _a.get('is_analyzed') else 'color:#212121;'
+            # 분석완료면 제목 파란색
+            title_color = '#1565C0' if a.get('is_analyzed') else '#1e293b'
+            title_weight = '700' if a.get('is_analyzed') else '600'
 
-            _nv_rows_html.append(f"""
-<tr style="background:{_row_bg}; border-bottom:1px solid #e0e0e0;">
-  <td style="padding:7px 10px; font-size:12px; color:#888; white-space:nowrap;">{_dt}</td>
-  <td style="padding:7px 10px; max-width:480px;">
-    <a href="{_url}" target="_blank"
-       style="{_title_style} text-decoration:none; font-size:13px; line-height:1.4;"
-       title="{_title}">{_title[:80]}</a>
-  </td>
-  <td style="padding:7px 10px; font-size:12px; color:#555; white-space:nowrap;">{_src}</td>
-  <td style="padding:7px 10px; font-size:12px; color:#555; white-space:nowrap;">{_unit}</td>
-  <td style="padding:7px 10px; white-space:nowrap;">
-    <div style="display:flex; align-items:center; gap:4px;">
-      <div style="background:#e0e0e0; border-radius:3px; width:48px; height:8px;">
-        <div style="background:#42A5F5; width:{_pct}%; height:100%; border-radius:3px;"></div>
-      </div>
-      <span style="font-size:11px; color:#666;">{_score:.2f}</span>
-    </div>
-  </td>
-  <td style="padding:7px 10px; white-space:nowrap;">
-    <span style="background:{_badge_color}; color:#fff; padding:2px 7px;
-                 border-radius:10px; font-size:11px;">{_lbl}</span>
-  </td>
-</tr>""")
+            # 분석 본문 (있으면 200자 요약)
+            body_block = ''
+            if a.get('is_analyzed'):
+                raw = (a.get('analysis_result') or '').strip()
+                snippet = raw[:250] + ('…' if len(raw) > 250 else '') if raw else ''
+                if snippet:
+                    body_block = (
+                        f'<div style="margin-top:8px;font-size:0.84rem;color:#475569;'
+                        f'line-height:1.6;border-top:1px solid #f1f5f9;padding-top:7px;">'
+                        f'{snippet}</div>'
+                    )
 
-        _nv_table_html = f"""
-<div style="overflow-x:auto; max-height:520px; overflow-y:auto;
-            border:1px solid #e0e0e0; border-radius:8px;">
-  <table style="width:100%; border-collapse:collapse; font-family:sans-serif;">
-    <thead>
-      <tr style="background:#F5F5F5; position:sticky; top:0; z-index:1;">
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd; white-space:nowrap;">수집시각</th>
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd;">제목 (클릭 시 원문 이동)</th>
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd;">출처</th>
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd;">단</th>
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd;">품질</th>
-        <th style="padding:9px 10px; text-align:left; font-size:12px;
-                   color:#555; border-bottom:2px solid #ddd;">상태</th>
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(_nv_rows_html)}
-    </tbody>
-  </table>
+            # 품질 점수 바
+            score_bar = (
+                f'<div style="display:inline-flex;align-items:center;gap:3px;'
+                f'vertical-align:middle;">'
+                f'<div style="background:#e0e0e0;border-radius:3px;width:36px;height:7px;">'
+                f'<div style="background:#42A5F5;width:{pct}%;height:100%;border-radius:3px;"></div>'
+                f'</div>'
+                f'<span style="font-size:11px;color:#94a3b8;">{score:.2f}</span>'
+                f'</div>'
+            )
+
+            return f"""
+<div style="border:1px solid #e2e8f0;border-radius:10px;padding:13px 16px;
+            margin-bottom:8px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+    <span style="font-size:0.75rem;background:{bc};color:#fff;
+                 border-radius:4px;padding:2px 7px;">{lbl}</span>
+    <span style="font-size:0.75rem;color:#64748b;">출처: {src}</span>
+    <span style="font-size:0.75rem;color:#64748b;">단: {unit}</span>
+    <span style="font-size:0.75rem;color:#94a3b8;">{dt}</span>
+    {score_bar}
+    <a href="{url}" target="_blank"
+       style="color:#005aab;font-size:0.82rem;text-decoration:none;margin-left:auto;">
+       🔗 원문</a>
+  </div>
+  <div style="font-weight:{title_weight};color:{title_color};
+              font-size:0.95rem;line-height:1.5;">
+    <a href="{url}" target="_blank"
+       style="color:{title_color};text-decoration:none;">{title}</a>
+  </div>
+  {body_block}
 </div>"""
-        st.markdown(_nv_table_html, unsafe_allow_html=True)
 
-        _nv_kw_note = f'  ·  검색어: "{_nv_search}"' if _nv_search else ''
-        _cnt_analyzed = sum(1 for a in _nv_filtered if a.get('is_analyzed'))
-        _cnt_sel      = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
-        _cnt_raw      = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) <= 0.5)
-        st.caption(
-            f"총 {len(_nv_filtered):,}건{_nv_kw_note}"
-            f"  |  🔬 분석완료 {_cnt_analyzed}건"
-            f"  ·  ✅ 선별됨 {_cnt_sel}건"
-            f"  ·  📥 수집됨 {_cnt_raw}건"
-            + (f"  (상위 200건 표시)" if len(_nv_filtered) > 200 else "")
+        # ── 일자별 그룹 렌더링 ──────────────────────────────────────────────────
+        # collected_at 기준 내림차순 정렬
+        _nv_sorted = sorted(
+            _nv_filtered,
+            key=lambda x: x.get('collected_at') or '',
+            reverse=True,
         )
 
-        # ── 분석 결과 expander (분석완료 기사만) ─────────────────────────────────
-        _nv_analyzed_filtered = [a for a in _nv_filtered if a.get('is_analyzed')]
-        if _nv_analyzed_filtered:
-            st.markdown("---")
-            st.markdown(f"#### 🔬 분석 결과  ({len(_nv_analyzed_filtered):,}건)")
-            st.caption("아래 항목을 클릭하면 AI 분석 내용이 펼쳐집니다.")
+        _nv_kw_note = f'  검색어: **"{_nv_search}"** · ' if _nv_search else ''
+        _cnt_a = sum(1 for a in _nv_filtered if a.get('is_analyzed'))
+        _cnt_s = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
+        _cnt_r = sum(1 for a in _nv_filtered if not a.get('is_analyzed') and (a.get('quality_score') or 0) <= 0.5)
+        st.caption(
+            f"{_nv_kw_note}총 **{len(_nv_filtered):,}건**"
+            f"  |  🔬 분석완료 {_cnt_a}건  ·  ✅ 선별됨 {_cnt_s}건  ·  📥 수집됨 {_cnt_r}건"
+        )
 
-            # 단별 집계
-            _nv_ucnt = _nv_Cnt(
-                get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류'
-                for a in _nv_analyzed_filtered
+        # itertools.groupby 로 날짜별 분리
+        for _date_key, _day_iter in _nv_groupby(
+            _nv_sorted, key=lambda x: (x.get('collected_at') or '')[:10]
+        ):
+            _day_list = list(_day_iter)
+            _day_a = sum(1 for a in _day_list if a.get('is_analyzed'))
+            _day_s = sum(1 for a in _day_list if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
+            _day_r = len(_day_list) - _day_a - _day_s
+
+            st.markdown(
+                f"**📅 {_date_key}** &nbsp; "
+                f"<span style='font-size:0.82rem;color:#666;'>"
+                f"총 {len(_day_list)}건 &nbsp;·&nbsp; "
+                f"🔬 {_day_a} &nbsp;·&nbsp; ✅ {_day_s} &nbsp;·&nbsp; 📥 {_day_r}"
+                f"</span>",
+                unsafe_allow_html=True,
             )
-            if _nv_ucnt:
-                _nv_uc_cols = st.columns(min(len(_nv_ucnt), 5))
-                for _ci, (_uname, _ucnt) in enumerate(
-                    sorted(_nv_ucnt.items(), key=lambda x: -x[1])
-                ):
-                    _nv_uc_cols[_ci % len(_nv_uc_cols)].metric(_uname, f"{_ucnt}건")
-
-            for _a in _nv_analyzed_filtered:
-                _a_title = (_a.get('title') or '제목 없음')
-                _a_src   = _a.get('source') or ''
-                _a_time  = (_a.get('collected_at') or '')[:16]
-                _a_url   = _a.get('link') or '#'
-
-                # 키워드 배지
-                _kw_tags = ''
-                try:
-                    _kws = json.loads(_a.get('extracted_keywords') or '[]')
-                    _kw_tags = '  '.join(f'`{k}`' for k in _kws[:6]) if _kws else ''
-                except Exception:
-                    pass
-
-                with st.expander(
-                    f"🔬 **{_a_title[:75]}**  ·  {_a_src}  ·  {_a_time}",
-                    expanded=False,
-                ):
-                    # 원문 링크를 expander 맨 위에도 노출
-                    st.markdown(
-                        f'<a href="{_a_url}" target="_blank" '
-                        f'style="font-size:13px; font-weight:600; color:#1565C0; '
-                        f'text-decoration:none;">🔗 {_a_title}</a>',
-                        unsafe_allow_html=True,
-                    )
-                    if _kw_tags:
-                        st.markdown(f"**키워드**: {_kw_tags}")
-                    st.markdown("---")
-                    if _a.get('analysis_result'):
-                        st.markdown(_a['analysis_result'])
-                    else:
-                        st.caption("분석 결과 없음")
+            st.markdown(
+                '\n'.join(_nv_card(a) for a in _day_list),
+                unsafe_allow_html=True,
+            )
 
 
 # ===== AI 검색 (RAG) 페이지 =====
