@@ -175,6 +175,9 @@ if _AUTH_PASSWORD and not _logged_in:
                     _inp_pw == _ADMIN_PASSWORD or
                     _final_email in {"ironage@tta.or.kr", "local@tta.or.kr"}
                 )
+                # 접속 시작 시각 저장 (로그아웃 시 세션 시간 계산용)
+                import time as _time
+                st.session_state["_login_at"] = _time.time()
                 # 접속 로그 기록
                 try:
                     log_user_activity(_final_email, 'login', {
@@ -726,7 +729,17 @@ with st.sidebar:
     if st.secrets.get("APP_PASSWORD", ""):
         if st.button("🚪 로그아웃", use_container_width=True, key="sidebar_logout"):
             try:
-                log_user_activity(_user_email, 'logout')
+                import time as _time
+                _login_at  = st.session_state.get("_login_at")
+                _duration  = int(_time.time() - _login_at) if _login_at else None
+                _dur_str   = (
+                    f"{_duration // 3600}시간 {(_duration % 3600) // 60}분 {_duration % 60}초"
+                    if _duration is not None else "알 수 없음"
+                )
+                log_user_activity(_user_email, 'logout', {
+                    'session_seconds': _duration,
+                    'session_duration': _dur_str,
+                })
             except Exception:
                 pass
             st.session_state.clear()
