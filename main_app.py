@@ -1175,16 +1175,33 @@ elif selected == "📰 뉴스 현황":
             title_color = '#1565C0' if a.get('is_analyzed') else '#1e293b'
             title_weight = '700' if a.get('is_analyzed') else '600'
 
-            # 분석 본문 (있으면 200자 요약)
+            # 분석 본문 (요약 250자 + 전체 보기 토글)
+            import html as _html_mod
             body_block = ''
             if a.get('is_analyzed'):
                 raw = (a.get('analysis_result') or '').strip()
-                snippet = raw[:250] + ('…' if len(raw) > 250 else '') if raw else ''
-                if snippet:
+                if raw:
+                    snippet = raw[:250] + ('…' if len(raw) > 250 else '')
+                    # HTML 특수문자 이스케이프 + 줄바꿈 보존
+                    full_html = _html_mod.escape(raw).replace('\n', '<br>')
+                    toggle_block = ''
+                    if len(raw) > 250:
+                        toggle_block = (
+                            f'<details style="margin-top:5px;">'
+                            f'<summary style="cursor:pointer;font-size:0.81rem;'
+                            f'color:#1976D2;padding:3px 0;user-select:none;'
+                            f'list-style:none;outline:none;">'
+                            f'▶ 분석 내용 전체 보기</summary>'
+                            f'<div style="margin-top:8px;font-size:0.84rem;color:#334155;'
+                            f'line-height:1.75;border-top:1px solid #e2e8f0;'
+                            f'padding-top:8px;">{full_html}</div>'
+                            f'</details>'
+                        )
                     body_block = (
                         f'<div style="margin-top:8px;font-size:0.84rem;color:#475569;'
                         f'line-height:1.6;border-top:1px solid #f1f5f9;padding-top:7px;">'
                         f'{snippet}</div>'
+                        f'{toggle_block}'
                     )
 
             # 품질 점수 바
