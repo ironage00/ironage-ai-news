@@ -85,11 +85,10 @@ CLAUDE_MODEL_DEFAULT = "claude-sonnet-4-6"
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 
-# Google Drive 보고서 저장 폴더 ID (공유 드라이브)
+# Google Drive 보고서 저장 폴더 ID (공유 드라이브 > 99_일일동향 폴더)
 # https://drive.google.com/drive/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT
+# ※ 이 폴더 ID 자체가 "99_일일동향"이므로 하위 폴더 생성 없이 직접 저장
 REPORT_FOLDER_ID = "15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT"
-# 일일 동향 보고서 저장 하위 폴더명 (REPORT_FOLDER_ID 안에 자동 생성)
-DAILY_SUBFOLDER_NAME = "99_일일동향"
 
 # ==============================================================================
 # --- SSL 경고 무시 설정 ---
@@ -3227,14 +3226,11 @@ def generate_google_doc_report(analyzed_data, unit_name=None, unit_display=None)
 
     try:
         try:
-            # 99_일일동향 하위 폴더에 저장
-            _daily_folder_id = _get_or_create_subfolder(
-                drive_service, REPORT_FOLDER_ID, DAILY_SUBFOLDER_NAME
-            )
+            # REPORT_FOLDER_ID = 99_일일동향 폴더에 직접 저장
             file_meta = {
                 'name': document_title,
                 'mimeType': 'application/vnd.google-apps.document',
-                'parents': [_daily_folder_id],
+                'parents': [REPORT_FOLDER_ID],
             }
             _created_file = drive_service.files().create(
                 body=file_meta,
