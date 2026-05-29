@@ -3226,11 +3226,22 @@ def generate_google_doc_report(analyzed_data, unit_name=None, unit_display=None)
 
     try:
         try:
-            # REPORT_FOLDER_ID = 99_일일동향 폴더에 직접 저장
+            # 단별 하위 폴더 결정: 99_일일동향 > 01_표준기획단 / 02_표준혁신단 / 03_AI융합표준단 / 04_전파네트워크표준단
+            _unit_folder_name = _UNIT_DRIVE_FOLDER_MAP.get(unit_name or '')
+            if _unit_folder_name:
+                _target_folder_id = _get_or_create_subfolder(
+                    drive_service, REPORT_FOLDER_ID, _unit_folder_name
+                )
+                log_info(f"  > 저장 폴더: 99_일일동향 > {_unit_folder_name}")
+            else:
+                # unit_name 미지정 시 99_일일동향 직접 저장
+                _target_folder_id = REPORT_FOLDER_ID
+                log_info(f"  > 저장 폴더: 99_일일동향 (단 미지정)")
+
             file_meta = {
                 'name': document_title,
                 'mimeType': 'application/vnd.google-apps.document',
-                'parents': [REPORT_FOLDER_ID],
+                'parents': [_target_folder_id],
             }
             _created_file = drive_service.files().create(
                 body=file_meta,
@@ -5249,6 +5260,14 @@ _UNIT_EMAIL_SUBJECT_MAP = {
     'standards_innovation': '표준혁신 동향 보고서',
     'ai_convergence':       'AI 융합 동향 보고서',
     'radio_network':        '전파·네트워크 동향 보고서',
+}
+
+# Google Drive 99_일일동향 하위 단별 저장 폴더명
+_UNIT_DRIVE_FOLDER_MAP = {
+    'standards_planning':   '01_표준기획단',
+    'standards_innovation': '02_표준혁신단',
+    'ai_convergence':       '03_AI융합표준단',
+    'radio_network':        '04_전파네트워크표준단',
 }
 
 
