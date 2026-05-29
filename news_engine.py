@@ -4994,6 +4994,16 @@ def setup_windows_schedule():
     monthly_day = CONFIG.get('schedule_monthly', '1 09:00').split()[0]
     monthly_time= CONFIG.get('schedule_monthly', '1 09:00').split()[-1]
 
+    # schtasks /D 는 3자리 영문 요일만 허용 (MON, TUE, WED …)
+    _day_map = {
+        'monday': 'MON', 'tuesday': 'TUE', 'wednesday': 'WED',
+        'thursday': 'THU', 'friday': 'FRI', 'saturday': 'SAT', 'sunday': 'SUN',
+    }
+    weekly_day_code = _day_map.get(weekly_day.lower(), weekly_day.upper()[:3])
+
+    # /SD 날짜 형식: 한국 Windows = yyyy/mm/dd
+    start_date = datetime.date.today().strftime("%Y/%m/%d")
+
     tasks = [
         {
             'name':     'IRONAGE_Daily',
@@ -5004,7 +5014,7 @@ def setup_windows_schedule():
         {
             'name':     'IRONAGE_Weekly',
             'cmd':      f'"{python_exe}" "{script_path}" weekly',
-            'schedule': f'/SC WEEKLY /D {weekly_day.upper()} /ST {weekly_time}',
+            'schedule': f'/SC WEEKLY /D {weekly_day_code} /ST {weekly_time}',
             'desc':     '주간 트렌드 리포트 생성',
         },
         {
@@ -5031,7 +5041,7 @@ def setup_windows_schedule():
             f'/TR "{task["cmd"]}" '
             f'{task["schedule"]} '
             f'/RL HIGHEST /F '
-            f'/SD {datetime.date.today().strftime("%m/%d/%Y")}'
+            f'/SD {start_date}'
         )
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if result.returncode == 0:
