@@ -1,9 +1,7 @@
 name: Daily News Collection
 
 on:
-  schedule:
-    - cron: '0 0 * * *'    # 매일 09:00 KST (= 00:00 UTC)
-  workflow_dispatch:        # 수동 실행
+  workflow_dispatch:        # cron-job.org 또는 수동 실행
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
