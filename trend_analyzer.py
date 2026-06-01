@@ -667,11 +667,15 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
             body={'requests': blocks[::-1]}
         ).execute()
 
-        # 공유 설정
-        drive_service.permissions().create(
-            fileId=doc_id,
-            body={'type': 'anyone', 'role': 'reader'}
-        ).execute()
+        # 공유 설정 (공유 드라이브 파일은 supportsAllDrives=True 필수)
+        try:
+            drive_service.permissions().create(
+                fileId=doc_id,
+                body={'type': 'anyone', 'role': 'reader'},
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as pe:
+            log_warning(f"  ⚠️ 공유 설정 실패 (문서는 생성됨): {pe}")
 
         log_info(f"  ✅ 공유 드라이브 폴더에 구글 문서 생성 완료: {doc_url}")
         return doc_url, report_title

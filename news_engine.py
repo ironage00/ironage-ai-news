@@ -118,8 +118,9 @@ file_handler.setLevel(logging.INFO)
 file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 file_handler.setFormatter(file_formatter)
 
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
 
 def log_info(message):
     logger.info(message)
@@ -133,9 +134,10 @@ def log_error(message):
     logger.error(message)
     sys.stdout.flush()
 
-log_info("=" * 60)
-log_info("IRONAGE AI Analytics System v5.0 초기화 중...")
-log_info("=" * 60)
+if __name__ == '__main__':
+    log_info("=" * 60)
+    log_info("IRONAGE AI Analytics System v5.0 초기화 중...")
+    log_info("=" * 60)
 
 # ==============================================================================
 # --- 예외 클래스 정의 ---
