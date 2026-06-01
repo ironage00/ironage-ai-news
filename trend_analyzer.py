@@ -281,8 +281,8 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
         validation_prompt_builder=build_validation_prompt,
         initial_system=initial_system,
         validation_system=validation_system,
-        max_tokens_initial=2500,
-        max_tokens_validation=2500,
+        max_tokens_initial=3000,
+        max_tokens_validation=4096,
     )
 
     if not analysis_result:
@@ -442,8 +442,8 @@ def analyze_monthly_trends(articles: List[Dict]) -> Dict:
         validation_prompt_builder=build_validation_prompt,
         initial_system=initial_system,
         validation_system=validation_system,
-        max_tokens_initial=3000,
-        max_tokens_validation=3000,
+        max_tokens_initial=3500,
+        max_tokens_validation=5000,
     )
 
     if not analysis_result:
