@@ -1799,8 +1799,27 @@ def filter_news_by_ai(
     current_api_key = api_key_map.get(ai_model, '')
     
     if not current_api_key or current_api_key.startswith("YOUR_"):
-        log_warning(f"  ⚠️ {ai_model.upper()} API 키가 없어 뉴스 선별을 건너뛰고 최신 뉴스 {max_results}개를 반환합니다.")
-        return news_items[:max_results]
+        log_warning(f"  ⚠️ {ai_model.upper()} API 키가 없어 AI 선별을 건너뜁니다. Stage 1 키워드 필터만 적용합니다.")
+        # API 키 없어도 Stage 1 키워드 필터는 반드시 적용 (비ICT 기사 차단)
+        _ict_kws = CONFIG.get('ict_keywords') or DEFAULT_ICT_KEYWORDS
+        _ict_kws_lower = [kw.lower() for kw in _ict_kws]
+        if unit_keywords:
+            _unit_kws_lower = [kw.lower() for kw in unit_keywords]
+            _fallback = [
+                item for item in news_items
+                if any(kw in item['title'].lower() for kw in _unit_kws_lower)
+                and any(mk in item['title'].lower() for mk in [
+                    '통신', '5g', '6g', 'lte', '주파수', '전파', '표준', '표준화', 'ict',
+                    '정보통신', '인공지능', '반도체', '클라우드', '사이버', '위성', '네트워크',
+                ])
+            ]
+            if not _fallback:
+                _fallback = [item for item in news_items if any(kw in item['title'].lower() for kw in _unit_kws_lower)]
+        else:
+            _fallback = [item for item in news_items if any(kw in item['title'].lower() for kw in _ict_kws_lower)]
+        result = _fallback[:max_results] or news_items[:max_results]
+        log_warning(f"  ⚠️ 키워드 필터 후 {len(result)}개 반환 (AI 선별 미적용)")
+        return result
 
     # =========================================================================
     # Stage 1: ICT 키워드 사전 필터
@@ -5620,8 +5639,19 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
             selected = news_items[:20]
 
         # ── 4. 심층 분석 (최대 20개) ────────────────────────────────
-        # 대체 풀: AI가 선별한 21~50위 기사만 사용 (필터링 안 된 원본 풀 제외)
+        # 대체 풀: AI 선별 21~50위 + 선별 부족 시 DB 기존 미분석 기사 보강
         _pool = selected[20:]
+        if len(selected) < 25:
+            # 선별 기사가 부족하면 DB에서 해당 단의 미분석 기사를 추가 확보
+            try:
+                _db_extra = load_news_from_db(days=3, unit_id=unit_id, is_analyzed=False)
+                _selected_links = {x['link'] for x in selected}
+                _db_extra = [x for x in _db_extra if x['link'] not in _selected_links]
+                if _db_extra:
+                    _pool = _pool + _db_extra[:30]
+                    log_info(f"   📦 대체 풀 보강: DB 미분석 {len(_db_extra[:30])}개 추가 (선별 {len(selected)}개 부족)")
+            except Exception as _e:
+                log_warning(f"   ⚠️ 대체 풀 DB 보강 실패 (무시): {_e}")
         try:
             analyzed = analyze_news_with_replacement(
                 selected[:20], _pool, target_count=20, ai_model=ai_model
