@@ -781,7 +781,7 @@ with st.sidebar:
         st.markdown("---")
     # ─────────────────────────────────────────────────────────────────────────
 
-    _user_options = ["🏠 홈", "📰 뉴스 현황", "🔍 AI 검색", "📊 인텔리전스", "⚙️ 내 설정"]
+    _user_options = ["🏠 홈", "📰 뉴스 현황", "🔍 AI 검색", "📊 인텔리전스", "⚙️ 단별 설정"]
     _admin_options = ["⚙️ 시스템 설정"]
 
     _all_options = _user_options + (_admin_options if _is_admin else [])
@@ -799,7 +799,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**한국정보통신기술협회(TTA)**")
-    st.markdown("표준화본부 이동통신표준팀")
     st.markdown(f"*{_kst_now().strftime('%Y-%m-%d %H:%M')} KST*")
 
 
@@ -933,7 +932,7 @@ if selected == "🏠 홈":
                 and not load_unit_settings(u['id']).get('google_alerts_rss')
             ]
             if _skip_units:
-                st.warning(f"⚠️ 키워드/RSS 미설정으로 건너뛸 단: **{', '.join(_skip_units)}**\n\n⚙️ 내 설정에서 키워드를 추가하세요.")
+                st.warning(f"⚠️ 키워드/RSS 미설정으로 건너뛸 단: **{', '.join(_skip_units)}**\n\n⚙️ 단별 설정에서 키워드를 추가하세요.")
 
             if st.button("🚀 4개 단 전체 프로세스 시작", type="primary",
                          use_container_width=True, key="home_full_process_start"):
@@ -1009,7 +1008,7 @@ if selected == "🏠 홈":
                             f"**🔑 모니터링 키워드:** {_kw_badges}", unsafe_allow_html=True
                         )
                     else:
-                        st.caption("⚠️ 키워드 미설정 — ⚙️ 내 설정에서 단 키워드를 추가하세요.")
+                        st.caption("⚠️ 키워드 미설정 — ⚙️ 단별 설정에서 단 키워드를 추가하세요.")
                 with _col_cnt:
                     st.metric(
                         label="수집/분석",
@@ -1047,7 +1046,7 @@ if selected == "🏠 홈":
                             if not _unit_kws and not _unit_cfg.get('rss_urls'):
                                 st.warning(
                                     "⚠️ 이 단의 키워드·RSS가 설정되지 않아 실행할 수 없습니다. "
-                                    "⚙️ 내 설정에서 먼저 키워드를 추가하세요."
+                                    "⚙️ 단별 설정에서 먼저 키워드를 추가하세요."
                                 )
                             else:
                                 _unit_status = st.empty()
@@ -1493,43 +1492,41 @@ elif selected == "📊 인텔리전스":
         " / 키워드 통계 (`keyword_summary_YYYY_WNN.xlsx`)"
     )
     _rpt_dir = Path("data/reports")
-    if _rpt_dir.exists():
-        _xlsx_files = sorted(_rpt_dir.glob("*.xlsx"), reverse=True)
-        if _xlsx_files:
-            _dl_col1, _dl_col2 = st.columns(2)
-            _news_files = [f for f in _xlsx_files if f.name.startswith("news_analysis")]
-            _kw_files   = [f for f in _xlsx_files if f.name.startswith("keyword_summary")]
+    _rpt_dir.mkdir(parents=True, exist_ok=True)
+    _xlsx_files = sorted(_rpt_dir.glob("*.xlsx"), reverse=True)
+    if _xlsx_files:
+        _dl_col1, _dl_col2 = st.columns(2)
+        _news_files = [f for f in _xlsx_files if f.name.startswith("news_analysis")]
+        _kw_files   = [f for f in _xlsx_files if f.name.startswith("keyword_summary")]
 
-            with _dl_col1:
-                st.markdown("**📊 뉴스 분석 엑셀**")
-                for _xf in _news_files[:5]:
-                    with open(_xf, "rb") as _fh:
-                        st.download_button(
-                            label=f"⬇️ {_xf.name}",
-                            data=_fh.read(),
-                            file_name=_xf.name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"dl_news_{_xf.stem}",
-                        )
-            with _dl_col2:
-                st.markdown("**🔑 키워드 통계 엑셀**")
-                for _xf in _kw_files[:5]:
-                    with open(_xf, "rb") as _fh:
-                        st.download_button(
-                            label=f"⬇️ {_xf.name}",
-                            data=_fh.read(),
-                            file_name=_xf.name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"dl_kw_{_xf.stem}",
-                        )
-        else:
-            st.info("아직 생성된 엑셀 파일이 없습니다. 전체 프로세스를 실행하면 자동 저장됩니다.")
+        with _dl_col1:
+            st.markdown("**📊 뉴스 분석 엑셀**")
+            for _xf in _news_files[:5]:
+                with open(_xf, "rb") as _fh:
+                    st.download_button(
+                        label=f"⬇️ {_xf.name}",
+                        data=_fh.read(),
+                        file_name=_xf.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_news_{_xf.stem}",
+                    )
+        with _dl_col2:
+            st.markdown("**🔑 키워드 통계 엑셀**")
+            for _xf in _kw_files[:5]:
+                with open(_xf, "rb") as _fh:
+                    st.download_button(
+                        label=f"⬇️ {_xf.name}",
+                        data=_fh.read(),
+                        file_name=_xf.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_kw_{_xf.stem}",
+                    )
     else:
-        st.info("`data/reports/` 폴더가 없습니다. 전체 프로세스 실행 시 자동 생성됩니다.")
+        st.info("아직 생성된 엑셀 파일이 없습니다. 전체 프로세스를 실행하면 자동 저장됩니다.")
 
 
 # ===== 내 설정 페이지 =====
-elif selected == "⚙️ 내 설정":
+elif selected == "⚙️ 단별 설정":
     st.markdown('<h1 class="main-header">⚙️ 단 설정 관리</h1>', unsafe_allow_html=True)
 
     _set_all_units = get_all_units()
@@ -1886,7 +1883,7 @@ python news_engine.py monthly
     elif st.session_state.settings_tab == 'units':
         st.markdown('<div class="tab-content">', unsafe_allow_html=True)
         st.markdown("### 🏢 단 멤버십 관리")
-        st.caption("각 단에 담당자 이메일을 배정합니다. 배정된 계정은 해당 단의 RSS·키워드·이메일을 ⚙️ 내 설정에서 편집할 수 있습니다.")
+        st.caption("각 단에 담당자 이메일을 배정합니다. 배정된 계정은 해당 단의 RSS·키워드·이메일을 ⚙️ 단별 설정에서 편집할 수 있습니다.")
         st.markdown("---")
 
         _mgmt_units = get_all_units()

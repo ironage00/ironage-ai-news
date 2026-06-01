@@ -249,8 +249,8 @@ def render_keyword_intelligence(key_prefix: str = "dash") -> None:
 
                 if _KG_AVAILABLE:
                     st.markdown("---")
-                    _kg_tab1, _kg_tab2, _kg_tab3, _kg_tab4 = st.tabs([
-                        "🔥 급등 알림", "🔲 공출현 히트맵", "🕸️ 지식 그래프", "📊 주간 키워드 비교",
+                    _kg_tab2, _kg_tab1, _kg_tab3, _kg_tab4 = st.tabs([
+                        "🔲 공출현 히트맵", "🔥 급등 알림", "🕸️ 지식 그래프", "📊 주간 키워드 비교",
                     ])
 
                     # ── 탭 1: 급등 알림 ────────────────────────────────────────
@@ -362,7 +362,7 @@ def render_keyword_intelligence(key_prefix: str = "dash") -> None:
                                         _nicon = {"company": "🏢", "tech": "🛠️", "country": "🌍"}.get(_ntype, "📌")
                                         st.write(f"{_nicon} **{_name}** — 중심성 {_score:.3f}")
 
-                    # ── 탭 4: 주간 키워드 비교 히트맵 ──────────────────────────
+                    # ── 탭 4: 주간 키워드 비교 (인사이트 뷰) ──────────────────
                     with _kg_tab4:
                         _wk_prev_raw = load_news_from_db(days=keyword_days * 2)
                         _wk_prev_all = [n for n in _wk_prev_raw if n.get("extracted_keywords")]
@@ -389,20 +389,93 @@ def render_keyword_intelligence(key_prefix: str = "dash") -> None:
                                         pass
                             _all_keys = sorted(set(list(_curr_ctr.keys()) + list(_prev_ctr.keys())))
                             if _all_keys:
-                                _hm_df = pd.DataFrame({
-                                    "키워드": _all_keys,
-                                    f"이번 {keyword_days}일": [_curr_ctr.get(k, 0) for k in _all_keys],
-                                    f"이전 {keyword_days}일": [_prev_ctr.get(k, 0) for k in _all_keys],
-                                }).set_index("키워드")
-                                _fig_wk = px.imshow(
-                                    _hm_df, color_continuous_scale="RdYlGn",
-                                    aspect="auto", text_auto=True, labels={"color": "등장 횟수"},
+                                # 변화량·변화율 계산
+                                _rows = []
+                                for _k in _all_keys:
+                                    _curr = _curr_ctr.get(_k, 0)
+                                    _prev = _prev_ctr.get(_k, 0)
+                                    _delta = _curr - _prev
+                                    _rate = (_delta / _prev * 100) if _prev > 0 else (100.0 if _curr > 0 else 0.0)
+                                    _trend = "▲ 상승" if _delta > 0 else ("▼ 하락" if _delta < 0 else "━ 유지")
+                                    _is_new = _prev == 0 and _curr > 0
+                                    _rows.append({
+                                        "키워드": _k,
+                                        f"이전 {keyword_days}일": _prev,
+                                        f"이번 {keyword_days}일": _curr,
+                                        "변화": _delta,
+                                        "변화율(%)": round(_rate, 1),
+                                        "추세": ("🆕 신규" if _is_new else _trend),
+                                    })
+                                _insight_df = pd.DataFrame(_rows).sort_values("변화", ascending=False)
+
+                                # 상위 상승 / 상위 하락 차트
+                                _top_n = 8
+                                _rising = _insight_df[_insight_df["변화"] > 0].head(_top_n)
+                                _falling = _insight_df[_insight_df["변화"] < 0].tail(_top_n).sort_values("변화")
+
+                                _c_rise, _c_fall = st.columns(2)
+                                with _c_rise:
+                                    st.markdown(f"#### ▲ 상승 키워드 Top {len(_rising)}")
+                                    if not _rising.empty:
+                                        _fig_rise = px.bar(
+                                            _rising, x="변화", y="키워드", orientation="h",
+                                            text="변화", color="변화율(%)",
+                                            color_continuous_scale="Greens",
+                                            labels={"변화": "증가량", "키워드": ""},
+                                        )
+                                        _fig_rise.update_layout(
+                                            height=max(220, len(_rising) * 36 + 40),
+                                            margin=dict(l=0, r=10, t=10, b=10),
+                                            plot_bgcolor="rgba(0,0,0,0)",
+                                            paper_bgcolor="rgba(0,0,0,0)",
+                                            font_color="#e8e8e8",
+                                            coloraxis_showscale=False,
+                                            yaxis=dict(autorange="reversed"),
+                                        )
+                                        st.plotly_chart(_fig_rise, use_container_width=True)
+                                    else:
+                                        st.info("상승 키워드 없음")
+
+                                with _c_fall:
+                                    st.markdown(f"#### ▼ 하락 키워드 Top {len(_falling)}")
+                                    if not _falling.empty:
+                                        _fig_fall = px.bar(
+                                            _falling, x="변화", y="키워드", orientation="h",
+                                            text="변화", color="변화율(%)",
+                                            color_continuous_scale="Reds_r",
+                                            labels={"변화": "감소량", "키워드": ""},
+                                        )
+                                        _fig_fall.update_layout(
+                                            height=max(220, len(_falling) * 36 + 40),
+                                            margin=dict(l=0, r=10, t=10, b=10),
+                                            plot_bgcolor="rgba(0,0,0,0)",
+                                            paper_bgcolor="rgba(0,0,0,0)",
+                                            font_color="#e8e8e8",
+                                            coloraxis_showscale=False,
+                                            yaxis=dict(autorange="reversed"),
+                                        )
+                                        st.plotly_chart(_fig_fall, use_container_width=True)
+                                    else:
+                                        st.info("하락 키워드 없음")
+
+                                # 전체 인사이트 테이블
+                                st.markdown("#### 📋 전체 키워드 변화 현황")
+                                st.dataframe(
+                                    _insight_df.reset_index(drop=True),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "키워드": st.column_config.TextColumn("키워드", width="medium"),
+                                        f"이전 {keyword_days}일": st.column_config.NumberColumn(f"이전 {keyword_days}일", format="%d회"),
+                                        f"이번 {keyword_days}일": st.column_config.NumberColumn(f"이번 {keyword_days}일", format="%d회"),
+                                        "변화": st.column_config.NumberColumn("변화", format="%+d"),
+                                        "변화율(%)": st.column_config.NumberColumn("변화율", format="%+.1f%%"),
+                                        "추세": st.column_config.TextColumn("추세", width="small"),
+                                    },
                                 )
-                                _fig_wk.update_layout(height=max(300, len(_all_keys) * 28 + 60))
-                                st.plotly_chart(_fig_wk, use_container_width=True)
                                 st.caption(
-                                    f"이번 {keyword_days}일과 이전 {keyword_days}일의 기술 키워드 등장 횟수 비교. "
-                                    "초록 = 증가, 빨강 = 감소."
+                                    f"이번 {keyword_days}일 vs 이전 {keyword_days}일 기술 키워드 등장 횟수 비교. "
+                                    "🆕 = 신규 등장 키워드."
                                 )
                             else:
                                 st.info("기술 키워드 데이터가 부족합니다.")

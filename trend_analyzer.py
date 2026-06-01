@@ -548,7 +548,7 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
         # 푸터
         add(
             "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀\n"
+            "한국정보통신기술협회(TTA)\n"
             f"분석 체계: {chain}\n"
             "본 보고서는 IRONAGE AI Analytics System으로 자동 생성되었습니다.\n"
         )
@@ -959,7 +959,7 @@ def send_trend_report_email(
 </div>
 
 <div class="footer">
-  <strong>한국정보통신기술협회(TTA)</strong> 표준화본부 이동통신표준팀<br>
+  <strong>한국정보통신기술협회(TTA)</strong><br>
   본 리포트는 IRONAGE AI Analytics System (v5.0)을 통해 자동 생성되었습니다.<br>
   © 2025 TTA. All rights reserved.
 </div>
@@ -1396,7 +1396,7 @@ def save_report_to_markdown(
                 
         # 푸터
         md_lines.append("\n---")
-        md_lines.append("\n**한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀**  ")
+        md_lines.append("\n**한국정보통신기술협회(TTA)**  ")
         md_lines.append("본 보고서는 IRONAGE AI Analytics System (v5.0)으로 자동 생성되었습니다.  ")
         
         # 파일 저장
@@ -1441,7 +1441,7 @@ def save_analyzed_news_to_markdown(analyzed_data: List[Dict]) -> Optional[str]:
         md_lines = []
         md_lines.append(f"# 전파·이동통신 동향 보고서 ({today_full})")
         md_lines.append(f"\n- **작성일:** {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}")
-        md_lines.append("- **작성 기관:** 한국정보통신기술협회(TTA) 표준화본부 이동통신표준팀")
+        md_lines.append("- **작성 기관:** 한국정보통신기술협회(TTA)")
         md_lines.append("\n---")
         
         # 안내사항
