@@ -587,7 +587,7 @@ def deduplicate_news(news_list):
                 similar_group.append(url_unique[j])
                 used_indices.add(j)
 
-        representative = max(similar_group, key=lambda x: len(x['title']))
+        representative = _best_representative(similar_group)
         title_unique.append(representative)
 
     removed = len(url_unique) - len(title_unique)
@@ -613,22 +613,50 @@ def save_news_to_db(news_items, unit_id=None):
     with get_db_session() as session:
         # 전체 단 대상 최근 2일 기사 제목 미리 로드 — 단 간 교차 중복 체크용
         _cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
-        _existing_titles: list = [
-            r[0] for r in
-            session.query(NewsArticle.title)
+        _existing_articles = (
+            session.query(NewsArticle)
                    .filter(NewsArticle.collected_at >= _cutoff)
                    .all()
-        ]
+        )
+        _existing_titles: list = [a.title for a in _existing_articles if a.title]
+
+        def _incoming_content_hint(src_item: dict) -> str:
+            return _clean_text_hint(
+                src_item.get('content')
+                or src_item.get('summary')
+                or src_item.get('description')
+                or src_item.get('content_hint')
+                or ''
+            )
+
+        def _fill_existing_content(existing: NewsArticle, src_item: dict) -> bool:
+            """분석 완료 기사는 유지하고, 빈 본문만 더 풍부한 힌트로 보강."""
+            if not existing or existing.is_analyzed or existing.content:
+                return False
+            hint = _incoming_content_hint(src_item)
+            if len(hint) < 80:
+                return False
+            existing.content = hint[:2000]
+            return True
 
         for item in news_items:
             try:
+                new_title = item.get('title', '')
+
                 # 1단계: URL 정확 일치 중복 체크 (기존)
-                if session.query(NewsArticle).filter_by(link=item['link']).first():
+                existing_by_link = session.query(NewsArticle).filter_by(link=item['link']).first()
+                if existing_by_link:
+                    if _fill_existing_content(existing_by_link, item):
+                        log_info(f"   ↻ 기존 기사 본문 힌트 보강: {new_title[:40]}...")
                     continue
 
                 # 2단계: 제목 유사도 중복 체크 (전체 단 대상)
-                new_title = item.get('title', '')
-                if any(is_similar_news(new_title, et) for et in _existing_titles if et):
+                similar_existing = next(
+                    (a for a in _existing_articles if a.title and is_similar_news(new_title, a.title)),
+                    None
+                )
+                if similar_existing:
+                    _fill_existing_content(similar_existing, item)
                     skipped_similar += 1
                     continue
 
@@ -647,11 +675,12 @@ def save_news_to_db(news_items, unit_id=None):
                     link=item['link'],
                     source=item.get('source', '출처 불명'),
                     published=pub_date,
-                    content=item.get('content', ''),
+                    content=_incoming_content_hint(item),
                     quality_score=item.get('quality_score', 0.0),
                     unit_id=unit_id,
                 )
                 session.add(article)
+                _existing_articles.append(article)
                 _existing_titles.append(new_title)  # 같은 배치 내 중복도 차단
                 saved_count += 1
 
@@ -885,6 +914,99 @@ def extract_signature(title: str) -> tuple:
                 key_entities.append(entity)
                 break
     return (numbers, tuple(sorted(set(key_entities))))
+
+
+_HIGH_TRUST_SOURCE_PATTERNS = {
+    'official': [
+        'msit', '과기정통부', '방통위', 'kcc', 'fcc', 'itu', '3gpp', 'etsi',
+        'ieee', 'tta', 'gov', 'europa', '보도자료',
+    ],
+    'primary_industry': [
+        'samsung', '삼성', 'lg', 'sk텔레콤', 'kt', 'ericsson', '에릭슨',
+        'nokia', '노키아', 'qualcomm', '퀄컴', 'huawei', '화웨이',
+    ],
+    'wire_or_business': [
+        'reuters', 'bloomberg', 'financial times', '연합뉴스', '전자신문',
+        'zdnet', '디지털데일리', '아시아경제', '매일경제', '한국경제',
+    ],
+}
+
+
+def _clean_text_hint(value) -> str:
+    """RSS/API 요약과 본문 힌트에서 태그·엔티티·과도한 공백을 제거."""
+    if not value:
+        return ''
+    text = str(value)
+    text = _RE_HTML_TAG.sub('', text)
+    text = _RE_HTML_ENTITY.sub('', text)
+    text = _RE_WHITESPACE.sub(' ', text).strip()
+    return text
+
+
+def _article_timestamp(item: Dict) -> float:
+    """대표 기사 tie-break용 published timestamp. 파싱 실패 시 0."""
+    published = item.get('published') or item.get('published_at') or ''
+    try:
+        if isinstance(published, datetime.datetime):
+            dt = published
+        elif published:
+            dt = date_parser.parse(str(published))
+        else:
+            return 0.0
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def article_richness_score(item: Dict) -> tuple:
+    """
+    중복 그룹에서 분석 가치가 높은 대표 기사를 고르기 위한 메타데이터 점수.
+
+    네트워크 스크래핑 없이 현재 수집된 content/summary/description, 원문 접근성,
+    출처 신뢰도, 최신성, 제목 길이를 조합한다. tuple을 반환해 max() tie-break에
+    그대로 사용할 수 있게 한다.
+    """
+    title = _clean_text_hint(item.get('title', ''))
+    content = _clean_text_hint(item.get('content', ''))
+    summary = _clean_text_hint(
+        item.get('summary') or item.get('description') or item.get('content_hint') or ''
+    )
+
+    content_len = len(content)
+    summary_len = len(summary)
+    hint_len = max(
+        int(item.get('content_hint_len') or 0),
+        content_len,
+        summary_len,
+    )
+
+    source_blob = f"{item.get('source', '')} {item.get('link', '')}".lower()
+    source_score = 0
+    if any(p in source_blob for p in _HIGH_TRUST_SOURCE_PATTERNS['official']):
+        source_score = 30
+    elif any(p in source_blob for p in _HIGH_TRUST_SOURCE_PATTERNS['primary_industry']):
+        source_score = 20
+    elif any(p in source_blob for p in _HIGH_TRUST_SOURCE_PATTERNS['wire_or_business']):
+        source_score = 12
+
+    extraction_score = 10 if item.get('extraction_success') else 0
+    freshness_score = _article_timestamp(item)
+
+    return (
+        min(content_len, 5000),
+        min(hint_len, 3000),
+        extraction_score,
+        source_score,
+        freshness_score,
+        min(len(title), 300),
+    )
+
+
+def _best_representative(items: List[Dict]) -> Dict:
+    """중복 후보 중 실제 분석 가치가 가장 높은 대표 기사 선택."""
+    return max(items, key=article_richness_score)
 
 
 # ==============================================================================
@@ -1543,12 +1665,19 @@ def get_news_data(rss_urls=None, naver_queries=None):
                                 failed_urls.append(extracted_url)
                                 log_warning(f"           ❌ 실패: URL 추출 오류")
                             
+                            summary_hint = _clean_text_hint(
+                                getattr(entry, 'summary', '')
+                                or getattr(entry, 'description', '')
+                            )
+
                             news_list.append({
                                 "title": entry.title,
                                 "link": final_link,
                                 "published": published_date,
                                 "source": source,
-                                "extraction_success": success
+                                "extraction_success": success,
+                                "summary": summary_hint,
+                                "content_hint_len": len(summary_hint),
                             })
                             
                             time.sleep(0.3)
@@ -1660,12 +1789,16 @@ def get_news_data(rss_urls=None, naver_queries=None):
                             failed_urls.append(raw_link)
                             log_info(f"           ❌ 실패: URL 추출 오류")
                         
+                        summary_hint = _clean_text_hint(item.get("description", ""))
+
                         news_list.append({
                             "title": clean_title,
                             "link": final_link,
                             "published": published_date,
                             "source": source,
-                            "extraction_success": success
+                            "extraction_success": success,
+                            "summary": summary_hint,
+                            "content_hint_len": len(summary_hint),
                         })
                         
                         time.sleep(0.2)
@@ -1947,7 +2080,7 @@ def filter_news_by_ai(
     for sig, items in clusters.items():
         if len(items) > 1:
             clustered_count += len(items) - 1
-            representative = max(items, key=lambda x: len(x['title']))
+            representative = _best_representative(items)
             representative_news.append(representative)
             if len(items) >= 3:
                 log_info(f"    → 클러스터 병합 ({len(items)}개): '{representative['title'][:40]}...'")
@@ -1994,7 +2127,7 @@ def filter_news_by_ai(
    - 판단 기준:
      * 더 많은 구체적 수치와 날짜 포함
      * 더 많은 이해관계자 언급
-     * 더 긴 본문 (제목 길이로 추정)
+     * 더 많은 본문/요약 정보와 원문 접근성
      * 더 권위 있는 출처 (공식 발표 > 언론 보도)
 
 2. **2차 선별 (중복 제거 후):**
@@ -2712,7 +2845,7 @@ def analyze_news_with_replacement(news_to_analyze, all_news_items, target_count=
                     if item.get('extracted_keywords'):
                         article.extracted_keywords = item['extracted_keywords']
                     scraped = item.get('content', '')
-                    if scraped and not article.content:
+                    if scraped and len(scraped) > len(article.content or ''):
                         article.content = scraped[:2000]
 
             log_info(f"      ✅ 분석 성공")
@@ -5499,7 +5632,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                     art.ai_model       = item.get('ai_model', ai_model)
                     if item.get('extracted_keywords'):
                         art.extracted_keywords = item['extracted_keywords']
-                    if item.get('content') and not art.content:
+                    if item.get('content') and len(item['content']) > len(art.content or ''):
                         art.content = item['content'][:2000]
                     _s.commit()
             return item
