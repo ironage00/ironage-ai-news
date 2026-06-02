@@ -790,6 +790,10 @@ _CLUSTERING_ENTITIES = [
 def normalize_title(title: str) -> str:
     """Jaccard 비교를 위한 제목 정규화"""
     title = _RE_HTML_ENTITY.sub('', title)
+    # [OO소식] 등 포털 프리픽스 제거
+    title = re.sub(r'^\[.{1,15}\]\s*', '', title)
+    # · … , 등 구분자를 공백으로 대체 (삭제하면 "우승…세계" → "우승세계" 토큰 병합 문제)
+    title = re.sub(r'[·•,…]', ' ', title)
     title = _RE_SPECIAL_CHARS.sub('', title)
     title = _RE_WHITESPACE.sub(' ', title).strip()
     return title.lower()
@@ -801,12 +805,27 @@ def get_title_keywords(title: str) -> set:
     return {w for w in words - _STOPWORDS if len(w) >= 2}
 
 
+def _extract_significant_numbers(title: str) -> frozenset:
+    """제목에서 의미 있는 숫자만 추출.
+    단순 서수/순위('1위'→'1', '2등'→'2')처럼 단독 한 자리 숫자는 제품 식별자가 아니므로 제외.
+    """
+    nums = set(_RE_NUMBERS.findall(title.lower()))
+    return frozenset(n for n in nums if not (n.isdigit() and len(n) == 1))
+
+
 def is_similar_news(title1: str, title2: str,
                     threshold_numeric: float = 0.5,
                     threshold_text: float = 0.6) -> bool:
-    """두 제목이 유사한 뉴스인지 Jaccard 유사도로 판단"""
-    nums1 = set(_RE_NUMBERS.findall(title1))
-    nums2 = set(_RE_NUMBERS.findall(title2))
+    """두 제목이 유사한 뉴스인지 Jaccard 유사도로 판단.
+
+    임계값 3단계:
+    - 숫자 일치(제품/버전 동일): threshold_numeric (0.5)
+    - 숫자 불일치(다른 제품/버전): threshold_text (0.6, 엄격)
+    - 숫자 없음(동일 사건 다른 표현): 0.25 (완화, 중복 기사 다수 포착)
+    - 한쪽만 숫자: 0.40 (중간)
+    """
+    nums1 = _extract_significant_numbers(title1)
+    nums2 = _extract_significant_numbers(title2)
 
     kw1 = get_title_keywords(title1)
     kw2 = get_title_keywords(title2)
@@ -818,10 +837,15 @@ def is_similar_news(title1: str, title2: str,
     union = len(kw1 | kw2)
     similarity = intersection / union if union > 0 else 0
 
-    # 숫자가 겹칠 때는 낮은 임계값(더 공격적), 없거나 다를 때는 높은 임계값
-    if nums1 and nums2 and nums1 == nums2:
-        return similarity >= threshold_numeric
-    return similarity >= threshold_text
+    if nums1 and nums2:
+        if nums1 == nums2:
+            return similarity >= threshold_numeric   # 같은 제품/버전
+        else:
+            return similarity >= threshold_text      # 다른 제품/버전: 엄격 유지
+    elif nums1 or nums2:
+        return similarity >= 0.40                    # 한쪽만 숫자: 중간
+    else:
+        return similarity >= 0.25                    # 숫자 없음: 완화
 
 
 def normalize_for_clustering(title: str) -> str:
@@ -1879,6 +1903,19 @@ def filter_news_by_ai(
             ict_news = news_items
         else:
             log_info(f"  • Stage 1 ICT 필터: {len(news_items)}개 → {len(ict_news)}개 (비ICT {non_ict_count}개 제외)")
+
+    # =========================================================================
+    # Stage 1.5: 포털 묶음 기사 제거
+    # "[OO소식] ... 외" / "[OO뉴스] ... 외" 형태 = 지역 포털이 여러 기사를 하나로
+    # 묶어 재포스팅한 저품질 중복 기사. 1차 소식을 이미 수집하므로 제거.
+    # =========================================================================
+    _RE_PORTAL_ROUNDUP = re.compile(r'^\[.{1,10}(?:소식|뉴스|타임|투데이)[^\]]*\].* 외\s*$')
+    _before_roundup = len(ict_news)
+    ict_news = [item for item in ict_news
+                if not _RE_PORTAL_ROUNDUP.search(item.get('title', ''))]
+    _removed_roundup = _before_roundup - len(ict_news)
+    if _removed_roundup:
+        log_info(f"  • Stage 1.5 포털묶음 제거: {_removed_roundup}개 제거 ({_before_roundup}→{len(ict_news)})")
 
     # =========================================================================
     # Stage 2: 엔티티 클러스터링 — 유사 뉴스 그룹화 후 대표 기사만 AI에 전달
