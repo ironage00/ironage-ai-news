@@ -153,8 +153,12 @@ st.set_page_config(
 # 미설정 시 로컬 개발 모드로 자동 폴백.
 # 관리자: ADMIN_PASSWORD (별도) 또는 ADMIN_EMAILS 목록과 일치.
 
-_AUTH_PASSWORD  = st.secrets.get("APP_PASSWORD", "")   # 일반 접속 비밀번호
-_ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", _AUTH_PASSWORD)  # 관리자 비밀번호
+try:
+    _AUTH_PASSWORD  = st.secrets.get("APP_PASSWORD",   "")
+    _ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", _AUTH_PASSWORD)
+except Exception:
+    _AUTH_PASSWORD  = ""   # 로컬 개발 모드 (secrets.toml 없음)
+    _ADMIN_PASSWORD = ""
 
 # 로그인 상태 확인
 _logged_in   = st.session_state.get("_logged_in", False)
@@ -752,7 +756,7 @@ with st.sidebar:
     else:
         st.caption("⚠️ 단 미배정")
     # 로그아웃 버튼 — APP_PASSWORD 설정 시(= 인증 모드)에만 표시
-    if st.secrets.get("APP_PASSWORD", ""):
+    if _AUTH_PASSWORD:
         if st.button("🚪 로그아웃", use_container_width=True, key="sidebar_logout"):
             try:
                 import time as _time
@@ -773,7 +777,7 @@ with st.sidebar:
     st.markdown("---")
 
     # ── 🧪 테스트 유저 전환 (로컬 모드 전용 — APP_PASSWORD 미설정 시) ─────────
-    if not st.secrets.get("APP_PASSWORD", ""):
+    if not _AUTH_PASSWORD:
         st.caption("🧪 테스트 유저 전환")
         _TEST_USERS = [
             "local@tta.or.kr",
@@ -931,6 +935,12 @@ def _show_article_detail(art: dict):
                 st.markdown(f"**표준화 격차:** {_std_gap}")
 
 
+@st.dialog("📄 기사 분석 상세", width="large")
+def _article_dialog(art: dict):
+    """기사 분석 내용을 팝업 다이얼로그로 표시."""
+    _show_article_detail(art)
+
+
 def _render_unit_articles_table(articles: list, unit_display: str, tab_key: str):
     """단별 분석 기사를 날짜별 테이블로 표시. 행 클릭 시 분석 상세 표시."""
     from collections import defaultdict as _dd
@@ -962,8 +972,9 @@ def _render_unit_articles_table(articles: list, unit_display: str, tab_key: str)
             kws    = kd.get('key_technologies', [])  if isinstance(kd, dict) else []
         except Exception:
             impact, kws = '', []
+        import re as _re_t; _strip_t = lambda t: _re_t.sub(r'<[^>]+>', '', t or '')
         rows.append({
-            '제목':     a.get('title', ''),
+            '제목':     _strip_t(a.get('title', '')),
             '출처':     a.get('source', ''),
             '영향도':   impact,
             '키워드':   ', '.join(str(k) for k in kws[:3]),
@@ -991,8 +1002,11 @@ def _render_unit_articles_table(articles: list, unit_display: str, tab_key: str)
 
     sel_rows = _evt.selection.rows
     if sel_rows:
-        st.markdown("---")
-        _show_article_detail(day_arts[sel_rows[0]])
+        _dlg_key = f"_dlg_last_{tab_key}"
+        curr_id  = day_arts[sel_rows[0]].get('id')
+        if st.session_state.get(_dlg_key) != curr_id:
+            st.session_state[_dlg_key] = curr_id
+            _article_dialog(day_arts[sel_rows[0]])
 
 
 # ===== 1. 홈 페이지 (모든 사용자) =====
@@ -1325,12 +1339,16 @@ elif selected == "📰 뉴스 현황":
             # 단 이름 캐시 (per-article get_unit_display_name 반복 호출 방지)
             _nv_unit_map = {u['id']: u['display_name'] for u in _nv_units}
 
+            # HTML 태그 제거 + 엔티티 디코딩 헬퍼
+            import re as _re_html, html as _html_ent
+            def _strip_html(t): return _html_ent.unescape(_re_html.sub(r'<[^>]+>', '', t or ''))
+
             # DataFrame 구성
             _nv_rows = []
             for _a in _nv_filtered:
                 if _a.get('is_analyzed'):
                     _st = '🔬 분석완료'
-                elif (a.get('quality_score') or 0) > 0.5:
+                elif (_a.get('quality_score') or 0) > 0.5:
                     _st = '✅ 선별됨'
                 else:
                     _st = '📥 수집됨'
@@ -1341,7 +1359,7 @@ elif selected == "📰 뉴스 현황":
                     _imp2 = ''
                 _nv_rows.append({
                     '상태':     _st,
-                    '제목':     _a.get('title', ''),
+                    '제목':     _strip_html(_a.get('title', '')),
                     '출처':     _a.get('source', ''),
                     '단':       _nv_unit_map.get(_a.get('unit_id'), '미분류'),
                     '영향도':   _imp2,
@@ -1371,9 +1389,13 @@ elif selected == "📰 뉴스 현황":
             _nv_sel = _nv_evt.selection.rows
             if _nv_sel:
                 _nv_art = _nv_filtered[_nv_sel[0]]
-                if _nv_art.get('is_analyzed'):
-                    st.markdown("---")
-                    _show_article_detail(_nv_art)
+                if _nv_art.get('is_analyzed') and _nv_art.get('analysis_result'):
+                    _nv_dlg_id = _nv_art.get('id')
+                    if st.session_state.get("_dlg_last_nv") != _nv_dlg_id:
+                        st.session_state["_dlg_last_nv"] = _nv_dlg_id
+                        _article_dialog(_nv_art)
+                elif _nv_art.get('is_analyzed'):
+                    st.info("이 기사는 분석 마크는 있지만 분석 내용이 없습니다. 재분석이 필요합니다.")
                 else:
                     st.info("선택한 기사는 분석되지 않았습니다. 분석 완료 기사(🔬)를 선택하세요.")
 
