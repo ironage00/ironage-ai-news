@@ -881,38 +881,118 @@ def _render_article_card(art: dict) -> str:
 </div>"""
 
 
-def _render_unit_articles_by_date(articles: list, unit_display: str, tab_key: str):
-    """단별 기사를 일자별로 나눠 최대 20개 렌더링한다."""
+@st.cache_data(ttl=300)
+def _cached_load_news(days: int, unit_id=None):
+    """load_news_from_db 5분 캐시 래퍼 — 반복 DB 호출 방지"""
+    return load_news_from_db(days=days, unit_id=unit_id)
+
+
+def _show_article_detail(art: dict):
+    """기사 분석 상세 내용 표시 (홈·뉴스현황 공용)"""
+    title    = art.get('title', '제목 없음')
+    link     = art.get('link', '')
+    analysis = (art.get('analysis_result') or '').strip()
+
+    st.markdown(f"#### 📄 {title}")
+
+    _m1, _m2, _m3 = st.columns(3)
+    _m1.caption(f"출처: {art.get('source', '')}")
+    _m2.caption(f"수집: {(art.get('collected_at') or '')[:16]}")
+    if link:
+        _m3.markdown(f"[🔗 원문 보기]({link})")
+
+    try:
+        _kd = json.loads(art.get('extracted_keywords') or '{}')
+        _impact      = _kd.get('impact_level', '')    if isinstance(_kd, dict) else ''
+        _tta_action  = _kd.get('tta_action_item', '') if isinstance(_kd, dict) else ''
+        _std_gap     = _kd.get('standardization_gap','') if isinstance(_kd, dict) else ''
+    except Exception:
+        _impact = _tta_action = _std_gap = ''
+
+    if _impact:
+        _ic = {'Critical':'#dc2626','High':'#ea580c','Medium':'#2563eb','Low':'#64748b'}.get(_impact,'#64748b')
+        st.markdown(
+            f'<span style="background:{_ic};color:#fff;padding:2px 10px;'
+            f'border-radius:99px;font-size:0.8rem;font-weight:600;">영향도: {_impact}</span>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    if analysis:
+        st.markdown(analysis)
+    else:
+        st.info("분석 내용이 없습니다.")
+
+    if _tta_action or _std_gap:
+        with st.expander("📌 TTA 조치사항 / 표준화 격차"):
+            if _tta_action:
+                st.markdown(f"**TTA 조치사항:** {_tta_action}")
+            if _std_gap:
+                st.markdown(f"**표준화 격차:** {_std_gap}")
+
+
+def _render_unit_articles_table(articles: list, unit_display: str, tab_key: str):
+    """단별 분석 기사를 날짜별 테이블로 표시. 행 클릭 시 분석 상세 표시."""
+    from collections import defaultdict as _dd
     analyzed = [a for a in articles if a.get('is_analyzed')]
     if not analyzed:
         st.info(f"**{unit_display}** 분석 기사가 없습니다.\n\n"
                 "관리자에게 뉴스 수집/분석 실행을 요청하세요.")
         return
 
-    # 일자별 그룹핑 (KST 날짜 기준)
-    from collections import defaultdict as _ddict
-    _by_date = _ddict(list)
+    # 날짜별 그룹핑
+    by_date: dict = _dd(list)
     for a in analyzed:
-        _d = _to_kst_str(a.get('collected_at', ''), fmt='%Y-%m-%d')
-        _by_date[_d].append(a)
+        d = _to_kst_str(a.get('collected_at', ''), fmt='%Y-%m-%d')
+        by_date[d].append(a)
 
-    # 날짜 내림차순 정렬
-    _dates = sorted(_by_date.keys(), reverse=True)
+    dates = sorted(by_date.keys(), reverse=True)
+    date_labels = [f"{d}  ({len(by_date[d])}건)" for d in dates]
 
-    # 날짜 선택
-    _date_labels = [f"{d} ({len(_by_date[d])}건)" for d in _dates]
-    _sel_label = st.selectbox(
-        "📅 날짜 선택",
-        _date_labels,
-        index=0,
-        key=f"date_sel_{tab_key}",
+    sel_label = st.selectbox("📅 날짜 선택", date_labels, index=0, key=f"date_sel_{tab_key}")
+    sel_date  = dates[date_labels.index(sel_label)]
+    day_arts  = by_date[sel_date]
+
+    # DataFrame 구성
+    rows = []
+    for a in day_arts:
+        try:
+            kd     = json.loads(a.get('extracted_keywords') or '{}')
+            impact = kd.get('impact_level', '')      if isinstance(kd, dict) else ''
+            kws    = kd.get('key_technologies', [])  if isinstance(kd, dict) else []
+        except Exception:
+            impact, kws = '', []
+        rows.append({
+            '제목':     a.get('title', ''),
+            '출처':     a.get('source', ''),
+            '영향도':   impact,
+            '키워드':   ', '.join(str(k) for k in kws[:3]),
+            '수집 시각': (a.get('collected_at') or '')[:16],
+        })
+
+    _df = pd.DataFrame(rows)
+    st.caption(f"**{sel_date}** 분석 기사 {len(day_arts)}건  ·  행을 클릭하면 분석 내용을 확인합니다.")
+
+    _evt = st.dataframe(
+        _df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"tbl_{tab_key}",
+        column_config={
+            '제목':      st.column_config.TextColumn('제목', width='large'),
+            '출처':      st.column_config.TextColumn('출처', width='small'),
+            '영향도':    st.column_config.TextColumn('영향도', width='small'),
+            '키워드':    st.column_config.TextColumn('키워드', width='medium'),
+            '수집 시각': st.column_config.TextColumn('수집 시각', width='small'),
+        },
     )
-    _sel_date = _dates[_date_labels.index(_sel_label)]
-    _day_arts = _by_date[_sel_date][:20]  # 최대 20개
 
-    st.caption(f"**{_sel_date}** 분석 기사 {len(_day_arts)}건 / 전체 {len(_by_date[_sel_date])}건")
-    cards = [_render_article_card(a) for a in _day_arts]
-    st.markdown('\n'.join(cards), unsafe_allow_html=True)
+    sel_rows = _evt.selection.rows
+    if sel_rows:
+        st.markdown("---")
+        _show_article_detail(day_arts[sel_rows[0]])
 
 
 # ===== 1. 홈 페이지 (모든 사용자) =====
@@ -1001,17 +1081,17 @@ if selected == "🏠 홈":
 
         for _tab, _unit in zip(_tabs, _ALL_UNITS):
             with _tab:
-                # 단별 최근 30일 기사 로드 (일자별 선택 가능하도록 충분히)
+                # 단별 최근 30일 기사 로드 (캐시 사용)
                 if _unit.get('name') == 'radio_network':
-                    _unit_news = load_news_from_db(days=30, unit_id=_unit['id'])
-                    _legacy = load_news_from_db(days=30, unit_id=-1)
-                    _seen_lnk = {a['link'] for a in _unit_news}
+                    _unit_news = list(_cached_load_news(days=30, unit_id=_unit['id']))
+                    _legacy    = _cached_load_news(days=30, unit_id=-1)
+                    _seen_lnk  = {a['link'] for a in _unit_news}
                     for _la in _legacy:
                         if _la['link'] not in _seen_lnk:
                             _unit_news.append(_la)
                             _seen_lnk.add(_la['link'])
                 else:
-                    _unit_news = load_news_from_db(days=30, unit_id=_unit['id'])
+                    _unit_news = _cached_load_news(days=30, unit_id=_unit['id'])
                 _analyzed_count = sum(1 for a in _unit_news if a.get('is_analyzed'))
 
                 # 단 설명 + 키워드 현황 + 기사 수 통계
@@ -1106,7 +1186,7 @@ if selected == "🏠 홈":
                                     _unit_status.empty()
                                     st.error(f"❌ 오류: {str(_ue)}")
 
-                _render_unit_articles_by_date(
+                _render_unit_articles_table(
                     _unit_news, _unit['display_name'], tab_key=f"u{_unit['id']}"
                 )
 
@@ -1134,8 +1214,8 @@ elif selected == "📰 뉴스 현황":
             "🔍 키워드 검색", placeholder="제목·출처·키워드 검색…", key="nv_search"
         )
 
-    # ── 데이터 로드 ───────────────────────────────────────────────────────────────
-    _nv_all = load_news_from_db(days=_nv_days, unit_id=_nv_unit_id)
+    # ── 데이터 로드 (캐시) ────────────────────────────────────────────────────────
+    _nv_all = _cached_load_news(days=_nv_days, unit_id=_nv_unit_id)
 
     if not _nv_all:
         st.info("해당 기간에 수집된 기사가 없습니다.")
@@ -1205,7 +1285,7 @@ elif selected == "📰 뉴스 현황":
         )
         st.markdown("---")
 
-        # ── 키워드 검색 필터 (None-safe) ──────────────────────────────────────
+        # ── 키워드 검색 필터 ─────────────────────────────────────────────────
         def _nv_match(a, kw):
             if not kw:
                 return True
@@ -1219,90 +1299,14 @@ elif selected == "📰 뉴스 현황":
                 return False
 
         _nv_filtered = [a for a in _nv_day_all if _nv_match(a, _nv_search)]
-        # 시간 내림차순 정렬
-        _nv_filtered.sort(key=lambda x: x.get('collected_at') or '', reverse=True)
 
-        # ── 상태 배지 색 ────────────────────────────────────────────────────
-        def _nv_badge(a):
-            if a.get('is_analyzed'):
-                return '🔬 분석완료', '#1976D2'
-            if (a.get('quality_score') or 0) > 0.5:
-                return '✅ 선별됨',   '#388E3C'
-            return '📥 수집됨',       '#757575'
+        # ── 정렬: 분석완료 → 선별됨 → 수집됨, 각 그룹 내 시간 내림차순 ─────
+        def _nv_sort_key(a):
+            if a.get('is_analyzed'):            return (0, -(a.get('quality_score') or 0))
+            if (a.get('quality_score') or 0) > 0.5: return (1, -(a.get('quality_score') or 0))
+            return (2, 0)
+        _nv_filtered.sort(key=_nv_sort_key)
 
-        # ── 카드 HTML 생성 함수 (AI 검색 결과 스타일) ────────────────────────
-        def _nv_card(a):
-            title  = (a.get('title')  or '제목 없음')
-            url    = a.get('link')    or '#'
-            src    = a.get('source')  or ''
-            dt     = (a.get('collected_at') or '')[:16]
-            unit   = get_unit_display_name(a['unit_id']) if a['unit_id'] else '미분류'
-            score  = a.get('quality_score') or 0
-            lbl, bc = _nv_badge(a)
-            pct    = int(score * 100)
-
-            title_color  = '#1565C0' if a.get('is_analyzed') else '#1e293b'
-            title_weight = '700'     if a.get('is_analyzed') else '600'
-
-            # 분석 본문 (요약 250자 + 전체 보기 토글)
-            body_block = ''
-            if a.get('is_analyzed'):
-                raw = (a.get('analysis_result') or '').strip()
-                if raw:
-                    snippet   = raw[:250] + ('…' if len(raw) > 250 else '')
-                    full_html = _html_mod.escape(raw).replace('\n', '<br>')
-                    toggle_block = ''
-                    if len(raw) > 250:
-                        toggle_block = (
-                            f'<details style="margin-top:5px;">'
-                            f'<summary style="cursor:pointer;font-size:0.81rem;'
-                            f'color:#1976D2;padding:3px 0;user-select:none;'
-                            f'list-style:none;outline:none;">'
-                            f'▶ 분석 내용 전체 보기</summary>'
-                            f'<div style="margin-top:8px;font-size:0.84rem;color:#334155;'
-                            f'line-height:1.75;border-top:1px solid #e2e8f0;'
-                            f'padding-top:8px;">{full_html}</div>'
-                            f'</details>'
-                        )
-                    body_block = (
-                        f'<div style="margin-top:8px;font-size:0.84rem;color:#475569;'
-                        f'line-height:1.6;border-top:1px solid #f1f5f9;padding-top:7px;">'
-                        f'{snippet}</div>'
-                        f'{toggle_block}'
-                    )
-
-            # 품질 점수 바
-            score_bar = (
-                f'<div style="display:inline-flex;align-items:center;gap:3px;vertical-align:middle;">'
-                f'<div style="background:#e0e0e0;border-radius:3px;width:36px;height:7px;">'
-                f'<div style="background:#42A5F5;width:{pct}%;height:100%;border-radius:3px;"></div>'
-                f'</div>'
-                f'<span style="font-size:11px;color:#94a3b8;">{score:.2f}</span>'
-                f'</div>'
-            )
-
-            return f"""
-<div style="border:1px solid #e2e8f0;border-radius:10px;padding:13px 16px;
-            margin-bottom:8px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-    <span style="font-size:0.75rem;background:{bc};color:#fff;
-                 border-radius:4px;padding:2px 7px;">{lbl}</span>
-    <span style="font-size:0.75rem;color:#64748b;">출처: {src}</span>
-    <span style="font-size:0.75rem;color:#64748b;">단: {unit}</span>
-    <span style="font-size:0.75rem;color:#94a3b8;">{dt}</span>
-    {score_bar}
-    <a href="{url}" target="_blank"
-       style="color:#005aab;font-size:0.82rem;text-decoration:none;margin-left:auto;">
-       🔗 원문</a>
-  </div>
-  <div style="font-weight:{title_weight};color:{title_color};font-size:0.95rem;line-height:1.5;">
-    <a href="{url}" target="_blank" style="color:{title_color};text-decoration:none;">{title}</a>
-  </div>
-  {body_block}
-</div>"""
-
-        # ── 카드 렌더링 ───────────────────────────────────────────────────────
-        _nv_kw_note = f'  검색어: **"{_nv_search}"** ·' if _nv_search else ''
         _cnt_a = sum(1 for a in _nv_filtered if a.get('is_analyzed'))
         _cnt_s = sum(1 for a in _nv_filtered
                      if not a.get('is_analyzed') and (a.get('quality_score') or 0) > 0.5)
@@ -1311,14 +1315,67 @@ elif selected == "📰 뉴스 현황":
         if not _nv_filtered:
             st.info("검색 조건에 맞는 기사가 없습니다." if _nv_search else "해당 날짜에 기사가 없습니다.")
         else:
+            _nv_kw_note = f'검색어: **"{_nv_search}"** · ' if _nv_search else ''
             st.caption(
-                f"{_nv_kw_note} **{len(_nv_filtered):,}건**"
+                f"{_nv_kw_note}**{len(_nv_filtered):,}건**"
                 f"  |  🔬 분석완료 {_cnt_a}건  ·  ✅ 선별됨 {_cnt_s}건  ·  📥 수집됨 {_cnt_r}건"
+                f"  ·  행 클릭 시 분석 내용 표시"
             )
-            st.markdown(
-                '\n'.join(_nv_card(a) for a in _nv_filtered),
-                unsafe_allow_html=True,
+
+            # 단 이름 캐시 (per-article get_unit_display_name 반복 호출 방지)
+            _nv_unit_map = {u['id']: u['display_name'] for u in _nv_units}
+
+            # DataFrame 구성
+            _nv_rows = []
+            for _a in _nv_filtered:
+                if _a.get('is_analyzed'):
+                    _st = '🔬 분석완료'
+                elif (a.get('quality_score') or 0) > 0.5:
+                    _st = '✅ 선별됨'
+                else:
+                    _st = '📥 수집됨'
+                try:
+                    _kd2 = json.loads(_a.get('extracted_keywords') or '{}')
+                    _imp2 = _kd2.get('impact_level', '') if isinstance(_kd2, dict) else ''
+                except Exception:
+                    _imp2 = ''
+                _nv_rows.append({
+                    '상태':     _st,
+                    '제목':     _a.get('title', ''),
+                    '출처':     _a.get('source', ''),
+                    '단':       _nv_unit_map.get(_a.get('unit_id'), '미분류'),
+                    '영향도':   _imp2,
+                    '품질점수': round(_a.get('quality_score') or 0, 2),
+                    '수집 시각': (_a.get('collected_at') or '')[:16],
+                })
+
+            _nv_df = pd.DataFrame(_nv_rows)
+            _nv_evt = st.dataframe(
+                _nv_df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="nv_tbl",
+                column_config={
+                    '상태':      st.column_config.TextColumn('상태',      width='small'),
+                    '제목':      st.column_config.TextColumn('제목',      width='large'),
+                    '출처':      st.column_config.TextColumn('출처',      width='small'),
+                    '단':        st.column_config.TextColumn('단',        width='small'),
+                    '영향도':    st.column_config.TextColumn('영향도',    width='small'),
+                    '품질점수':  st.column_config.NumberColumn('품질점수', format='%.2f', width='small'),
+                    '수집 시각': st.column_config.TextColumn('수집 시각', width='small'),
+                },
             )
+
+            _nv_sel = _nv_evt.selection.rows
+            if _nv_sel:
+                _nv_art = _nv_filtered[_nv_sel[0]]
+                if _nv_art.get('is_analyzed'):
+                    st.markdown("---")
+                    _show_article_detail(_nv_art)
+                else:
+                    st.info("선택한 기사는 분석되지 않았습니다. 분석 완료 기사(🔬)를 선택하세요.")
 
 
 # ===== AI 검색 (RAG) 페이지 =====
