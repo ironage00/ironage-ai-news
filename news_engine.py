@@ -2649,14 +2649,14 @@ def analyze_news_with_replacement(news_to_analyze, all_news_items, target_count=
             with get_db_session() as session:
                 article = session.query(NewsArticle).filter_by(link=item['link']).first()
                 if article:
-                    article.is_analyzed = True  # Bug 6+7: 분석 완료 플래그 저장
-                    article.ai_model = item.get('ai_model', ai_model)  # Bug 1: 실제 사용 모델 저장
+                    article.is_analyzed = True
+                    article.analysis_result = analysis
+                    article.ai_model = item.get('ai_model', ai_model)
                     if item.get('ai_model_fallback'):
                         if hasattr(article, 'ai_model_fallback'):
                             article.ai_model_fallback = item['ai_model_fallback']
                     if item.get('extracted_keywords'):
                         article.extracted_keywords = item['extracted_keywords']
-                    # 방안 B: 스크래핑 본문을 DB에 저장 → RAG 임베딩 품질 향상
                     scraped = item.get('content', '')
                     if scraped and not article.content:
                         article.content = scraped[:2000]
@@ -5440,8 +5440,9 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             with get_db_session() as _s:
                 art = _s.query(NewsArticle).filter_by(link=item['link']).first()
                 if art:
-                    art.is_analyzed = True
-                    art.ai_model    = item.get('ai_model', ai_model)
+                    art.is_analyzed    = True
+                    art.analysis_result = analysis
+                    art.ai_model       = item.get('ai_model', ai_model)
                     if item.get('extracted_keywords'):
                         art.extracted_keywords = item['extracted_keywords']
                     if item.get('content') and not art.content:
