@@ -3011,17 +3011,16 @@ def log_user_activity(user_email: str, action: str, detail: dict = None):
     try:
         from sqlalchemy import text as _log_text
         detail_str = json.dumps(detail, ensure_ascii=False) if detail else None
-        sql = (
+        sql = _log_text(
             "INSERT INTO user_activity_logs (user_email, action, detail) "
             "VALUES (:email, :action, :detail)"
         )
-        with DB_ENGINE.connect() as conn:
-            conn.execute(_log_text(sql), {
+        with get_db_session() as session:
+            session.execute(sql, {
                 'email':  user_email,
                 'action': action,
                 'detail': detail_str,
             })
-            conn.commit()
     except Exception as _e:
         log_warning(f"⚠️ 활동 로그 기록 실패 (무시): {_e}")
 
@@ -3057,8 +3056,8 @@ def get_activity_logs(
     where = " AND ".join(conditions)
     sql = f"SELECT id, user_email, action, detail, created_at FROM user_activity_logs WHERE {where} ORDER BY created_at DESC LIMIT :limit"
     try:
-        with DB_ENGINE.connect() as conn:
-            rows = conn.execute(_t(sql), params).fetchall()
+        with get_db_session() as session:
+            rows = session.execute(_t(sql), params).fetchall()
         return [
             {
                 'id': r[0], 'user_email': r[1], 'action': r[2],

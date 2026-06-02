@@ -1957,6 +1957,28 @@ python news_engine.py monthly
         st.markdown('<div class="tab-content">', unsafe_allow_html=True)
         st.markdown("### 📋 사용자 활동 로그")
         st.caption("접속 및 주요 기능 사용 이력을 조회합니다.")
+
+        # ── 로그 기능 진단 버튼 ─────────────────────────────────────────────────
+        if st.button("🔧 로그 기능 동작 테스트", key="log_diag_btn"):
+            try:
+                log_user_activity(_user_email, 'diag_test', {'source': 'admin_panel'})
+                import time as _t_diag
+                _t_diag.sleep(0.3)
+                _diag_logs = get_activity_logs(limit=5, days=1)
+                _diag_ok = any(r['action'] == 'diag_test' for r in _diag_logs)
+                if _diag_ok:
+                    st.success("✅ 로그 기능 정상 — DB 쓰기·읽기 모두 확인")
+                    # 테스트 레코드 즉시 삭제
+                    from news_engine import DB_ENGINE
+                    from sqlalchemy import text as _dt
+                    with DB_ENGINE.connect() as _dc:
+                        _dc.execute(_dt("DELETE FROM user_activity_logs WHERE action='diag_test'"))
+                        _dc.commit()
+                else:
+                    st.error("❌ 로그 쓰기 실패 — DB에 기록되지 않음. 서버 로그를 확인하세요.")
+            except Exception as _de:
+                st.error(f"❌ 진단 중 오류: {_de}")
+
         st.markdown("---")
 
         # ── 필터 ─────────────────────────────────────────────────────────────
