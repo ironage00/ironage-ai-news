@@ -941,6 +941,68 @@ def _article_dialog(art: dict):
     _show_article_detail(art)
 
 
+@st.fragment
+def _nv_table_fragment(filtered: list, unit_map: dict):
+    """뉴스현황 테이블 + 팝업 (fragment — 행 클릭 시 페이지 전체 재실행 방지)."""
+    import re as _re_html, html as _html_ent
+    def _strip_html(t): return _html_ent.unescape(_re_html.sub(r'<[^>]+>', '', t or ''))
+
+    _nv_rows = []
+    for _a in filtered:
+        if _a.get('is_analyzed'):
+            _st = '🔬 분석완료'
+        elif (_a.get('quality_score') or 0) > 0.5:
+            _st = '✅ 선별됨'
+        else:
+            _st = '📥 수집됨'
+        try:
+            _kd2  = json.loads(_a.get('extracted_keywords') or '{}')
+            _imp2 = _kd2.get('impact_level', '') if isinstance(_kd2, dict) else ''
+        except Exception:
+            _imp2 = ''
+        _nv_rows.append({
+            '상태':     _st,
+            '제목':     _strip_html(_a.get('title', '')),
+            '출처':     _a.get('source', ''),
+            '단':       unit_map.get(_a.get('unit_id'), '미분류'),
+            '영향도':   _imp2,
+            '품질점수': round(_a.get('quality_score') or 0, 2),
+            '수집 시각': (_a.get('collected_at') or '')[:16],
+        })
+
+    _nv_evt = st.dataframe(
+        pd.DataFrame(_nv_rows),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="nv_tbl",
+        column_config={
+            '상태':      st.column_config.TextColumn('상태',      width='small'),
+            '제목':      st.column_config.TextColumn('제목',      width='large'),
+            '출처':      st.column_config.TextColumn('출처',      width='small'),
+            '단':        st.column_config.TextColumn('단',        width='small'),
+            '영향도':    st.column_config.TextColumn('영향도',    width='small'),
+            '품질점수':  st.column_config.NumberColumn('품질점수', format='%.2f', width='small'),
+            '수집 시각': st.column_config.TextColumn('수집 시각', width='small'),
+        },
+    )
+
+    _sel = _nv_evt.selection.rows
+    if _sel:
+        _art = filtered[_sel[0]]
+        if _art.get('is_analyzed') and _art.get('analysis_result'):
+            _dlg_id = _art.get('id')
+            if st.session_state.get("_dlg_last_nv") != _dlg_id:
+                st.session_state["_dlg_last_nv"] = _dlg_id
+                _article_dialog(_art)
+        elif _art.get('is_analyzed'):
+            st.info("이 기사는 분석 마크는 있지만 분석 내용이 없습니다. 재분석이 필요합니다.")
+        else:
+            st.info("선택한 기사는 분석되지 않았습니다. 분석 완료 기사(🔬)를 선택하세요.")
+
+
+@st.fragment
 def _render_unit_articles_table(articles: list, unit_display: str, tab_key: str):
     """단별 분석 기사를 날짜별 테이블로 표시. 행 클릭 시 분석 상세 표시."""
     from collections import defaultdict as _dd
@@ -1329,75 +1391,14 @@ elif selected == "📰 뉴스 현황":
         if not _nv_filtered:
             st.info("검색 조건에 맞는 기사가 없습니다." if _nv_search else "해당 날짜에 기사가 없습니다.")
         else:
-            _nv_kw_note = f'검색어: **"{_nv_search}"** · ' if _nv_search else ''
+            _nv_unit_map = {u['id']: u['display_name'] for u in _nv_units}
+            _nv_kw_note  = f'검색어: **"{_nv_search}"** · ' if _nv_search else ''
             st.caption(
                 f"{_nv_kw_note}**{len(_nv_filtered):,}건**"
                 f"  |  🔬 분석완료 {_cnt_a}건  ·  ✅ 선별됨 {_cnt_s}건  ·  📥 수집됨 {_cnt_r}건"
                 f"  ·  행 클릭 시 분석 내용 표시"
             )
-
-            # 단 이름 캐시 (per-article get_unit_display_name 반복 호출 방지)
-            _nv_unit_map = {u['id']: u['display_name'] for u in _nv_units}
-
-            # HTML 태그 제거 + 엔티티 디코딩 헬퍼
-            import re as _re_html, html as _html_ent
-            def _strip_html(t): return _html_ent.unescape(_re_html.sub(r'<[^>]+>', '', t or ''))
-
-            # DataFrame 구성
-            _nv_rows = []
-            for _a in _nv_filtered:
-                if _a.get('is_analyzed'):
-                    _st = '🔬 분석완료'
-                elif (_a.get('quality_score') or 0) > 0.5:
-                    _st = '✅ 선별됨'
-                else:
-                    _st = '📥 수집됨'
-                try:
-                    _kd2 = json.loads(_a.get('extracted_keywords') or '{}')
-                    _imp2 = _kd2.get('impact_level', '') if isinstance(_kd2, dict) else ''
-                except Exception:
-                    _imp2 = ''
-                _nv_rows.append({
-                    '상태':     _st,
-                    '제목':     _strip_html(_a.get('title', '')),
-                    '출처':     _a.get('source', ''),
-                    '단':       _nv_unit_map.get(_a.get('unit_id'), '미분류'),
-                    '영향도':   _imp2,
-                    '품질점수': round(_a.get('quality_score') or 0, 2),
-                    '수집 시각': (_a.get('collected_at') or '')[:16],
-                })
-
-            _nv_df = pd.DataFrame(_nv_rows)
-            _nv_evt = st.dataframe(
-                _nv_df,
-                use_container_width=True,
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key="nv_tbl",
-                column_config={
-                    '상태':      st.column_config.TextColumn('상태',      width='small'),
-                    '제목':      st.column_config.TextColumn('제목',      width='large'),
-                    '출처':      st.column_config.TextColumn('출처',      width='small'),
-                    '단':        st.column_config.TextColumn('단',        width='small'),
-                    '영향도':    st.column_config.TextColumn('영향도',    width='small'),
-                    '품질점수':  st.column_config.NumberColumn('품질점수', format='%.2f', width='small'),
-                    '수집 시각': st.column_config.TextColumn('수집 시각', width='small'),
-                },
-            )
-
-            _nv_sel = _nv_evt.selection.rows
-            if _nv_sel:
-                _nv_art = _nv_filtered[_nv_sel[0]]
-                if _nv_art.get('is_analyzed') and _nv_art.get('analysis_result'):
-                    _nv_dlg_id = _nv_art.get('id')
-                    if st.session_state.get("_dlg_last_nv") != _nv_dlg_id:
-                        st.session_state["_dlg_last_nv"] = _nv_dlg_id
-                        _article_dialog(_nv_art)
-                elif _nv_art.get('is_analyzed'):
-                    st.info("이 기사는 분석 마크는 있지만 분석 내용이 없습니다. 재분석이 필요합니다.")
-                else:
-                    st.info("선택한 기사는 분석되지 않았습니다. 분석 완료 기사(🔬)를 선택하세요.")
+            _nv_table_fragment(_nv_filtered, _nv_unit_map)
 
 
 # ===== AI 검색 (RAG) 페이지 =====
