@@ -608,42 +608,59 @@ def save_news_to_db(news_items, unit_id=None):
         return 0
 
     saved_count = 0
+    skipped_similar = 0
 
     with get_db_session() as session:
+        # 전체 단 대상 최근 2일 기사 제목 미리 로드 — 단 간 교차 중복 체크용
+        _cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+        _existing_titles: list = [
+            r[0] for r in
+            session.query(NewsArticle.title)
+                   .filter(NewsArticle.collected_at >= _cutoff)
+                   .all()
+        ]
+
         for item in news_items:
             try:
-                existing = session.query(NewsArticle).filter_by(link=item['link']).first()
+                # 1단계: URL 정확 일치 중복 체크 (기존)
+                if session.query(NewsArticle).filter_by(link=item['link']).first():
+                    continue
 
-                if not existing:
-                    pub_date = None
-                    if item.get('published'):
-                        try:
-                            if isinstance(item['published'], str):
-                                pub_date = date_parser.parse(item['published'])
-                            elif isinstance(item['published'], datetime.datetime):
-                                pub_date = item['published']
-                        except Exception:
-                            pass
+                # 2단계: 제목 유사도 중복 체크 (전체 단 대상)
+                new_title = item.get('title', '')
+                if any(is_similar_news(new_title, et) for et in _existing_titles if et):
+                    skipped_similar += 1
+                    continue
 
-                    article = NewsArticle(
-                        title=item['title'],
-                        link=item['link'],
-                        source=item.get('source', '출처 불명'),
-                        published=pub_date,
-                        content=item.get('content', ''),
-                        quality_score=item.get('quality_score', 0.0),
-                        unit_id=unit_id,
-                    )
+                pub_date = None
+                if item.get('published'):
+                    try:
+                        if isinstance(item['published'], str):
+                            pub_date = date_parser.parse(item['published'])
+                        elif isinstance(item['published'], datetime.datetime):
+                            pub_date = item['published']
+                    except Exception:
+                        pass
 
-                    session.add(article)
-                    saved_count += 1
+                article = NewsArticle(
+                    title=new_title,
+                    link=item['link'],
+                    source=item.get('source', '출처 불명'),
+                    published=pub_date,
+                    content=item.get('content', ''),
+                    quality_score=item.get('quality_score', 0.0),
+                    unit_id=unit_id,
+                )
+                session.add(article)
+                _existing_titles.append(new_title)  # 같은 배치 내 중복도 차단
+                saved_count += 1
 
             except Exception as e:
                 log_warning(f"⚠️ DB 저장 실패: {item.get('title', 'Unknown')[:30]}...")
                 continue
 
     unit_label = f" (단 {unit_id})" if unit_id else ""
-    log_info(f"   💾 {saved_count}개 뉴스가 DB에 저장되었습니다{unit_label}.")
+    log_info(f"   💾 {saved_count}개 저장, {skipped_similar}개 유사 중복 건너뜀{unit_label}.")
     return saved_count
 
 def load_news_from_db(days=7, is_analyzed=None, unit_id=None):
