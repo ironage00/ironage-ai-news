@@ -103,10 +103,36 @@ try:
         get_all_active_keywords,
         filter_articles_by_keywords,
     )
-except ImportError as e:
-    st.error(f"❌ 모듈 import 실패: {e}")
-    st.info("news_engine.py 파일이 같은 폴더에 있는지 확인하세요.")
-    st.stop()
+except (ImportError, KeyError) as e:
+    # KeyError: 'news_engine' — 배포 직후 동시 세션이 모듈을 경합할 때 발생
+    # 0.5초 후 페이지 자동 재시도
+    import time as _t; _t.sleep(0.5)
+    try:
+        from news_engine import (
+            get_db_statistics, load_news_from_db, run_daily_collection,
+            run_weekly_report, run_monthly_report, analyze_news_with_ai,
+            analyze_news_with_replacement, update_analysis_in_db,
+            get_news_data, save_news_to_db, filter_news_by_ai,
+            get_article_content, is_valid_analysis, generate_google_doc_report,
+            send_gmail_report, verify_deduplication,
+            save_analysis_to_weekly_excel, save_keyword_summary_to_weekly_excel,
+            get_week_number, get_week_date_range, get_db_session,
+            clear_clients_cache, check_model_health, _get_impact_info,
+            load_user_settings, save_user_settings, get_unit_display_name,
+            get_all_units, load_unit_settings, assign_user_unit,
+            run_unit_collection, run_all_units_daily,
+            log_user_activity, get_activity_logs,
+            IMPACT_LEVEL_ORDER, IMPACT_LEVEL_COLOR_RGB,
+            SessionLocal, NewsArticle,
+            OPENAI_API_KEY, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET,
+            SENDER_EMAIL, GMAIL_PASSWORD, RECEIVER_EMAIL,
+            GOOGLE_ALERTS_RSS_URLS, NAVER_QUERIES,
+            get_all_active_keywords, filter_articles_by_keywords,
+        )
+    except Exception as _e2:
+        st.error(f"❌ 모듈 로드 실패: {_e2}")
+        st.info("페이지를 새로고침(F5)하면 대부분 해결됩니다.")
+        st.stop()
 
 try:
     from intelligence_widgets import render_keyword_intelligence
