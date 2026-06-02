@@ -3009,14 +3009,14 @@ def log_user_activity(user_email: str, action: str, detail: dict = None):
         'settings_save', 'unit_assign'
     """
     try:
+        from sqlalchemy import text as _log_text
         detail_str = json.dumps(detail, ensure_ascii=False) if detail else None
-        is_pg = not DB_ENGINE.url.drivername.startswith('sqlite')
         sql = (
             "INSERT INTO user_activity_logs (user_email, action, detail) "
             "VALUES (:email, :action, :detail)"
         )
         with DB_ENGINE.connect() as conn:
-            conn.execute(text(sql), {
+            conn.execute(_log_text(sql), {
                 'email':  user_email,
                 'action': action,
                 'detail': detail_str,
