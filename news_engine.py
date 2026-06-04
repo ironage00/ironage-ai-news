@@ -747,6 +747,7 @@ def update_analysis_in_db(article_id: int, analysis_result: str, ai_model: str, 
         log_error("❌ DB 세션이 초기화되지 않았습니다.")
         return False
     
+    _saved = False
     with get_db_session() as session:
         try:
             article = session.get(NewsArticle, article_id)
@@ -756,11 +757,18 @@ def update_analysis_in_db(article_id: int, analysis_result: str, ai_model: str, 
                 article.ai_model = ai_model
                 if keywords_json:
                     article.extracted_keywords = keywords_json
-                return True
-            return False
+                _saved = True
         except Exception as e:
-            log_error(f"❌ 분석 결과 저장 실패: {e}")
-            return False
+            log_error(f"❌ 분析 결과 저장 실패: {e}")
+
+    # 분析 추출 키워드로 단 배정 재검토 (저장 성공 시)
+    if _saved and keywords_json:
+        try:
+            reclassify_article_unit(article_id, keywords_json)
+        except Exception:
+            pass
+
+    return _saved
 
 def get_db_statistics():
     """DB 통계 조회"""
@@ -1007,6 +1015,98 @@ def article_richness_score(item: Dict) -> tuple:
 def _best_representative(items: List[Dict]) -> Dict:
     """중복 후보 중 실제 분석 가치가 가장 높은 대표 기사 선택."""
     return max(items, key=article_richness_score)
+
+
+def reclassify_article_unit(article_id: int, extracted_kw_json: str) -> bool:
+    """분석 완료 후 AI 추출 키워드로 단(unit) 배정 재검토.
+
+    제목 키워드 카운트로 배정된 unit_id 를, 분析이 추출한 핵심 기술·키워드와
+    단별 모니터링 키워드 간의 가중 매칭 점수로 재평가한다.
+
+    재배정 조건 (둘 중 하나):
+      ① 현재 unit_id 가 None (배정 없음)  →  최고 점수 단으로 배정
+      ② 최고 점수 단의 점수가 현재 단 점수의 2 배 이상  →  재배정
+
+    Args:
+        article_id: DB NewsArticle.id
+        extracted_kw_json: AI 분析이 생성한 extracted_keywords JSON 문자열
+
+    Returns:
+        True  — unit_id 가 변경됨
+        False — 변경 없음 (기존 배정 유지)
+    """
+    if not extracted_kw_json:
+        return False
+    try:
+        ekw = json.loads(extracted_kw_json)
+    except Exception:
+        return False
+
+    # ── 추출 용어 풀 구성 ──────────────────────────────────────────────────
+    # key_technologies: AI가 정규화한 대표 기술명 (가장 신뢰도 높음)
+    # keywords[importance=high/medium]: 기사 핵심 키워드
+    extracted_terms: set = set()
+    for t in (ekw.get('key_technologies') or []):
+        v = str(t).strip().lower()
+        if len(v) >= 2:
+            extracted_terms.add(v)
+    for kw in (ekw.get('keywords') or []):
+        if kw.get('importance') in ('high', 'medium') and kw.get('term'):
+            v = str(kw['term']).strip().lower()
+            if len(v) >= 2:
+                extracted_terms.add(v)
+
+    if not extracted_terms:
+        return False
+
+    # ── 단별 매칭 점수 계산 ───────────────────────────────────────────────
+    # 완전 일치: len(keyword) × 2    (긴 전문 용어일수록 고득점)
+    # 부분 포함: min(len) × 1        (한쪽이 다른 쪽의 부분 문자열)
+    all_units = get_all_units()
+    unit_scores: dict = {}
+    for unit in all_units:
+        uid  = unit['id']
+        cfg  = load_unit_settings(uid)
+        ukws = [kw.lower() for kw in cfg.get('keywords', []) if kw and len(kw) >= 2]
+        if not ukws:
+            continue
+        score = 0.0
+        for term in extracted_terms:
+            for ukw in ukws:
+                if ukw == term:
+                    score += len(ukw) * 2.0
+                elif ukw in term or term in ukw:
+                    score += min(len(ukw), len(term)) * 1.0
+        if score > 0:
+            unit_scores[uid] = score
+
+    if not unit_scores:
+        return False
+
+    best_uid   = max(unit_scores, key=unit_scores.get)
+    best_score = unit_scores[best_uid]
+
+    with get_db_session() as session:
+        article = session.query(NewsArticle).filter_by(id=article_id).first()
+        if not article:
+            return False
+
+        cur_uid   = article.unit_id
+        cur_score = unit_scores.get(cur_uid, 0.0)
+
+        # 재배정 조건 미충족이면 현재 배정 유지
+        if best_uid == cur_uid:
+            return False
+        if cur_uid is not None and cur_score > 0 and best_score < cur_score * 1.5:
+            return False
+
+        old_uid = article.unit_id
+        article.unit_id = best_uid
+        log_info(
+            f"   ↻ 단 재배정 unit({old_uid}→{best_uid}) "
+            f"점수({cur_score:.1f}→{best_score:.1f}) | {article.title[:45]}"
+        )
+        return True
 
 
 # ==============================================================================
@@ -2881,8 +2981,16 @@ def analyze_news_with_replacement(news_to_analyze, all_news_items, target_count=
                     scraped = item.get('content', '')
                     if scraped and len(scraped) > len(article.content or ''):
                         article.content = scraped[:2000]
+                    _art_id_for_reclassify = article.id
 
-            log_info(f"      ✅ 분석 성공")
+            # 분析 추출 키워드로 단 배정 재검토
+            if item.get('extracted_keywords'):
+                try:
+                    reclassify_article_unit(_art_id_for_reclassify, item['extracted_keywords'])
+                except Exception:
+                    pass
+
+            log_info(f"      ✅ 분析 성공")
             if progress_callback:
                 progress_callback(len(analyzed_results), target_count)
         else:
@@ -5658,6 +5766,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if not is_valid_analysis(analysis):
                 return None
             item['analysis_result'] = analysis
+            _art_id = None
             with get_db_session() as _s:
                 art = _s.query(NewsArticle).filter_by(link=item['link']).first()
                 if art:
@@ -5668,7 +5777,14 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                         art.extracted_keywords = item['extracted_keywords']
                     if item.get('content') and len(item['content']) > len(art.content or ''):
                         art.content = item['content'][:2000]
+                    _art_id = art.id
                     _s.commit()
+            # 분析 추출 키워드로 단 배정 재검토
+            if _art_id and item.get('extracted_keywords'):
+                try:
+                    reclassify_article_unit(_art_id, item['extracted_keywords'])
+                except Exception:
+                    pass
             return item
         except Exception as _e:
             log_warning(f"분析 실패: {item.get('title','')[:40]} -- {_e}")
