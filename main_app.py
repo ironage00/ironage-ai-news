@@ -1139,6 +1139,33 @@ if selected == "🏠 홈":
                     st.error(f"❌ 오류: {str(_home_err)}")
                     st.error(traceback.format_exc())
 
+        st.markdown("---")
+        with st.expander("🔀 단 배정 일괄 재분류 (관리자 전용)", expanded=False):
+            st.markdown(
+                "분析 완료된 **기존 기사 전체**의 단 배정을 AI 추출 키워드 기준으로 재검토합니다.\n\n"
+                "- 추출 키워드 ↔ 단별 모니터링 키워드 가중 매칭\n"
+                "- 여러 단과 관련된 기사는 **다중 단 동시 배정** (최고 점수의 60% 이상)\n"
+                "- 주 배정: 최고 점수 단 / 점수 차이 1.5배 미만이면 현재 배정 유지"
+            )
+            if st.button("▶ 일괄 재분류 실행", type="primary",
+                         use_container_width=True, key="home_batch_reclassify"):
+                try:
+                    from news_engine import run_batch_reclassify
+                    _prog = st.progress(0, text="재분류 중...")
+                    def _reclassify_cb(done, total):
+                        _prog.progress(done / total, text=f"재분류 중... {done}/{total}")
+                    _rc = run_batch_reclassify(progress_callback=_reclassify_cb)
+                    _prog.empty()
+                    st.success(
+                        f"✅ 재분류 완료 — "
+                        f"총 {_rc['total']}건 / 변경 {_rc['changed']}건 / "
+                        f"유지 {_rc['skipped']}건 / 오류 {_rc['errors']}건"
+                    )
+                    st.cache_data.clear()
+                    log_user_activity(_user_email, 'batch_reclassify', _rc)
+                except Exception as _re:
+                    st.error(f"❌ 오류: {str(_re)}")
+
     st.markdown("---")
     st.markdown("### 🏢 단별 일일 동향")
 

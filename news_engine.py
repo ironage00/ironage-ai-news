@@ -250,7 +250,8 @@ class NewsArticle(Base):
     analysis_result = Column(Text)
     ai_model = Column(String(50))
     extracted_keywords = Column(Text)
-    unit_id = Column(Integer, nullable=True)  # units.id FK (NULL = 마이그레이션 전 기사)
+    unit_id  = Column(Integer, nullable=True)   # 주 배정 단 (최고 점수)
+    unit_ids = Column(Text,    nullable=True)   # 다중 단 배정: ",1,2," 형식 (앞뒤 쉼표 포함)
 
     def __repr__(self):
         return f"<NewsArticle(id={self.id}, title='{self.title[:30]}...')>"
@@ -403,6 +404,7 @@ def check_and_migrate_database():
             'extracted_keywords': 'TEXT',
             'ai_model_fallback':  'VARCHAR(100)',
             'unit_id':            'INTEGER',
+            'unit_ids':           'TEXT',   # 다중 단 배정 ",1,2," 형식
         }
         with DB_ENGINE.connect() as conn:
             for col, col_type in missing_na.items():
@@ -718,7 +720,12 @@ def load_news_from_db(days=7, is_analyzed=None, unit_id=None):
             if unit_id == -1:
                 query = query.filter(NewsArticle.unit_id.is_(None))
             elif unit_id is not None:
-                query = query.filter(NewsArticle.unit_id == unit_id)
+                # 주 배정(unit_id) OR 다중 배정(unit_ids 컬럼에 포함) 모두 반환
+                _uid_tag = f',{unit_id},'
+                query = query.filter(
+                    (NewsArticle.unit_id == unit_id) |
+                    (NewsArticle.unit_ids.like(f'%{_uid_tag}%'))
+                )
 
             articles = query.order_by(NewsArticle.collected_at.desc()).all()
 
@@ -735,6 +742,7 @@ def load_news_from_db(days=7, is_analyzed=None, unit_id=None):
                 'analysis_result': a.analysis_result,
                 'extracted_keywords': a.extracted_keywords,
                 'unit_id': a.unit_id,
+                'unit_ids': a.unit_ids,
             } for a in articles]
 
         except Exception as e:
@@ -1086,27 +1094,96 @@ def reclassify_article_unit(article_id: int, extracted_kw_json: str) -> bool:
     best_uid   = max(unit_scores, key=unit_scores.get)
     best_score = unit_scores[best_uid]
 
+    # ── 다중 단 배정: 최고 점수의 60% 이상인 단은 모두 배정 ──────────────
+    MULTI_UNIT_THRESHOLD = 0.60   # 최고 점수 대비 비율 (튜닝 가능)
+    assigned_uids = sorted(
+        uid for uid, sc in unit_scores.items()
+        if sc >= best_score * MULTI_UNIT_THRESHOLD
+    )
+    # ",1,2," 형식으로 저장 (앞뒤 쉼표로 LIKE '%,X,%' 정확 검색 보장)
+    new_unit_ids = ',' + ','.join(str(u) for u in assigned_uids) + ',' if assigned_uids else None
+
     with get_db_session() as session:
         article = session.query(NewsArticle).filter_by(id=article_id).first()
         if not article:
             return False
 
-        cur_uid   = article.unit_id
-        cur_score = unit_scores.get(cur_uid, 0.0)
+        cur_uid    = article.unit_id
+        cur_score  = unit_scores.get(cur_uid, 0.0)
+        changed    = False
 
-        # 재배정 조건 미충족이면 현재 배정 유지
-        if best_uid == cur_uid:
-            return False
-        if cur_uid is not None and cur_score > 0 and best_score < cur_score * 1.5:
-            return False
+        # ── 주 배정(unit_id) 변경 여부 판단 ────────────────────────────────
+        if best_uid != cur_uid:
+            if cur_uid is None or cur_score == 0 or best_score >= cur_score * 1.5:
+                article.unit_id = best_uid
+                changed = True
+                log_info(
+                    f"   ↻ 주 단 재배정 unit({cur_uid}→{best_uid}) "
+                    f"점수({cur_score:.1f}→{best_score:.1f}) | {article.title[:40]}"
+                )
 
-        old_uid = article.unit_id
-        article.unit_id = best_uid
-        log_info(
-            f"   ↻ 단 재배정 unit({old_uid}→{best_uid}) "
-            f"점수({cur_score:.1f}→{best_score:.1f}) | {article.title[:45]}"
+        # ── 다중 단 배정(unit_ids) 항상 갱신 ───────────────────────────────
+        if article.unit_ids != new_unit_ids:
+            article.unit_ids = new_unit_ids
+            changed = True
+            if len(assigned_uids) > 1:
+                log_info(
+                    f"   ⊕ 다중 단 배정 {assigned_uids} | {article.title[:40]}"
+                )
+
+        return changed
+
+
+def run_batch_reclassify(progress_callback=None) -> dict:
+    """분析 완료된 기사 전체에 대해 단 배정 재분류를 일괄 실행한다.
+
+    extracted_keywords 가 있는 분析 완료 기사를 모두 조회하여
+    reclassify_article_unit() 를 호출하고, 변경/미변경/오류 통계를 반환.
+
+    Args:
+        progress_callback: (done: int, total: int) → None  (UI 진행률 표시용)
+
+    Returns:
+        {'total': int, 'changed': int, 'skipped': int, 'errors': int}
+    """
+    if not SessionLocal:
+        return {'total': 0, 'changed': 0, 'skipped': 0, 'errors': 0}
+
+    with get_db_session() as session:
+        rows = (
+            session.query(NewsArticle.id, NewsArticle.extracted_keywords, NewsArticle.title)
+            .filter(
+                NewsArticle.is_analyzed == True,
+                NewsArticle.extracted_keywords.isnot(None),
+                NewsArticle.extracted_keywords != '',
+            )
+            .all()
         )
-        return True
+
+    total   = len(rows)
+    changed = skipped = errors = 0
+
+    log_info(f"[일괄 재분류] 대상 기사 {total}건")
+
+    for idx, (art_id, ekw_json, title) in enumerate(rows, 1):
+        try:
+            result = reclassify_article_unit(art_id, ekw_json)
+            if result:
+                changed += 1
+            else:
+                skipped += 1
+        except Exception as e:
+            log_warning(f"재분류 오류 id={art_id}: {e}")
+            errors += 1
+
+        if progress_callback and idx % 10 == 0:
+            progress_callback(idx, total)
+
+    log_info(
+        f"[일괄 재분류 완료] 총 {total}건 — "
+        f"변경 {changed}건 / 유지 {skipped}건 / 오류 {errors}건"
+    )
+    return {'total': total, 'changed': changed, 'skipped': skipped, 'errors': errors}
 
 
 # ==============================================================================
