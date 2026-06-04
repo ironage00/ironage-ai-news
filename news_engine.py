@@ -1824,6 +1824,19 @@ def get_news_data(rss_urls=None, naver_queries=None):
     log_info(f"    • 실패: {stats['naver']['failed']}개")
     log_info(f"    • 시간 초과로 제외: {stats['naver']['filtered_out']}개 ⏰")
 
+    # ===== 명백한 비ICT 기사 수집 단계 제외 =====
+    _NON_ICT_COLLECT = re.compile(
+        r'타율|홈런|야구|오타니|류현진|투타니|'
+        r'교육감|바칼로레아|ib교육|공교육 표준|교육과정|수능|'
+        r'공공디자인|체육시설|공원조성|분양|재개발',
+        re.IGNORECASE,
+    )
+    _before_collect_excl = len(news_list)
+    news_list = [n for n in news_list if not _NON_ICT_COLLECT.search(n.get('title', ''))]
+    _removed_collect = _before_collect_excl - len(news_list)
+    if _removed_collect:
+        log_info(f"  • 비ICT 수집 제외: {_removed_collect}개 ({_before_collect_excl}→{len(news_list)})")
+
     # ===== 중복 제거 및 최종 결과 =====
     log_info(f"\n🔄 중복 제거 전: {len(news_list)}개 뉴스")
     unique_news_items = deduplicate_news(news_list)
@@ -1954,13 +1967,34 @@ def filter_news_by_ai(
     """
     
     log_info("\n[🚀 작업 중] AI가 정책 입안자를 위해 뉴스를 선별하고 있습니다...")
-    
+
     # ✅ 수정: ai_model 변수를 함수 시작 시 즉시 초기화
     if ai_model is None:
         ai_model = CONFIG.get('ai_model', 'openai')
-    
+
     log_info(f"   🤖 사용 모델: {ai_model.upper()}")
     log_info(f"   🎯 목표 선별: 최대 {max_results}개 (중복 제거 후)")
+
+    # =========================================================================
+    # Stage 0: 명백한 비ICT 도메인 즉시 제외
+    # '표준', '6G' 등 ICT 키워드가 스포츠·교육·공공시설 기사에서 오탐되는 것을 차단.
+    # 예시 오탐:
+    #   '6G 타율 0.462' 오타니  → 야구 타율 표기에 6G 포함
+    #   '전국 표준 안전 체육시설' → 표준이 ICT 표준이 아닌 경우
+    #   '교육감 IB교육 전국 표준' → 공교육 표준 기사
+    # =========================================================================
+    _NON_ICT_EXCL = re.compile(
+        r'타율|홈런|야구|오타니|류현진|투타니|'         # 스포츠 (타율 옆 6G 오탐 방지)
+        r'교육감|바칼로레아|ib교육|공교육 표준|교육과정|수능|'  # 교육 비ICT
+        r'공공디자인|체육시설|공원조성|분양|재개발',       # 공공시설·부동산
+        re.IGNORECASE,
+    )
+    _before_s0 = len(news_items)
+    news_items = [item for item in news_items
+                  if not _NON_ICT_EXCL.search(item.get('title', ''))]
+    _removed_s0 = _before_s0 - len(news_items)
+    if _removed_s0:
+        log_info(f"  • Stage 0 비ICT 즉시 제외: {_removed_s0}개 제거 ({_before_s0}→{len(news_items)})")
     
     # API 키 확인
     api_key_map = {
