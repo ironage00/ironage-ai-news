@@ -4207,23 +4207,17 @@ def filter_articles_by_keywords(articles: list, keywords: list) -> list:
 # ==============================================================================
 
 def get_weekly_subscribers() -> list:
-    """user_settings에서 schedule_weekly=True인 사용자의 email_recipients를 취합.
-    등록된 사용자 설정이 없으면 전역 RECEIVER_EMAIL 반환."""
-    from sqlalchemy import text as sa_text
+    """단별 이메일 설정(대시보드에서 관리)에서 주간 구독자 목록을 취합.
+    load_unit_settings()를 사용하므로 대시보드 변경이 즉시 반영된다.
+    등록된 이메일이 없으면 전역 RECEIVER_EMAIL 반환."""
     try:
-        with get_db_session() as session:
-            rows = session.execute(
-                sa_text("SELECT email_recipients FROM user_settings WHERE schedule_weekly = TRUE")
-            ).fetchall()
         emails = set()
-        for row in rows:
-            try:
-                for addr in json.loads(row[0] or '[]'):
-                    addr = addr.strip()
-                    if addr and '@' in addr:
-                        emails.add(addr)
-            except Exception:
-                pass
+        for unit in get_all_units():
+            cfg = load_unit_settings(unit['id'])
+            for addr in cfg.get('email_recipients', []):
+                addr = addr.strip()
+                if addr and '@' in addr:
+                    emails.add(addr)
         return sorted(emails) if emails else list(RECEIVER_EMAIL)
     except Exception as e:
         log_warning(f"get_weekly_subscribers 오류: {e}")
@@ -5886,6 +5880,10 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     # Phase 4: 단별 리포트/이메일 (순차)
     import pytz as _pytz_l4
     _kst_date = datetime.datetime.now(_pytz_l4.timezone('Asia/Seoul')).strftime('%Y년 %m월 %d일')
+    _weekday = datetime.date.today().weekday()  # 0=월, 4=금, 5=토, 6=일
+    _skip_email = _weekday >= 5  # 토/일은 이메일 발송 skip
+    if _skip_email:
+        log_info(f"[Phase 4] {'토요일' if _weekday == 5 else '일요일'} — 이메일 발송 건너뜀. 수집·분析 결과는 DB에 저장됩니다.")
     log_info("[Phase 4] 단별 리포트/이메일 순차 발송")
     summary: dict = {}
 
@@ -5900,36 +5898,51 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if it['link'] in analysis_cache and len(analyzed) < 20:
                 analyzed.append(analysis_cache[it['link']])
 
+        # 월요일: DB에서 금·토·일 누적 기사 추가 (오늘치 분析 실패해도 주말분 발송)
+        if _weekday == 0:
+            _acc = load_news_from_db(days=3, is_analyzed=True, unit_id=uid)
+            _today_links = {r['link'] for r in analyzed}
+            _extra = [a for a in _acc if a['link'] not in _today_links]
+            if _extra:
+                log_info(f"   [{display}] 주말 누적 기사 {len(_extra)}개 추가 포함")
+                analyzed = _extra + analyzed
+
         if not analyzed:
             unit_result['errors'].append('분析 결과 없음')
             log_warning(f"[{display}] 분析 결과 없음 -- 건너뜀")
             continue
         unit_result['analyzed'] = len(analyzed)
 
+        # 이메일 제목: 단별 고정 형식 (_UNIT_EMAIL_SUBJECT_MAP) — 변경하지 않음
         _subj = f"[TTA] {_UNIT_EMAIL_SUBJECT_MAP.get(name, f'{display} 동향 보고서')} ({_kst_date})"
+        _a = analyzed
 
-        _a = analyzed; _n = name; _d = display
-        doc_url, report_title = safe_execute(
-            lambda a=_a, n=_n, d=_d: generate_google_doc_report(a, unit_name=n, unit_display=d),
-            error_msg=f"[{display}] 구글 문서 실패",
-            default_return=(None, None),
-        )
-        report_title = report_title or (
-            f"[{display}] AI 뉴스 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})")
+        if _skip_email:
+            log_info(f"   [{display}] 이메일 발송 건너뜀 (주말 — DB 저장 완료)")
+        else:
+            _n = name; _d = display
+            doc_url, report_title = safe_execute(
+                lambda a=_a, n=_n, d=_d: generate_google_doc_report(a, unit_name=n, unit_display=d),
+                error_msg=f"[{display}] 구글 문서 실패",
+                default_return=(None, None),
+            )
+            report_title = report_title or (
+                f"[{display}] AI 뉴스 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})")
 
-        other_news = [it for it in pool if it['link'] not in {r['link'] for r in analyzed}]
-        receivers  = data['email_recipients'] if data['email_recipients'] else None
+            other_news = [it for it in pool if it['link'] not in {r['link'] for r in analyzed}]
+            receivers  = data['email_recipients'] if data['email_recipients'] else None
 
-        _rt = report_title; _du = doc_url; _on = other_news
-        _rcv = receivers; _sn = data['sender_name']; _dp = display
-        _esp = data['email_subject_prefix']; _esub = _subj
-        safe_execute(
-            lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub:
-                send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
-                    unit_display=dp, email_subject_prefix=esp, email_subject_override=esub),
-            error_msg=f"[{display}] 이메일 실패",
-            default_return=None,
-        )
+            _rt = report_title; _du = doc_url; _on = other_news
+            _rcv = receivers; _sn = data['sender_name']; _dp = display
+            _esp = data['email_subject_prefix']; _esub = _subj
+            safe_execute(
+                lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub:
+                    send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
+                        unit_display=dp, email_subject_prefix=esp, email_subject_override=esub),
+                error_msg=f"[{display}] 이메일 실패",
+                default_return=None,
+            )
+
         safe_execute(
             lambda a=_a: save_analysis_to_weekly_excel(a),
             error_msg=f"[{display}] 엑셀 저장 실패",
@@ -6262,8 +6275,12 @@ def run_daily_collection(ai_model: str = None):
     )
     
     if not analyzed_results:
-        log_error("❌ 분석된 뉴스가 없습니다. 리포트 생성을 건너뜁니다.")
-        return []
+        # 월요일이면 주말 누적 기사만으로 발송 가능 — 조기 종료하지 않고 계속 진행
+        _is_monday_fallback = (datetime.date.today().weekday() == 0)
+        if not _is_monday_fallback:
+            log_error("❌ 분석된 뉴스가 없습니다. 리포트 생성을 건너뜁니다.")
+            return []
+        log_warning("⚠️ 오늘(월요일) 분석된 뉴스 없음 — 주말 누적 기사로만 발송을 시도합니다.")
     
     log_info("\n[작업 5/9] 분석 결과 저장 중...")
     saved_analysis = 0
@@ -6297,25 +6314,49 @@ def run_daily_collection(ai_model: str = None):
     other_news = [item for item in news_to_analyze if item['link'] not in analyzed_links]
     log_info(f"   📋 추가 수집 뉴스 구성: 선별 {len(news_to_analyze)}개 중 미분석 {len(other_news)}개")
 
-    doc_url, report_title = safe_execute(
-        lambda: generate_google_doc_report(analyzed_results),
-        error_msg="구글 문서 생성 실패",
-        default_return=(None, None)
-    )
+    # 요일 체크: 토(5)/일(6)은 이메일 발송 skip, 월요일(0)은 주말 누적 기사 포함
+    _today = datetime.date.today()
+    _weekday = _today.weekday()  # 0=월, 1=화, ..., 4=금, 5=토, 6=일
+    _skip_email = _weekday >= 5  # 토/일
 
-    # Bug 4: Docs 실패 여부와 무관하게 이메일 항상 발송
-    report_title = report_title or f"전파·이동통신 동향 보고서 ({datetime.date.today().strftime('%Y년 %m월 %d일')})"
-    log_info(f"   📰 추가 수집 뉴스: {len(other_news)}개 (선별된 목록 중 미분석)")
-    safe_execute(
-        lambda: send_gmail_report(
-            report_title,
-            analyzed_results,
-            doc_url,
-            other_news
-        ),
-        error_msg="이메일 발송 실패",
-        default_return=None
-    )
+    if _skip_email:
+        log_info(f"   ⏭️ 오늘은 {'토요일' if _weekday == 5 else '일요일'} — 이메일 발송을 건너뜁니다.")
+        log_info("   💾 수집·분석 결과는 DB에 저장됩니다. 월요일 아침에 누적 발송됩니다.")
+    else:
+        # 월요일이면 금요일 이후 3일치(금·토·일) DB 기사를 합쳐서 발송
+        if _weekday == 0:
+            log_info("   📅 월요일 — 금요일 이후 누적 기사를 포함하여 발송합니다.")
+            _accumulated = load_news_from_db(days=3, is_analyzed=True)
+            _today_links = {r['link'] for r in analyzed_results}
+            # load_news_from_db는 dict 리스트 반환 — 오늘치와 중복되지 않는 기사 추가
+            _extra = [a for a in _accumulated if a['link'] not in _today_links]
+            if _extra:
+                log_info(f"   ➕ 주말 누적 기사 {len(_extra)}개 추가 포함")
+                analyzed_results = _extra + analyzed_results
+            # 오늘 분석분도, 주말 누적분도 없으면 발송 불필요
+            if not analyzed_results:
+                log_warning("   ⚠️ 월요일 누적 포함 발송 대상 기사 없음 — 발송 건너뜁니다.")
+                return []
+
+        doc_url, report_title = safe_execute(
+            lambda: generate_google_doc_report(analyzed_results),
+            error_msg="구글 문서 생성 실패",
+            default_return=(None, None)
+        )
+
+        # Bug 4: Docs 실패 여부와 무관하게 이메일 항상 발송
+        report_title = report_title or f"전파·이동통신 동향 보고서 ({_today.strftime('%Y년 %m월 %d일')})"
+        log_info(f"   📰 추가 수집 뉴스: {len(other_news)}개 (선별된 목록 중 미분석)")
+        safe_execute(
+            lambda: send_gmail_report(
+                report_title,
+                analyzed_results,
+                doc_url,
+                other_news
+            ),
+            error_msg="이메일 발송 실패",
+            default_return=None
+        )
 
     # 구글챗 긴급 알림: 중요도 "상" 이슈 감지 시 즉시 발송
     alert_threshold = CONFIG.get('alert_impact_level', '상')
