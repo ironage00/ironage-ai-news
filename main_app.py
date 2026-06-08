@@ -1701,13 +1701,13 @@ elif selected == "⚙️ 단별 설정":
                     value="\n".join(u_cfg.get("keywords") or []),
                     key=f"s_kw_{uid}"
                 )
-                st.subheader("📡 Google Alerts RSS")
-                st.caption("RSS URL (줄바꿈으로 구분)")
+                st.subheader("📡 RSS 피드")
+                st.caption("RSS URL (줄바꿈으로 구분) — Google Alerts, ITU, ETSI, 3GPP 등 표준 RSS 2.0 형식 지원")
                 _rss_in = st.text_area(
                     "RSS", label_visibility="collapsed", height=130,
                     value="\n".join(u_cfg.get("google_alerts_rss") or []),
                     key=f"s_rss_{uid}",
-                    placeholder="https://www.google.co.kr/alerts/feeds/..."
+                    placeholder="https://www.google.co.kr/alerts/feeds/...\nhttps://www.itu.int/hub/feed/?cat=itu-t\nhttps://www.itu.int/hub/feed/?cat=itu-r"
                 )
             with _sc2:
                 st.subheader("📧 이메일 발송 설정")

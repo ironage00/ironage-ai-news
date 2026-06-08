@@ -1207,6 +1207,8 @@ def load_config():
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/2496376606356184244",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/6144919849490706848",
         "https://www.itu.int/hub/feed/",
+        "https://www.itu.int/hub/feed/?cat=itu-t",
+        "https://www.itu.int/hub/feed/?cat=itu-r",
         "https://www.etsi.org/?option=com_obrss&task=feed&id=2:rss-news-press&format=feed&Itemid=1094",
         "https://ieeetv.ieee.org/channel_rss/ieee_future_networks/rss",
         "https://ieeetv.ieee.org/channel_rss/series_channel_9/rss",
