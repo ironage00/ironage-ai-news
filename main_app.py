@@ -189,6 +189,28 @@ if _AUTH_PASSWORD and not _logged_in:
             type="password",
             key="_login_pw",
         )
+        # Chrome 비밀번호 저장을 위해 autocomplete 속성 주입
+        import streamlit.components.v1 as _components
+        _components.html("""
+        <script>
+            (function addAutocomplete() {
+                var doc = window.parent.document;
+                var inputs = doc.querySelectorAll('input[type="text"], input[type="email"]');
+                var pwds   = doc.querySelectorAll('input[type="password"]');
+                inputs.forEach(function(el) {
+                    el.setAttribute('autocomplete', 'username');
+                    el.setAttribute('name', 'username');
+                });
+                pwds.forEach(function(el) {
+                    el.setAttribute('autocomplete', 'current-password');
+                    el.setAttribute('name', 'password');
+                });
+                if (inputs.length === 0 && pwds.length === 0) {
+                    setTimeout(addAutocomplete, 300);
+                }
+            })();
+        </script>
+        """, height=0)
         if st.button("🔑 로그인", use_container_width=True, type="primary"):
             # 이메일 도메인 검사 (비어 있으면 로컬 계정으로 처리)
             _email_ok = (
