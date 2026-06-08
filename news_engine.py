@@ -5902,8 +5902,9 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                 analyzed.append(analysis_cache[it['link']])
 
         # 월요일: DB에서 금·토·일 누적 기사 추가 (오늘치 분析 실패해도 주말분 발송)
+        # days=4: 09:00 KST 실행 기준 금요일 기사가 경계에 걸리지 않도록 여유값 사용
         if _weekday == 0:
-            _acc = load_news_from_db(days=3, is_analyzed=True, unit_id=uid)
+            _acc = load_news_from_db(days=4, is_analyzed=True, unit_id=uid)
             _today_links = {r['link'] for r in analyzed}
             _extra = [a for a in _acc if a['link'] not in _today_links]
             if _extra:
