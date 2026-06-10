@@ -212,7 +212,7 @@ def search_similar_articles(
     query: str,
     top_k: int = TOP_K_DEFAULT,
     days: Optional[int] = None,
-    min_similarity: float = 0.30,
+    min_similarity: float = 0.25,
     unit_id: Optional[int] = None,
 ) -> List[Dict]:
     """
@@ -502,33 +502,35 @@ def answer_with_rag(
     log_info(f"  ✅ 컨텍스트 구성: 총 {len(ctx_articles)}건 (임베딩:{n_emb} / 키워드:{n_kw})")
 
     prompt = f"""당신은 TTA(한국정보통신기술협회) ICT 분석 전문가입니다.
-아래 뉴스 기사들을 **모두** 참고하여 질문에 포괄적으로 답하십시오.
+아래 {len(ctx_articles)}개 뉴스 기사를 **빠짐없이 모두** 참고하여 질문에 포괄적으로 답하십시오.
 
 [질문]
 {query}
 
-[참고 기사]
+[참고 기사 — 총 {len(ctx_articles)}건]
 {context}
 
 [답변 형식 — 반드시 아래 구조를 따르십시오]
 
-## 국가·기업별 동향
+## 주요 동향 요약
+(2~3문장으로 핵심 트렌드 정리)
 
-### 🇰🇷 한국 (또는 관련 국내 기관·기업)
-ㅇ (핵심 내용 — 구체적 수치·기관명 포함) [(출처명, YYYY-MM-DD)](URL)
-ㅇ ...
+## 국가·기관별 상세 동향
 
-### 🇺🇸 미국 / 🇩🇪 독일 / 🌐 국제기구 등 (해당 국가·기관별 소제목)
+### 🇰🇷 한국 (국내 기관·기업)
+ㅇ (핵심 내용 — 기관명·수치 포함) [(출처명, YYYY-MM-DD)](URL)
+
+### 🌐 국제기구 / 🇺🇸 미국 / 🇪🇺 유럽 등 (해당하는 경우만)
 ㅇ (핵심 내용) [(출처명, YYYY-MM-DD)](URL)
-ㅇ ...
 
-(해당하는 국가·기관만 포함. 관련 없으면 생략.)
+## 시사점 및 전망
+(국내 ICT 표준화 관점에서 2~3가지 핵심 시사점)
 
 [작성 규칙]
-1. 각 ㅇ 항목 끝 괄호에 반드시 [(출처명, YYYY-MM-DD)](URL) 형식으로 명기 — URL이 없는 기사는 (출처명, YYYY-MM-DD) 형식(괄호, 링크 없음)으로 표기
-2. 각 소제목(국가·기관) 내 항목은 최신 날짜 순으로 정렬 (최신 기사가 위)
-3. 분석 내용이 없는 기사(제목만 있는 경우)도 반드시 언급
-4. 답변에 없는 내용 추측 금지 — 기사에 있는 내용만 작성
+1. 위 {len(ctx_articles)}건 기사를 **모두** 언급할 것 — 하나라도 누락 금지
+2. 각 항목 끝에 반드시 [(출처명, YYYY-MM-DD)](URL) 형식으로 출처 명기 (URL 없으면 링크 생략)
+3. 같은 국가·기관 내 항목은 최신 날짜 순 정렬
+4. 기사에 없는 내용 추측 금지
 """
 
     try:
@@ -536,11 +538,11 @@ def answer_with_rag(
         response = client.chat.completions.create(
             model=OPENAI_MODEL_DEFAULT,
             messages=[
-                {"role": "system", "content": "당신은 ICT 뉴스 분석 전문가입니다. 제공된 기사를 모두 활용하여 포괄적이고 정확한 답변을 작성하세요."},
+                {"role": "system", "content": "당신은 ICT 뉴스 분석 전문가입니다. 제공된 기사를 단 하나도 빠짐없이 모두 활용하여 포괄적이고 정확한 답변을 작성하세요."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=1500,
+            max_tokens=4000,
         )
         answer = response.choices[0].message.content.strip()
         log_info("  ✅ RAG 답변 생성 완료")

@@ -1558,66 +1558,112 @@ elif selected == "🔍 AI 검색":
         with st.form("rag_search_form"):
             query = st.text_area(
                 "검색 질문",
-                placeholder="예: 지난 한 달간 6G 표준화 관련 주요 동향은?\n예: 국내 기업이 주도한 AI 반도체 소식은?",
-                height=100,
+                placeholder="예: 지난 한 달간 6G 표준화 관련 주요 동향은?\n예: 국내 기업이 주도한 AI 반도체 소식은?\n예: ITU 표준화 회의에서 논의된 주요 의제는?",
+                height=90,
             )
-            submitted = st.form_submit_button("🔎 검색", use_container_width=True)
+            _days_options = {"전체 기간": None, "최근 7일": 7, "최근 30일": 30, "최근 90일": 90}
+            _f_col1, _f_col2 = st.columns([3, 1])
+            _days_label = _f_col1.selectbox("기간 필터", list(_days_options.keys()), index=0, key="rag_days_filter")
+            _rag_days = _days_options[_days_label]
+            submitted = st.form_submit_button("🔎 AI 검색", use_container_width=True, type="primary")
 
         if submitted and query.strip():
             _scope_label = _rag_selected_label.replace("🌐 ", "").replace("🏢 ", "")
             log_user_activity(_user_email, 'rag_search', {
                 'query': query.strip()[:100], 'scope': _scope_label
             })
-            with st.spinner(f"하이브리드 검색 및 답변 생성 중... (범위: {_scope_label})"):
-                result = answer_with_rag(query.strip(), top_k=15, days=None, unit_id=_rag_unit_id)
+            with st.spinner(f"관련 기사 검색 중... (범위: {_scope_label})"):
+                result = answer_with_rag(query.strip(), top_k=30, days=_rag_days, unit_id=_rag_unit_id)
 
-            st.markdown("### 💬 AI 종합 답변")
+            # ── AI 종합 답변 ───────────────────────────────────────────────────
+            st.markdown("""
+<div style="background:linear-gradient(135deg,#003b88 0%,#005aab 100%);
+            border-radius:14px;padding:20px 24px;margin:16px 0 8px;">
+  <div style="color:#90c3ff;font-size:0.78rem;font-weight:600;letter-spacing:0.06em;
+              text-transform:uppercase;margin-bottom:6px;">AI 종합 답변</div>
+  <div style="color:#e8f1ff;font-size:0.85rem;opacity:0.8;">
+    질문: <em>{q}</em>
+  </div>
+</div>""".format(q=query.strip()[:120]), unsafe_allow_html=True)
+
             st.markdown(result['answer'])
 
+            # ── 참고 기사 목록 ─────────────────────────────────────────────────
             if result['sources']:
-                n_emb = sum(1 for r in result['sources'] if r.get('search_type') == 'embedding')
-                n_kw  = sum(1 for r in result['sources'] if r.get('search_type') == 'keyword')
-                _scope_desc = _rag_selected_label.replace("🌐 ", "").replace("🏢 ", "")
-                st.caption(
-                    f"참고 기사 {len(result['sources'])}건 — 임베딩 유사도: {n_emb}건 · 키워드 매칭: {n_kw}건 "
-                    f"| 검색 범위: {_scope_desc}"
-                )
-                st.markdown("### 📰 참고 기사")
-                _src_cards = []
-                for i, art in enumerate(result['sources'], 1):
-                    sim_pct = int(art.get('similarity', 0) * 100)
+                srcs = result['sources']
+                n_emb = sum(1 for r in srcs if r.get('search_type') == 'embedding')
+                n_kw  = sum(1 for r in srcs if r.get('search_type') == 'keyword')
+                n_hi  = sum(1 for r in srcs if r.get('similarity', 0) >= 0.5)
+
+                st.markdown(f"""
+<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;
+            background:#f6f6f3;border-radius:10px;margin:16px 0 12px;flex-wrap:wrap;">
+  <span style="font-weight:700;color:#1e293b;font-size:0.95rem;">📰 관련 기사 {len(srcs)}건</span>
+  <span style="font-size:0.78rem;color:#64748b;">|</span>
+  <span style="font-size:0.78rem;color:#3b82f6;font-weight:600;">● 임베딩 유사도 {n_emb}건</span>
+  <span style="font-size:0.78rem;color:#f59e0b;font-weight:600;">● 키워드 매칭 {n_kw}건</span>
+  <span style="font-size:0.78rem;color:#64748b;">|</span>
+  <span style="font-size:0.78rem;color:#16a34a;">높은 관련도(50%+) {n_hi}건</span>
+  <span style="font-size:0.78rem;color:#94a3b8;margin-left:auto;">검색 범위: {_scope_label} · {_days_label}</span>
+</div>""", unsafe_allow_html=True)
+
+                _cards_html = []
+                for i, art in enumerate(srcs, 1):
+                    sim = art.get('similarity', 0)
+                    sim_pct = int(sim * 100)
                     stype = art.get('search_type', 'embedding')
-                    badge_color = "#3b82f6" if stype == 'embedding' else "#f59e0b"
-                    badge_text  = "🔵 임베딩" if stype == 'embedding' else "🟡 키워드"
-                    has_analysis = "📝" if art.get('analysis_result') else "📄"
-                    _short_title = art['title'][:70] + ('…' if len(art['title']) > 70 else '')
-                    _art_link   = art.get('link', '')
-                    _link_tag   = (f'<a href="{_art_link}" target="_blank" '
-                                   f'style="color:#005aab;font-size:0.83rem;text-decoration:none;">'
-                                   f'🔗 원문</a>' if _art_link else '')
-                    _body_raw   = art.get('analysis_result') or art.get('content') or ''
-                    _body_label = '분석 요약' if art.get('analysis_result') else '본문 일부'
-                    _body_text  = _body_raw[:500] if _body_raw else ''
-                    _body_block = (f'<div style="margin-top:8px;font-size:0.85rem;color:#475569;'
-                                   f'line-height:1.6;border-top:1px solid #f1f5f9;padding-top:8px;">'
-                                   f'<strong>{_body_label}:</strong> {_body_text}</div>'
-                                   if _body_text else '')
-                    _src_cards.append(f"""
-<div style="border:1px solid #e2e8f0;border-radius:10px;padding:13px 16px;
-            margin-bottom:8px;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-    <span style="font-size:0.75rem;background:{badge_color};color:white;
-                 border-radius:4px;padding:1px 6px;">{badge_text} {sim_pct}%</span>
-    <span style="font-size:0.75rem;color:#64748b;">출처: {art['source']}</span>
-    <span style="font-size:0.75rem;color:#94a3b8;">{art['published']}</span>
-    {_link_tag}
+                    _is_emb = stype == 'embedding'
+                    _badge_bg   = "#dbeafe" if _is_emb else "#fef3c7"
+                    _badge_txt  = "#1d4ed8" if _is_emb else "#92400e"
+                    _badge_lbl  = "임베딩" if _is_emb else "키워드"
+                    _bar_color  = "#3b82f6" if sim >= 0.6 else ("#f59e0b" if sim >= 0.4 else "#94a3b8")
+                    _has_ai     = bool(art.get('analysis_result'))
+                    _title      = art['title']
+                    _link       = art.get('link', '')
+                    _title_html = (
+                        f'<a href="{_link}" target="_blank" '
+                        f'style="color:#1e293b;text-decoration:none;">{_title}</a>'
+                        if _link else f'<span style="color:#1e293b;">{_title}</span>'
+                    )
+                    _body_raw   = (art.get('analysis_result') or art.get('content') or '')[:400]
+                    _body_label = "AI 분석" if _has_ai else "본문"
+                    _body_block = (
+                        f'<div style="margin-top:8px;padding-top:8px;border-top:1px solid #f1f5f9;'
+                        f'font-size:0.82rem;color:#475569;line-height:1.65;">'
+                        f'<span style="font-size:0.72rem;font-weight:600;color:{"#16a34a" if _has_ai else "#94a3b8"};'
+                        f'background:{"#f0fdf4" if _has_ai else "#f8fafc"};padding:1px 5px;border-radius:3px;'
+                        f'margin-right:6px;">{_body_label}</span>{_body_raw}</div>'
+                    ) if _body_raw else ''
+                    _link_btn = (
+                        f'<a href="{_link}" target="_blank" '
+                        f'style="font-size:0.75rem;color:#005aab;text-decoration:none;'
+                        f'border:1px solid #bfdbfe;border-radius:4px;padding:1px 7px;">원문 ↗</a>'
+                    ) if _link else ''
+
+                    _cards_html.append(f"""
+<div style="border:1px solid #e8e8e3;border-radius:12px;padding:14px 16px;margin-bottom:8px;
+            background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,0.05);
+            border-left:4px solid {_bar_color};">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+    <span style="font-size:0.72rem;font-weight:700;color:#64748b;
+                 background:#f1f5f9;border-radius:4px;padding:1px 6px;min-width:20px;text-align:center;">
+      {i}
+    </span>
+    <span style="font-size:0.72rem;font-weight:600;color:{_badge_txt};
+                 background:{_badge_bg};border-radius:4px;padding:1px 6px;">{_badge_lbl}</span>
+    <div style="flex:1;background:#f1f5f9;border-radius:4px;height:5px;min-width:60px;max-width:100px;">
+      <div style="background:{_bar_color};width:{sim_pct}%;height:5px;border-radius:4px;"></div>
+    </div>
+    <span style="font-size:0.72rem;font-weight:600;color:{_bar_color};">{sim_pct}%</span>
+    <span style="font-size:0.72rem;color:#94a3b8;margin-left:auto;">{art['source']} · {art['published']}</span>
+    {_link_btn}
   </div>
-  <div style="font-weight:600;color:#1e293b;font-size:0.95rem;line-height:1.5;">
-    {has_analysis} [{i}] {_short_title}
-  </div>
+  <div style="font-size:0.92rem;font-weight:600;line-height:1.5;">{_title_html}</div>
   {_body_block}
 </div>""")
-                st.markdown('\n'.join(_src_cards), unsafe_allow_html=True)
+
+                st.markdown('\n'.join(_cards_html), unsafe_allow_html=True)
+
         elif submitted:
             st.warning("검색어를 입력해주세요.")
 
