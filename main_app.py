@@ -1607,6 +1607,49 @@ elif selected == "🔍 AI 검색":
   <span style="font-size:0.78rem;color:#94a3b8;margin-left:auto;">검색 범위: {_scope_label} · {_days_label}</span>
 </div>""", unsafe_allow_html=True)
 
+                import html as _hl, re as _re2
+
+                def _parse_analysis_sections(raw: str):
+                    """analysis_result에서 주요 내용 요약·시사점 섹션을 파싱해 안전한 HTML로 변환."""
+                    if not raw:
+                        return '', ''
+
+                    def _section(pattern_list, text):
+                        for pat in pattern_list:
+                            m = _re2.search(pat, text, _re2.DOTALL)
+                            if m:
+                                return m.group(1).strip()
+                        return ''
+
+                    main_pats = [
+                        r'###\s*\*\*1\.\s*주요\s*내용\s*요약\*\*(.*?)(?:###|\Z)',
+                        r'\*\*1\.\s*주요\s*내용\s*요약\*\*(.*?)(?:\*\*2\.|\Z)',
+                        r'1\.\s*주요\s*내용\s*요약(.*?)(?:2\.\s*시사점|\Z)',
+                    ]
+                    impl_pats = [
+                        r'###\s*\*\*2\.\s*시사점\s*및\s*전망\*\*(.*?)(?:###|\Z)',
+                        r'\*\*2\.\s*시사점\s*및\s*전망\*\*(.*?)(?:\*\*3\.|\Z)',
+                        r'2\.\s*시사점\s*및\s*전망(.*?)(?:3\.|\Z)',
+                    ]
+                    main_txt = _section(main_pats, raw)
+                    impl_txt = _section(impl_pats, raw)
+
+                    def _to_html(text):
+                        text = _hl.escape(text)                              # HTML 특수문자 이스케이프
+                        text = _re2.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)  # **bold**
+                        lines = []
+                        for line in text.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            if line.startswith('ㅇ'):
+                                lines.append(f'<span style="color:#475569;">ㅇ</span> {line[1:].strip()}')
+                            else:
+                                lines.append(line)
+                        return '<br>'.join(lines)
+
+                    return _to_html(main_txt), _to_html(impl_txt)
+
                 _cards_html = []
                 for i, art in enumerate(srcs, 1):
                     sim = art.get('similarity', 0)
@@ -1618,47 +1661,64 @@ elif selected == "🔍 AI 검색":
                     _badge_lbl  = "임베딩" if _is_emb else "키워드"
                     _bar_color  = "#3b82f6" if sim >= 0.6 else ("#f59e0b" if sim >= 0.4 else "#94a3b8")
                     _has_ai     = bool(art.get('analysis_result'))
-                    _title      = art['title']
+                    _title      = _hl.escape(art['title'])
                     _link       = art.get('link', '')
                     _title_html = (
                         f'<a href="{_link}" target="_blank" '
                         f'style="color:#1e293b;text-decoration:none;">{_title}</a>'
                         if _link else f'<span style="color:#1e293b;">{_title}</span>'
                     )
-                    _body_raw   = (art.get('analysis_result') or art.get('content') or '')[:400]
-                    _body_label = "AI 분석" if _has_ai else "본문"
-                    _body_block = (
-                        f'<div style="margin-top:8px;padding-top:8px;border-top:1px solid #f1f5f9;'
-                        f'font-size:0.82rem;color:#475569;line-height:1.65;">'
-                        f'<span style="font-size:0.72rem;font-weight:600;color:{"#16a34a" if _has_ai else "#94a3b8"};'
-                        f'background:{"#f0fdf4" if _has_ai else "#f8fafc"};padding:1px 5px;border-radius:3px;'
-                        f'margin-right:6px;">{_body_label}</span>{_body_raw}</div>'
-                    ) if _body_raw else ''
                     _link_btn = (
                         f'<a href="{_link}" target="_blank" '
-                        f'style="font-size:0.75rem;color:#005aab;text-decoration:none;'
+                        f'style="font-size:0.72rem;color:#005aab;text-decoration:none;'
                         f'border:1px solid #bfdbfe;border-radius:4px;padding:1px 7px;">원문 ↗</a>'
                     ) if _link else ''
 
+                    _body_block = ''
+                    if _has_ai:
+                        _main_html, _impl_html = _parse_analysis_sections(art.get('analysis_result', ''))
+                        if _main_html:
+                            _body_block += (
+                                f'<div style="margin-top:7px;padding-top:7px;border-top:1px solid #f1f5f9;">'
+                                f'<span style="font-size:0.68rem;font-weight:700;color:#16a34a;'
+                                f'background:#f0fdf4;border-radius:3px;padding:1px 5px;margin-right:5px;">'
+                                f'주요 내용 요약</span>'
+                                f'<div style="font-size:0.8rem;color:#374151;line-height:1.7;margin-top:3px;">{_main_html}</div>'
+                                f'</div>'
+                            )
+                        if _impl_html:
+                            _body_block += (
+                                f'<div style="margin-top:6px;">'
+                                f'<span style="font-size:0.68rem;font-weight:700;color:#7c3aed;'
+                                f'background:#f5f3ff;border-radius:3px;padding:1px 5px;margin-right:5px;">'
+                                f'시사점 및 전망</span>'
+                                f'<div style="font-size:0.8rem;color:#374151;line-height:1.7;margin-top:3px;">{_impl_html}</div>'
+                                f'</div>'
+                            )
+                    elif art.get('content'):
+                        _plain = _hl.escape((art.get('content') or '')[:600])
+                        _body_block = (
+                            f'<div style="margin-top:7px;padding-top:7px;border-top:1px solid #f1f5f9;'
+                            f'font-size:0.8rem;color:#475569;line-height:1.7;">{_plain}</div>'
+                        )
+
                     _cards_html.append(f"""
-<div style="border:1px solid #e8e8e3;border-radius:12px;padding:14px 16px;margin-bottom:8px;
-            background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,0.05);
+<div style="border:1px solid #e8e8e3;border-radius:12px;padding:13px 16px;margin-bottom:7px;
+            background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.05);
             border-left:4px solid {_bar_color};">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-    <span style="font-size:0.72rem;font-weight:700;color:#64748b;
-                 background:#f1f5f9;border-radius:4px;padding:1px 6px;min-width:20px;text-align:center;">
-      {i}
-    </span>
-    <span style="font-size:0.72rem;font-weight:600;color:{_badge_txt};
-                 background:{_badge_bg};border-radius:4px;padding:1px 6px;">{_badge_lbl}</span>
-    <div style="flex:1;background:#f1f5f9;border-radius:4px;height:5px;min-width:60px;max-width:100px;">
-      <div style="background:{_bar_color};width:{sim_pct}%;height:5px;border-radius:4px;"></div>
+  <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap;">
+    <span style="font-size:0.7rem;font-weight:700;color:#64748b;
+                 background:#f1f5f9;border-radius:4px;padding:0 6px;min-width:22px;text-align:center;">{i}</span>
+    <span style="font-size:0.7rem;font-weight:600;color:{_badge_txt};
+                 background:{_badge_bg};border-radius:4px;padding:0 6px;">{_badge_lbl}</span>
+    <div style="flex:1;background:#f1f5f9;border-radius:4px;height:4px;min-width:50px;max-width:90px;">
+      <div style="background:{_bar_color};width:{sim_pct}%;height:4px;border-radius:4px;"></div>
     </div>
-    <span style="font-size:0.72rem;font-weight:600;color:{_bar_color};">{sim_pct}%</span>
-    <span style="font-size:0.72rem;color:#94a3b8;margin-left:auto;">{art['source']} · {art['published']}</span>
+    <span style="font-size:0.7rem;font-weight:600;color:{_bar_color};">{sim_pct}%</span>
+    <span style="font-size:0.7rem;color:#94a3b8;margin-left:auto;">{_hl.escape(art['source'])} · {art['published']}</span>
     {_link_btn}
   </div>
-  <div style="font-size:0.92rem;font-weight:600;line-height:1.5;">{_title_html}</div>
+  <div style="font-size:0.9rem;font-weight:600;line-height:1.5;color:#1e293b;">{_title_html}</div>
   {_body_block}
 </div>""")
 
