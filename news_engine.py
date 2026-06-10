@@ -53,6 +53,7 @@ import pytz
 
 # Google API
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -5144,7 +5145,38 @@ def save_analysis_to_weekly_excel(
         log_info(f"      - 신규 추가: {len(new_data)}개")
         log_info(f"      - 최종 합계: {len(combined_df)}개")
         log_info(f"      - 파일 크기: {filepath.stat().st_size / 1024:.1f} KB")
-        
+
+        # Google Drive 업로드 (주간 리포트 폴더에 동기화)
+        try:
+            _, drive_service = get_google_docs_service()
+            _excel_mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            _fname = filepath.name
+            # 동일 이름 파일이 이미 있으면 업데이트, 없으면 새로 생성
+            _existing = drive_service.files().list(
+                q=f"name='{_fname}' and '{REPORT_FOLDER_ID}' in parents and trashed=false",
+                fields='files(id)',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute().get('files', [])
+            _media = MediaFileUpload(str(filepath), mimetype=_excel_mime, resumable=False)
+            if _existing:
+                drive_service.files().update(
+                    fileId=_existing[0]['id'],
+                    media_body=_media,
+                    supportsAllDrives=True,
+                ).execute()
+                log_info(f"   ☁️ Google Drive 업데이트: {_fname}")
+            else:
+                _created = drive_service.files().create(
+                    body={'name': _fname, 'parents': [REPORT_FOLDER_ID]},
+                    media_body=_media,
+                    supportsAllDrives=True,
+                    fields='id, webViewLink',
+                ).execute()
+                log_info(f"   ☁️ Google Drive 업로드 완료: {_created.get('webViewLink', _fname)}")
+        except Exception as _drive_err:
+            log_warning(f"   ⚠️ Google Drive 업로드 실패 (로컬 파일은 유지됨): {_drive_err}")
+
         return str(filepath)
         
     except Exception as e:
