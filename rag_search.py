@@ -41,7 +41,7 @@ from news_engine import (
 _IS_PG = not DB_ENGINE.url.drivername.startswith('sqlite')
 
 EMBEDDING_MODEL = 'text-embedding-3-small'
-EMBED_BATCH_SIZE = 50     # 한 번에 임베딩할 기사 수
+EMBED_BATCH_SIZE = 200    # 한 번에 임베딩할 기사 수
 TOP_K_DEFAULT = 5         # 기본 검색 결과 수
 
 

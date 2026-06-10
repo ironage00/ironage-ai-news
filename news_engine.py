@@ -5993,7 +5993,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     _emb_count = 0
     try:
         from rag_search import embed_unprocessed_articles as _embed_fn
-        _emb_count = _embed_fn(limit=50)
+        _emb_count = _embed_fn(limit=200)
         if _emb_count > 0:
             log_info(f"   ✅ 임베딩 완료: {_emb_count}건 신규 추가")
         else:
@@ -6444,8 +6444,8 @@ def run_daily_collection(ai_model: str = None):
     _embedded_count = 0
     try:
         from rag_search import embed_unprocessed_articles as _embed_fn
-        # 오늘 분석된 기사(최대 20건) + 미임베딩 여유분까지 한 배치(50건)로 처리
-        _embedded_count = _embed_fn(limit=50)
+        # 오늘 분석된 기사(최대 20건) + 미임베딩 여유분까지 한 배치(200건)로 처리
+        _embedded_count = _embed_fn(limit=200)
         if _embedded_count > 0:
             log_info(f"   ✅ 임베딩 완료: {_embedded_count}건 신규 추가")
         else:
