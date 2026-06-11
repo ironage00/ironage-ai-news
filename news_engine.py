@@ -545,9 +545,12 @@ def get_db_session():
 
 def deduplicate_news(news_list):
     """중복 제거: (1) URL 정규화 → (2) Jaccard 타이틀 유사도"""
+    original_count = len(news_list)
+
     # --- 1단계: URL 정규화 중복 제거 ---
     seen_links = set()
     url_unique = []
+    url_normalize_failed = 0
 
     sorted_news = sorted(
         news_list,
@@ -560,15 +563,27 @@ def deduplicate_news(news_list):
             normalized_link = re.sub(
                 r'^https?://(www\.|m\.|amp\.)?',
                 '',
-                item['link']
+                item.get('link', '')
             ).rstrip('/').split('?')[0].split('#')[0]
 
-            if normalized_link not in seen_links:
+            if normalized_link and normalized_link not in seen_links:
                 url_unique.append(item)
                 seen_links.add(normalized_link)
+            elif not normalized_link:
+                url_normalize_failed += 1
+                url_unique.append(item)
         except Exception:
+            url_normalize_failed += 1
             log_warning(f"URL 정규화 실패: {item.get('link', 'Unknown')}")
             url_unique.append(item)
+
+    url_removed = original_count - len(url_unique)
+    log_info(
+        f"  • URL 정규화 중복 제거: {original_count}개 → {len(url_unique)}개 "
+        f"({url_removed}개 제거"
+        + (f", 정규화 실패 {url_normalize_failed}개" if url_normalize_failed else "")
+        + ")"
+    )
 
     # --- 2단계: Jaccard 타이틀 유사도 중복 제거 ---
     threshold_numeric = CONFIG.get('jaccard_threshold_numeric', 0.5)
@@ -576,6 +591,7 @@ def deduplicate_news(news_list):
 
     used_indices = set()
     title_unique = []
+    duplicate_group_count = 0
 
     for i, item in enumerate(url_unique):
         if i in used_indices:
@@ -585,17 +601,25 @@ def deduplicate_news(news_list):
         for j in range(i + 1, len(url_unique)):
             if j in used_indices:
                 continue
-            if is_similar_news(item['title'], url_unique[j]['title'],
+            if is_similar_news(item.get('title', ''), url_unique[j].get('title', ''),
                                threshold_numeric, threshold_text):
                 similar_group.append(url_unique[j])
                 used_indices.add(j)
 
         representative = _best_representative(similar_group)
+        if len(similar_group) > 1:
+            duplicate_group_count += 1
         title_unique.append(representative)
 
     removed = len(url_unique) - len(title_unique)
-    if removed > 0:
-        log_info(f"  • 타이틀 유사도 중복 제거: {len(url_unique)}개 → {len(title_unique)}개 ({removed}개 제거)")
+    log_info(
+        f"  • 타이틀 유사도 중복 제거: {len(url_unique)}개 → {len(title_unique)}개 "
+        f"({removed}개 제거, 중복 그룹 {duplicate_group_count}개)"
+    )
+    log_info(
+        f"  • 중복 제거 합계: {original_count}개 → {len(title_unique)}개 "
+        f"({original_count - len(title_unique)}개 제거)"
+    )
 
     return title_unique
 
@@ -948,6 +972,49 @@ _HIGH_TRUST_SOURCE_PATTERNS = {
     ],
 }
 
+_COLLECT_STAGE_STRONG_ICT_MARKERS = [
+    '통신', '이동통신', '무선망', '기지국', '네트워크', '망투자', '망 투자',
+    '5g', '6g', 'lte', 'ran', 'o-ran', 'open ran', 'ai-ran', '주파수', '전파',
+    '위성', '위성통신', '저궤도', 'leo', 'ntn', '스타링크', 'starlink',
+    '표준화', '국제표준', '표준기술', '3gpp', 'itu', 'etsi', 'ieee', 'tta', 'fcc',
+    '정보통신', 'ict', '사이버보안', '보안', '클라우드', '데이터센터', 'aicloud',
+    'ai 데이터센터', 'aicc', 'aidc', '반도체', 'ai 반도체', 'npu', 'gpu',
+    '양자통신', '양자암호', '양자컴퓨팅', '자율주행', 'sdv', 'v2x',
+]
+
+_COLLECT_STAGE_AI_CONTEXT_MARKERS = [
+    '인프라', '네트워크', '통신', '망', '데이터센터', '클라우드', '반도체',
+    '보안', '표준', '표준화', '정부', '규제', '투자', '산업', '서비스',
+    '플랫폼', '디지털 전환', '자동화', '로봇', '자율주행', '모빌리티',
+]
+
+_NON_ICT_COLLECT_PATTERNS = {
+    'sports': re.compile(
+        r'야구|축구|농구|배구|골프|컬링|스포츠|월드컵|올림픽|리그|선발 라인업|'
+        r'타율|홈런|오타니|류현진|팀 킴',
+        re.IGNORECASE,
+    ),
+    'food_health': re.compile(
+        r'냉면|요거트|그릭|나트륨|저염식|포만감|염증|질환|다이어트|식품|유업계|'
+        r'채소|건강|병원|의약품',
+        re.IGNORECASE,
+    ),
+    'culture_entertainment': re.compile(
+        r'영화제|애니메이션|판소리|공연|축제|관광|휴양지|문화엑스포|불교문화|'
+        r'감독|배우|드라마|콘텐츠과',
+        re.IGNORECASE,
+    ),
+    'education_local': re.compile(
+        r'교육감|바칼로레아|ib교육|공교육 표준|교육과정|수능|일자리센터|특성화고|'
+        r'마을순찰대|주민대피|도시철도|공공디자인|체육시설|공원조성',
+        re.IGNORECASE,
+    ),
+    'real_estate_lifestyle': re.compile(
+        r'분양|재개발|아파트|부동산|웨딩|패션|반려동물|중장년 취업|창업',
+        re.IGNORECASE,
+    ),
+}
+
 
 def _clean_text_hint(value) -> str:
     """RSS/API 요약과 본문 힌트에서 태그·엔티티·과도한 공백을 제거."""
@@ -958,6 +1025,37 @@ def _clean_text_hint(value) -> str:
     text = _RE_HTML_ENTITY.sub('', text)
     text = _RE_WHITESPACE.sub(' ', text).strip()
     return text
+
+
+def _collect_stage_filter_reason(item: Dict) -> Optional[str]:
+    """수집 직후 적용하는 보수적 비ICT 필터.
+
+    제목·요약만 사용해 명백한 스포츠/건강/문화/교육/부동산성 기사를 제외한다.
+    'AI'처럼 넓은 단어는 ICT 문맥 마커와 함께 있을 때만 통과시키며,
+    통신·표준·보안·데이터센터 등 강한 ICT 마커가 있으면 보존한다.
+    """
+    title = _clean_text_hint(item.get('title', ''))
+    summary = _clean_text_hint(
+        item.get('summary') or item.get('description') or item.get('content_hint') or ''
+    )
+    blob = f"{title} {summary}".lower()
+
+    if any(marker in blob for marker in _COLLECT_STAGE_STRONG_ICT_MARKERS):
+        return None
+
+    matched_non_ict = [
+        reason for reason, pattern in _NON_ICT_COLLECT_PATTERNS.items()
+        if pattern.search(blob)
+    ]
+    if not matched_non_ict:
+        return None
+
+    has_ai = bool(re.search(r'\bai\b|인공지능|생성형 ai|챗봇', blob, re.IGNORECASE))
+    has_ai_context = any(marker in blob for marker in _COLLECT_STAGE_AI_CONTEXT_MARKERS)
+    if has_ai and has_ai_context:
+        return None
+
+    return matched_non_ict[0]
 
 
 def _article_timestamp(item: Dict) -> float:
@@ -2005,17 +2103,27 @@ def get_news_data(rss_urls=None, naver_queries=None):
     log_info(f"    • 시간 초과로 제외: {stats['naver']['filtered_out']}개 ⏰")
 
     # ===== 명백한 비ICT 기사 수집 단계 제외 =====
-    _NON_ICT_COLLECT = re.compile(
-        r'타율|홈런|야구|오타니|류현진|투타니|'
-        r'교육감|바칼로레아|ib교육|공교육 표준|교육과정|수능|'
-        r'공공디자인|체육시설|공원조성|분양|재개발',
-        re.IGNORECASE,
-    )
     _before_collect_excl = len(news_list)
-    news_list = [n for n in news_list if not _NON_ICT_COLLECT.search(n.get('title', ''))]
+    _collect_excluded_reasons = Counter()
+    _collect_filtered = []
+    for item in news_list:
+        reason = _collect_stage_filter_reason(item)
+        if reason:
+            _collect_excluded_reasons[reason] += 1
+            continue
+        _collect_filtered.append(item)
+    news_list = _collect_filtered
     _removed_collect = _before_collect_excl - len(news_list)
     if _removed_collect:
-        log_info(f"  • 비ICT 수집 제외: {_removed_collect}개 ({_before_collect_excl}→{len(news_list)})")
+        reason_summary = ', '.join(
+            f"{reason} {count}개"
+            for reason, count in _collect_excluded_reasons.most_common()
+        )
+        log_info(
+            f"  • 비ICT 수집 제외: {_removed_collect}개 "
+            f"({_before_collect_excl}→{len(news_list)})"
+            + (f" — {reason_summary}" if reason_summary else "")
+        )
 
     # ===== 중복 제거 및 최종 결과 =====
     log_info(f"\n🔄 중복 제거 전: {len(news_list)}개 뉴스")
@@ -2033,8 +2141,10 @@ def get_news_data(rss_urls=None, naver_queries=None):
         log_info(f"\n📈 최종 결과:")
         log_info(f"    • 전체 발견: {total_items}개")
         log_info(f"    • 시간 필터 제외: {total_filtered}개 ({filter_rate:.1f}%) ⏰")
-        log_info(f"    • 수집 대상: {total_items - total_filtered}개")
+        log_info(f"    • 시간 범위 내 후보: {total_items - total_filtered}개")
         log_info(f"    • 수집 성공: {total_success}개 ({success_rate:.1f}%)")
+        log_info(f"    • 수집 단계 비ICT 제외: {_removed_collect}개")
+        log_info(f"    • 중복 제거 후 최종 후보: {len(unique_news_items)}개")
     
     return unique_news_items
 
@@ -2163,18 +2273,27 @@ def filter_news_by_ai(
     #   '전국 표준 안전 체육시설' → 표준이 ICT 표준이 아닌 경우
     #   '교육감 IB교육 전국 표준' → 공교육 표준 기사
     # =========================================================================
-    _NON_ICT_EXCL = re.compile(
-        r'타율|홈런|야구|오타니|류현진|투타니|'         # 스포츠 (타율 옆 6G 오탐 방지)
-        r'교육감|바칼로레아|ib교육|공교육 표준|교육과정|수능|'  # 교육 비ICT
-        r'공공디자인|체육시설|공원조성|분양|재개발',       # 공공시설·부동산
-        re.IGNORECASE,
-    )
     _before_s0 = len(news_items)
-    news_items = [item for item in news_items
-                  if not _NON_ICT_EXCL.search(item.get('title', ''))]
+    _s0_excluded_reasons = Counter()
+    _s0_filtered = []
+    for item in news_items:
+        reason = _collect_stage_filter_reason(item)
+        if reason:
+            _s0_excluded_reasons[reason] += 1
+            continue
+        _s0_filtered.append(item)
+    news_items = _s0_filtered
     _removed_s0 = _before_s0 - len(news_items)
     if _removed_s0:
-        log_info(f"  • Stage 0 비ICT 즉시 제외: {_removed_s0}개 제거 ({_before_s0}→{len(news_items)})")
+        reason_summary = ', '.join(
+            f"{reason} {count}개"
+            for reason, count in _s0_excluded_reasons.most_common()
+        )
+        log_info(
+            f"  • Stage 0 비ICT 즉시 제외: {_removed_s0}개 제거 "
+            f"({_before_s0}→{len(news_items)})"
+            + (f" — {reason_summary}" if reason_summary else "")
+        )
     
     # API 키 확인
     api_key_map = {
