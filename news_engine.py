@@ -4466,10 +4466,12 @@ def send_gmail_report(
     unit_display: str = None,
     email_subject_prefix: str = None,
     email_subject_override: str = None,
+    include_daily_brief: bool = False,
 ):
     """분석 리포트를 개선된 디자인의 이메일로 전송.
     receivers: 수신자 목록 (None이면 전역 RECEIVER_EMAIL 사용)
     email_subject_override: 이 값이 있으면 제목 완전 대체
+    include_daily_brief: True이면 이메일 상단에 팩트 브리프 섹션 포함 (일일 뉴스레터 전용)
     """
 
     # 영향도 우선순위(Critical→High→Medium→Low)로 정렬
@@ -4478,8 +4480,8 @@ def send_gmail_report(
         key=lambda d: IMPACT_LEVEL_ORDER.get(_get_impact_info(d)['impact_level'], 2)
     )
 
-    # ─── 팩트 전용 일일 브리프 HTML 생성 ─────────────────────────────────
-    _brief = _generate_daily_brief(sorted_data)
+    # ─── 팩트 전용 일일 브리프 HTML 생성 (일일 뉴스레터 전용) ────────────
+    _brief = _generate_daily_brief(sorted_data) if include_daily_brief else {}
     if _brief:
         _issues_rows = ''
         for _idx, _issue in enumerate(_brief.get('top_issues', [])[:5], 1):
@@ -6351,7 +6353,8 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             safe_execute(
                 lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub:
                     send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
-                        unit_display=dp, email_subject_prefix=esp, email_subject_override=esub),
+                        unit_display=dp, email_subject_prefix=esp, email_subject_override=esub,
+                        include_daily_brief=True),
                 error_msg=f"[{display}] 이메일 실패",
                 default_return=None,
             )
@@ -6560,6 +6563,7 @@ def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dic
                 unit_display=unit_display,
                 email_subject_prefix=email_subject_prefix,
                 email_subject_override=_email_subject,
+                include_daily_brief=True,
             ),
             error_msg=f"[{unit_display}] 이메일 발송 실패",
             default_return=None
@@ -6765,7 +6769,8 @@ def run_daily_collection(ai_model: str = None):
                 report_title,
                 analyzed_results,
                 doc_url,
-                other_news
+                other_news,
+                include_daily_brief=True,
             ),
             error_msg="이메일 발송 실패",
             default_return=None
