@@ -4358,6 +4358,107 @@ def get_weekly_subscribers() -> list:
         return list(RECEIVER_EMAIL)
 
 
+def _classify_sectors(analyzed_data: list) -> dict:
+    """기사 목록을 ICT 분야별로 분류."""
+    AI_KW  = {'ai', 'llm', '생성형', '머신러닝', '딥러닝', 'gpt', 'ai표준', 'ai법', 'ai act', '인공지능', 'chatgpt'}
+    NET_KW = {'5g', '6g', 'nr', '기지국', 'o-ran', '오픈랜', '위성', '네트워크', 'oran', '통신망', '이동통신', '광대역'}
+    SEC_KW = {'보안', '사이버', '취약점', '개인정보', 'isms', 'cc인증', '암호', '랜섬웨어', '해킹', '침해사고'}
+    STD_KW = {'itu', '3gpp', 'ieee', 'etsi', 'iso', '표준화', '표준안', '권고안', 'iec', '국제표준', '표준기구'}
+    sectors = {'AI·표준화': 0, '5G/6G': 0, '보안·규제': 0, '국제표준': 0, '기타ICT': 0}
+    for d in analyzed_data:
+        text = (d.get('title', '') + ' ' + (d.get('extracted_keywords', '') or '')).lower()
+        if any(k in text for k in AI_KW):
+            sectors['AI·표준화'] += 1
+        elif any(k in text for k in NET_KW):
+            sectors['5G/6G'] += 1
+        elif any(k in text for k in SEC_KW):
+            sectors['보안·규제'] += 1
+        elif any(k in text for k in STD_KW):
+            sectors['국제표준'] += 1
+        else:
+            sectors['기타ICT'] += 1
+    return dict(sorted({k: v for k, v in sectors.items() if v > 0}.items(), key=lambda x: -x[1]))
+
+
+def _extract_top_keywords(analyzed_data: list, top_n: int = 8) -> list:
+    """분석된 기사에서 빈도 상위 키워드 추출."""
+    from collections import Counter
+    kw_counter = Counter()
+    for d in analyzed_data:
+        kw_raw = d.get('extracted_keywords', '') or ''
+        for kw in re.split(r'[,/\n·•]', kw_raw):
+            kw = kw.strip().strip('#').strip()
+            if 2 <= len(kw) <= 15:
+                kw_counter[kw] += 1
+    return [kw for kw, _ in kw_counter.most_common(top_n)]
+
+
+def _generate_daily_brief(sorted_data: list) -> dict:
+    """당일 분석 기사 목록 기반 팩트 전용 브리프 생성 (GPT-4o).
+    시사점·전망·권고사항은 배제하고 WHO+WHAT 팩트만 포함한다."""
+    if not sorted_data:
+        return {}
+    sector_counts  = _classify_sectors(sorted_data)
+    impact_counts  = {lv: 0 for lv in ('Critical', 'High', 'Medium', 'Low')}
+    for d in sorted_data:
+        lv = _get_impact_info(d).get('impact_level', 'Medium')
+        impact_counts[lv] = impact_counts.get(lv, 0) + 1
+    top_keywords = _extract_top_keywords(sorted_data)
+
+    articles_text = ''
+    for i, d in enumerate(sorted_data[:20], 1):
+        articles_text += f"{i}. [{d.get('source', '')}] {d.get('title', '')}\n"
+
+    prompt = (
+        "다음 ICT 뉴스 기사 목록을 보고 오늘의 뉴스 브리프를 JSON으로 작성하세요.\n\n"
+        "[절대 규칙]\n"
+        "- 시사점·전망·권고사항·분석의견은 절대 포함 금지\n"
+        "- 기사에서 실제 발생한 팩트(WHO+WHAT)만 기술\n"
+        "- '~해야 한다', '~필요하다', '~중요하다' 같은 평가·의견 표현 금지\n"
+        "- 각 핵심이슈는 주어+동사+목적어 형태의 1문장 팩트\n\n"
+        "[기사 목록]\n"
+        f"{articles_text}\n"
+        "[출력 형식 — JSON만 응답]\n"
+        "{\n"
+        '  "headline": "전체 기사에서 공통으로 나타난 팩트 흐름 1~2문장. 예: ○○가 ××를 발표했다. △△이 ○○를 채택했다.",\n'
+        '  "top_issues": [\n'
+        '    "기사1 팩트 1줄",\n'
+        '    "기사2 팩트 1줄",\n'
+        '    "기사3 팩트 1줄",\n'
+        '    "기사4 팩트 1줄",\n'
+        '    "기사5 팩트 1줄"\n'
+        '  ]\n'
+        "}"
+    )
+    try:
+        client = get_openai_client()
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL_DEFAULT,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=700,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(resp.choices[0].message.content)
+        result['sector_counts'] = sector_counts
+        result['impact_counts'] = impact_counts
+        result['top_keywords']  = top_keywords
+        result['total']         = len(sorted_data)
+        result['generated_at']  = _now_kst().strftime('%Y-%m-%d %H:%M KST')
+        return result
+    except Exception as e:
+        log_warning(f"일일 브리프 생성 실패: {e}")
+        return {
+            'headline':      f"오늘 총 {len(sorted_data)}건의 ICT·통신 분야 뉴스가 수집·분석됐습니다.",
+            'top_issues':    [d.get('title', '')[:60] for d in sorted_data[:5]],
+            'sector_counts': sector_counts,
+            'impact_counts': impact_counts,
+            'top_keywords':  top_keywords,
+            'total':         len(sorted_data),
+            'generated_at':  _now_kst().strftime('%Y-%m-%d %H:%M KST'),
+        }
+
+
 def send_gmail_report(
     report_title, analyzed_data, doc_url, other_news,
     receivers=None,
@@ -4376,6 +4477,64 @@ def send_gmail_report(
         analyzed_data,
         key=lambda d: IMPACT_LEVEL_ORDER.get(_get_impact_info(d)['impact_level'], 2)
     )
+
+    # ─── 팩트 전용 일일 브리프 HTML 생성 ─────────────────────────────────
+    _brief = _generate_daily_brief(sorted_data)
+    if _brief:
+        _issues_rows = ''
+        for _idx, _issue in enumerate(_brief.get('top_issues', [])[:5], 1):
+            _issues_rows += (
+                f'<div class="brief-issue-item">'
+                f'<span class="brief-issue-num">{_idx}</span>{_issue}'
+                f'</div>'
+            )
+        _sc = _brief.get('sector_counts', {})
+        _sc_total = max(sum(_sc.values()), 1)
+        _sector_rows = ''
+        for _sname, _cnt in _sc.items():
+            _pct = round(_cnt / _sc_total * 100)
+            _sector_rows += (
+                f'<div class="brief-sector-bar">'
+                f'<span class="brief-sector-label">{_sname}</span>'
+                f'<div class="brief-bar-track">'
+                f'<div class="brief-bar-fill" style="width:{_pct}%"></div>'
+                f'</div>'
+                f'<span class="brief-sector-count">{_cnt}</span>'
+                f'</div>'
+            )
+        _ic = _brief.get('impact_counts', {})
+        _impact_chips = ''
+        for _lv, _cls, _lbl in [
+            ('Critical', 'critical', 'Critical'),
+            ('High',     'high',     'High'),
+            ('Medium',   'medium',   'Medium'),
+            ('Low',      'low',      'Low'),
+        ]:
+            if _ic.get(_lv, 0) > 0:
+                _impact_chips += (
+                    f'<span class="impact-chip impact-chip-{_cls}">'
+                    f'{_lbl} {_ic[_lv]}'
+                    f'</span>'
+                )
+        _kw_tags = ''.join(
+            f'<span class="kw-tag">{kw}</span>'
+            for kw in _brief.get('top_keywords', [])
+        )
+        brief_html = (
+            '<div class="daily-brief">'
+            '<div class="brief-badge">TODAY\'S INTELLIGENCE BRIEF</div>'
+            f'<div class="brief-headline">{_brief.get("headline", "")}</div>'
+            f'<div class="brief-impact-row">{_impact_chips}</div>'
+            '<div class="brief-grid">'
+            f'<div class="brief-panel"><div class="brief-panel-title">핵심 이슈</div>{_issues_rows}</div>'
+            f'<div class="brief-panel"><div class="brief-panel-title">분야별 분포</div>{_sector_rows}</div>'
+            '</div>'
+            f'<div class="brief-keywords">{_kw_tags}</div>'
+            f'<div class="brief-footer">생성: {_brief.get("generated_at", "")} | 총 {_brief.get("total", 0)}건 분석</div>'
+            '</div>'
+        )
+    else:
+        brief_html = ''
 
     IMPACT_HTML_COLOR = {
         'Critical': '#dc2626',
@@ -4880,6 +5039,92 @@ def send_gmail_report(
                 font-size: 14px;
             }
         }
+
+        /* ── Daily Brief Section ───────────────────────────── */
+        .daily-brief {
+            background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+            padding: 28px 32px;
+            border-bottom: 3px solid #f59e0b;
+        }
+        .brief-badge {
+            display: inline-block;
+            background: #f59e0b;
+            color: #0f2027;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .brief-headline {
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 500;
+            line-height: 1.7;
+            margin-bottom: 14px;
+        }
+        .brief-impact-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 14px;
+        }
+        .impact-chip {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .impact-chip-critical { background: rgba(220,38,38,0.2); color: #fca5a5; border: 1px solid rgba(220,38,38,0.3); }
+        .impact-chip-high     { background: rgba(234,88,12,0.2); color: #fdba74; border: 1px solid rgba(234,88,12,0.3); }
+        .impact-chip-medium   { background: rgba(37,99,235,0.2); color: #93c5fd; border: 1px solid rgba(37,99,235,0.3); }
+        .impact-chip-low      { background: rgba(107,114,128,0.2); color: #d1d5db; border: 1px solid rgba(107,114,128,0.3); }
+        .brief-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+        @media (max-width: 600px) { .brief-grid { grid-template-columns: 1fr; } }
+        .brief-panel {
+            background: rgba(255,255,255,0.07);
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+        .brief-panel-title {
+            color: #f59e0b;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .brief-issue-item {
+            color: #cbd5e1;
+            font-size: 12.5px;
+            line-height: 1.65;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+        .brief-issue-item:last-child { border-bottom: none; }
+        .brief-issue-num { color: #f59e0b; font-weight: 700; margin-right: 6px; }
+        .brief-sector-bar { display: flex; align-items: center; margin-bottom: 7px; }
+        .brief-sector-label { color: #94a3b8; font-size: 11.5px; min-width: 78px; }
+        .brief-bar-track { flex: 1; background: rgba(255,255,255,0.1); border-radius: 3px; height: 6px; margin: 0 8px; }
+        .brief-bar-fill  { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .brief-sector-count { color: #f59e0b; font-size: 11px; font-weight: 700; min-width: 18px; text-align: right; }
+        .brief-keywords { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+        .kw-tag {
+            background: rgba(255,255,255,0.1);
+            color: #e2e8f0;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .brief-footer { color: #64748b; font-size: 11px; text-align: right; margin-top: 10px; }
     """
     
     html_body = f"""
@@ -4901,7 +5146,9 @@ def send_gmail_report(
                     ※ 본 보고서의 내용은 IRONAGE AI가 생성한 분석으로, 개인적인 의견을 포함하지 않습니다.
                 </div>
             </div>
-            
+
+            {brief_html}
+
             <div class="doc-link-section">
                 {f'<a href="{doc_url}" class="doc-link-button" target="_blank">📄 Google Docs에서 전체 보고서 보기</a>' if doc_url else '<span style="color:#64748b;font-size:14px;">(Google Docs 생성 실패 — 아래 본문 참조)</span>'}
             </div>
