@@ -51,6 +51,15 @@ from dateutil import parser as date_parser
 from dateutil.tz import tzutc
 import pytz
 
+# 시스템 전역 타임존: 모든 시간 기준은 KST (UTC+9)
+_KST_TZ = pytz.timezone('Asia/Seoul')
+
+
+def _now_kst() -> datetime.datetime:
+    """현재 KST 시각 반환 (timezone-aware)."""
+    return datetime.datetime.now(_KST_TZ)
+
+
 # Google API
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -113,7 +122,7 @@ console_handler.setLevel(logging.INFO)
 console_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
 console_handler.setFormatter(console_formatter)
 
-log_filename = f"data/logs/ironage_{datetime.datetime.now().strftime('%Y%m%d')}.log"
+log_filename = f"data/logs/ironage_{datetime.datetime.now(_KST_TZ).strftime('%Y%m%d')}.log"
 file_handler = logging.FileHandler(log_filename, encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
@@ -639,7 +648,7 @@ def save_news_to_db(news_items, unit_id=None):
 
     with get_db_session() as session:
         # 전체 단 대상 최근 2일 기사 제목 미리 로드 — 단 간 교차 중복 체크용
-        _cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+        _cutoff = _now_kst() - datetime.timedelta(days=2)
         _existing_articles = (
             session.query(NewsArticle)
                    .filter(NewsArticle.collected_at >= _cutoff)
@@ -736,7 +745,7 @@ def load_news_from_db(days=7, is_analyzed=None, unit_id=None):
         try:
             query = session.query(NewsArticle)
 
-            date_from = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+            date_from = _now_kst() - datetime.timedelta(days=days)
             query = query.filter(NewsArticle.collected_at >= date_from)
 
             if is_analyzed is not None:
@@ -813,9 +822,10 @@ def get_db_statistics():
             total = session.query(NewsArticle).count()
             analyzed = session.query(NewsArticle).filter_by(is_analyzed=True).count()
             
-            # ✅ 수정: timezone-aware datetime 사용
-            today_start = datetime.datetime.now(datetime.timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
+            # KST 자정 기준 (수집 스케줄이 09:00 KST = 00:00 UTC이라 UTC 자정 기준 시 오탐)
+            today_start = (
+                _now_kst()
+                .replace(hour=0, minute=0, second=0, microsecond=0)
             )
             
             today = session.query(NewsArticle).filter(
@@ -1830,11 +1840,10 @@ def get_news_data(rss_urls=None, naver_queries=None):
     # rss_urls/naver_queries 미지정이면 전역값 사용
     _rss_urls = rss_urls if rss_urls is not None else GOOGLE_ALERTS_RSS_URLS
 
-    # FIX: pytz.UTC 대신 datetime.timezone.utc로 통일
-    time_threshold = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=NEWS_TIME_WINDOW_HOURS)
+    time_threshold = _now_kst() - datetime.timedelta(hours=NEWS_TIME_WINDOW_HOURS)
 
     log_info(f"\n🔍 Google Alerts에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
-    log_info(f"   기준 시간: {time_threshold.strftime('%Y-%m-%d %H:%M:%S')} UTC 이후")
+    log_info(f"   기준 시간: {time_threshold.strftime('%Y-%m-%d %H:%M:%S')} KST 이후")
 
     # ===== Google Alerts 처리 (병렬 피드 수집) =====
     valid_rss_urls = [(i, url) for i, url in enumerate(_rss_urls, 1) if url.strip()]
@@ -3257,7 +3266,7 @@ def save_keyword_summary_to_excel(analyzed_results: List[Dict], output_dir: str 
         keyword_freq = Counter(all_keywords)
         
         # 파일명 생성
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = _now_kst().strftime('%Y%m%d_%H%M%S')
         filename = f"keyword_summary_{timestamp}.xlsx"
         filepath = Path(output_dir) / filename
         
@@ -4520,7 +4529,7 @@ def send_gmail_report(
         </div>
         """
 
-    current_date = datetime.datetime.now().strftime('%Y년 %m월 %d일')
+    current_date = _now_kst().strftime('%Y년 %m월 %d일')
     
     css_styles = """
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
@@ -4968,8 +4977,8 @@ def get_week_number(date: datetime.datetime = None) -> Tuple[int, int, str]:
         예: (2025, 46, "2025_W46")
     """
     if date is None:
-        date = datetime.datetime.now()
-    
+        date = _now_kst()
+
     # ISO 8601 주차 계산 (월요일 시작)
     iso_calendar = date.isocalendar()
     year = iso_calendar[0]
@@ -4991,8 +5000,8 @@ def get_week_date_range(date: datetime.datetime = None) -> Tuple[datetime.dateti
         Tuple[datetime.datetime, datetime.datetime]: (월요일, 일요일)
     """
     if date is None:
-        date = datetime.datetime.now()
-    
+        date = _now_kst()
+
     # 현재 요일 (0=월요일, 6=일요일)
     weekday = date.weekday()
     
@@ -5159,7 +5168,7 @@ def save_analysis_to_weekly_excel(
                 '핵심 키워드': keywords_str,
                 'AI 모델': item.get('ai_model', CONFIG.get('ai_model', 'openai')),
                 '품질 점수': item.get('quality_score', 0),
-                '수집 일시': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                '수집 일시': _now_kst().strftime('%Y-%m-%d %H:%M:%S')
             }
             
             new_data.append(row_data)
@@ -5254,7 +5263,7 @@ def save_analysis_to_weekly_excel(
             _save_to_excel(filepath)
         except PermissionError:
             log_warning(f"⚠️ 엑셀 파일이 열려 있어 덮어쓸 수 없습니다: {filepath.name}")
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = _now_kst().strftime("%Y%m%d_%H%M%S")
             filepath = filepath.with_name(f"{filepath.stem}_alt_{timestamp}{filepath.suffix}")
             log_info(f"   🔄 대체 파일명으로 저장을 시도합니다: {filepath.name}")
             _save_to_excel(filepath)
@@ -5423,7 +5432,7 @@ def save_keyword_summary_to_weekly_excel(
             _save_summary_to_excel(filepath)
         except PermissionError:
             log_warning(f"⚠️ 키워드 통계 엑셀 파일이 열려 있어 덮어쓸 수 없습니다: {filepath.name}")
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = _now_kst().strftime("%Y%m%d_%H%M%S")
             filepath = filepath.with_name(f"{filepath.stem}_alt_{timestamp}{filepath.suffix}")
             log_info(f"   🔄 대체 파일명으로 저장을 시도합니다: {filepath.name}")
             _save_summary_to_excel(filepath)
@@ -5484,7 +5493,7 @@ def send_google_chat_alert(issue_title: str, issue_desc: str, impact_level: str,
             else:
                 lines.append(f"  - {art}")
 
-    lines += ["", f"_IRONAGE AI Analytics — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}_"]
+    lines += ["", f"_IRONAGE AI Analytics — {_now_kst().strftime('%Y-%m-%d %H:%M')} KST_"]
 
     payload = {"text": "\n".join(lines)}
     try:
@@ -5512,7 +5521,7 @@ def get_standards_org_news(days: int = 7) -> List[Dict]:
         log_info("  ℹ️ standards_org_rss 미설정 — 경쟁 기관 수집 생략")
         return []
 
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    cutoff = _now_kst() - datetime.timedelta(days=days)
     results = []
 
     for url in rss_urls:
@@ -6354,7 +6363,7 @@ def run_daily_collection(ai_model: str = None):
     # - 20시간 윈도우: 자정 UTC 기준 대신 사용 → cron-job.org 오후 재실행에도 안전
     # - DB 조회 실패 시에도 스킵 (Supabase 일시 장애로 인한 중복 방지 우선)
     try:
-        _dup_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=20)
+        _dup_since = _now_kst() - datetime.timedelta(hours=20)
         with get_db_session() as _s:
             _today_analyzed = _s.query(NewsArticle).filter(
                 NewsArticle.collected_at >= _dup_since,
@@ -6646,7 +6655,7 @@ def run_weekly_report():
     try:
         report_meta = {
             'report_type': 'weekly',
-            'generated_at': datetime.datetime.now().isoformat(),
+            'generated_at': _now_kst().isoformat(),
             'doc_url': doc_url,
             'articles_count': len(articles),
             'key_issues_count': len(analysis_result.get('key_issues', [])),
@@ -6654,7 +6663,7 @@ def run_weekly_report():
         }
         
         Path("data/reports").mkdir(exist_ok=True)
-        report_file = f"data/reports/weekly_{datetime.datetime.now().strftime('%Y%m%d')}.json"
+        report_file = f"data/reports/weekly_{_now_kst().strftime('%Y%m%d')}.json"
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(report_meta, f, indent=2, ensure_ascii=False)
         
@@ -6732,7 +6741,7 @@ def run_monthly_report():
         stats = analysis_result.get('statistics', {})
         report_meta = {
             'report_type': 'monthly',
-            'generated_at': datetime.datetime.now().isoformat(),
+            'generated_at': _now_kst().isoformat(),
             'doc_url': doc_url,
             'articles_count': len(articles),
             'key_issues_count': len(analysis_result.get('key_issues', [])),
@@ -6747,7 +6756,7 @@ def run_monthly_report():
         }
         
         Path("data/reports").mkdir(exist_ok=True)
-        report_file = f"data/reports/monthly_{datetime.datetime.now().strftime('%Y%m')}.json"
+        report_file = f"data/reports/monthly_{_now_kst().strftime('%Y%m')}.json"
         with open(report_file, 'w', encoding='utf-8') as f:
             json.dump(report_meta, f, indent=2, ensure_ascii=False)
         

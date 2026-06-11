@@ -13,7 +13,14 @@ import math
 import re
 import html
 import datetime
+import pytz
 from typing import List, Dict, Optional
+
+_KST_TZ = pytz.timezone('Asia/Seoul')
+
+
+def _now_kst() -> datetime.datetime:
+    return datetime.datetime.now(_KST_TZ)
 
 
 def _clean_title(text: str) -> str:
@@ -161,7 +168,7 @@ def embed_unprocessed_articles(limit: int = EMBED_BATCH_SIZE) -> int:
             embeddings = _embed_texts(texts)
 
             # ON CONFLICT DO NOTHING: 이미 임베딩된 기사는 건너뜀 (UniqueViolation 방지)
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = _now_kst()
             rows = [
                 {
                     "article_id": article.id,
@@ -245,7 +252,7 @@ def search_similar_articles(
                 'fetch_k': top_k * 10,   # 후보 여유있게 확보 후 min_similarity 필터링
             }
             if days:
-                cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+                cutoff = _now_kst() - datetime.timedelta(days=days)
                 where_clauses.append('na.collected_at >= :cutoff')
                 params['cutoff'] = cutoff
             if unit_id is not None:
@@ -296,7 +303,7 @@ def search_similar_articles(
                     .join(NewsArticle, NewsArticle.id == ArticleEmbedding.article_id)
                 )
                 if days:
-                    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+                    cutoff = _now_kst() - datetime.timedelta(days=days)
                     q = q.filter(NewsArticle.collected_at >= cutoff)
                 if unit_id is not None:
                     q = q.filter(NewsArticle.unit_id == unit_id)
@@ -370,7 +377,7 @@ def _keyword_search_articles(
         with get_db_session() as session:
             base_q = session.query(NewsArticle)
             if days:
-                cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+                cutoff = _now_kst() - datetime.timedelta(days=days)
                 base_q = base_q.filter(NewsArticle.collected_at >= cutoff)
             if unit_id is not None:
                 base_q = base_q.filter(NewsArticle.unit_id == unit_id)

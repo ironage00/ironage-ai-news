@@ -15,7 +15,14 @@ LangGraph 개념의 상태 기계(state machine)를 순수 Python으로 구현.
 import datetime
 import json
 import re
+import pytz
 from typing import Any, Callable, Dict, List, Optional
+
+_KST_TZ = pytz.timezone('Asia/Seoul')
+
+
+def _now_kst() -> datetime.datetime:
+    return datetime.datetime.now(_KST_TZ)
 
 from news_engine import (
     load_news_from_db,
@@ -75,7 +82,7 @@ def node_load_data(state: Dict) -> Dict:
         if n.get('extracted_keywords')
     ]
 
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+    cutoff = _now_kst() - datetime.timedelta(days=days)
     news_all_prev = load_news_from_db(days=days * 2, is_analyzed=True)
     news_prev = [
         n for n in news_all_prev
