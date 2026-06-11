@@ -4412,23 +4412,16 @@ def _generate_daily_brief(sorted_data: list) -> dict:
     prompt = (
         "다음 ICT 뉴스 기사 목록을 보고 오늘의 뉴스 브리프를 JSON으로 작성하세요.\n\n"
         "[절대 규칙]\n"
-        "- 시사점·전망·권고사항·분석의견은 절대 포함 금지\n"
+        "- 시사점·전망·권고사항·분析의견은 절대 포함 금지\n"
         "- 기사에서 실제 발생한 팩트(WHO+WHAT)만 기술\n"
         "- '~해야 한다', '~필요하다', '~중요하다' 같은 평가·의견 표현 금지\n"
-        "- 각 핵심이슈는 주어+동사+목적어 형태의 1문장 팩트\n\n"
+        "- 각 그룹 형식: '주제명(건수) — 기관명+행동1, 기관명+행동2' (팩트만, 한 줄)\n"
+        "- 기관명+행동+대상으로 간결하게. 조사·서술어 최소화.\n\n"
         "[기사 목록]\n"
         f"{articles_text}\n"
         "[출력 형식 — JSON만 응답]\n"
-        "{\n"
-        '  "headline": "전체 기사에서 공통으로 나타난 팩트 흐름 1~2문장. 예: ○○가 ××를 발표했다. △△이 ○○를 채택했다.",\n'
-        '  "top_issues": [\n'
-        '    "기사1 팩트 1줄",\n'
-        '    "기사2 팩트 1줄",\n'
-        '    "기사3 팩트 1줄",\n'
-        '    "기사4 팩트 1줄",\n'
-        '    "기사5 팩트 1줄"\n'
-        '  ]\n'
-        "}"
+        '{"groups": ["주제A(N건) — 팩트1, 팩트2", "주제B(N건) — 팩트1, 팩트2", '
+        '"주제C(N건) — 팩트1, 팩트2", "주제D(N건) — 팩트1, 팩트2"]}'
     )
     try:
         client = get_openai_client()
@@ -4449,13 +4442,55 @@ def _generate_daily_brief(sorted_data: list) -> dict:
     except Exception as e:
         log_warning(f"일일 브리프 생성 실패: {e}")
         return {
-            'headline':      f"오늘 총 {len(sorted_data)}건의 ICT·통신 분야 뉴스가 수집·분석됐습니다.",
-            'top_issues':    [d.get('title', '')[:60] for d in sorted_data[:5]],
+            'groups':        [d.get('title', '')[:70] for d in sorted_data[:4]],
             'sector_counts': sector_counts,
             'impact_counts': impact_counts,
             'top_keywords':  top_keywords,
             'total':         len(sorted_data),
             'generated_at':  _now_kst().strftime('%Y-%m-%d %H:%M KST'),
+        }
+
+
+def _generate_unit_brief_compact(unit_display: str, analyzed_articles: list) -> dict:
+    """타 단 요약 카드용 컴팩트 브리프 생성 (3개 주제 그룹, GPT-4o).
+
+    Returns:
+        {'groups': ['주제A(N건) — 팩트1, 팩트2', ...], 'total': int}
+    """
+    if not analyzed_articles:
+        return {'groups': [], 'total': 0}
+    articles_text = '\n'.join(
+        f"{i}. {d.get('title', '')}"
+        for i, d in enumerate(analyzed_articles[:20], 1)
+    )
+    prompt = (
+        f"다음은 {unit_display} 관련 ICT 뉴스 {len(analyzed_articles[:20])}건입니다.\n"
+        "주제별로 3개 그룹으로 묶어 JSON으로 요약하세요.\n\n"
+        "[규칙]\n"
+        "- 시사점·전망·권고사항·의견 절대 금지. WHO+WHAT 팩트만.\n"
+        "- 각 그룹 형식: '주제명(건수) — 팩트1, 팩트2' (한 줄)\n"
+        "- 기관명+행동+대상으로 간결하게. 조사·서술어 최소화.\n\n"
+        f"[기사 목록]\n{articles_text}\n\n"
+        "[출력 — JSON만 응답]\n"
+        '{"groups": ["주제A(N건) — 팩트1, 팩트2", "주제B(N건) — 팩트1, 팩트2", "주제C(N건) — 팩트1"]}'
+    )
+    try:
+        client = get_openai_client()
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL_DEFAULT,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=400,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(resp.choices[0].message.content)
+        result['total'] = len(analyzed_articles)
+        return result
+    except Exception as e:
+        log_warning(f"[{unit_display}] 컴팩트 브리프 생성 실패: {e}")
+        return {
+            'groups': [d.get('title', '')[:70] for d in analyzed_articles[:3]],
+            'total':  len(analyzed_articles),
         }
 
 
@@ -4467,6 +4502,7 @@ def send_gmail_report(
     email_subject_prefix: str = None,
     email_subject_override: str = None,
     include_daily_brief: bool = False,
+    other_units_briefs: list = None,   # [{display, name, data}] 타 단 컴팩트 브리프
 ):
     """분석 리포트를 개선된 디자인의 이메일로 전송.
     receivers: 수신자 목록 (None이면 전역 RECEIVER_EMAIL 사용)
@@ -4483,12 +4519,13 @@ def send_gmail_report(
     # ─── 팩트 전용 일일 브리프 HTML 생성 (일일 뉴스레터 전용) ────────────
     _brief = _generate_daily_brief(sorted_data) if include_daily_brief else {}
     if _brief:
-        _issues_rows = ''
-        for _idx, _issue in enumerate(_brief.get('top_issues', [])[:5], 1):
-            _issues_rows += (
-                f'<div class="brief-issue-item">'
-                f'<span class="brief-issue-num">{_idx}</span>{_issue}'
-                f'</div>'
+        _groups_rows = ''
+        for _idx, _group in enumerate(_brief.get('groups', [])[:4], 1):
+            _groups_rows += (
+                f'<li class="brief-fact-item">'
+                f'<span class="brief-fact-num">{_idx}</span>'
+                f'{_group}'
+                f'</li>'
             )
         _sc = _brief.get('sector_counts', {})
         _sc_total = max(sum(_sc.values()), 1)
@@ -4504,20 +4541,6 @@ def send_gmail_report(
                 f'<span class="brief-sector-count">{_cnt}</span>'
                 f'</div>'
             )
-        _ic = _brief.get('impact_counts', {})
-        _impact_chips = ''
-        for _lv, _cls, _lbl in [
-            ('Critical', 'critical', 'Critical'),
-            ('High',     'high',     'High'),
-            ('Medium',   'medium',   'Medium'),
-            ('Low',      'low',      'Low'),
-        ]:
-            if _ic.get(_lv, 0) > 0:
-                _impact_chips += (
-                    f'<span class="impact-chip impact-chip-{_cls}">'
-                    f'{_lbl} {_ic[_lv]}'
-                    f'</span>'
-                )
         _kw_tags = ''.join(
             f'<span class="kw-tag">{kw}</span>'
             for kw in _brief.get('top_keywords', [])
@@ -4525,18 +4548,57 @@ def send_gmail_report(
         brief_html = (
             '<div class="daily-brief">'
             '<div class="brief-badge">TODAY\'S INTELLIGENCE BRIEF</div>'
-            f'<div class="brief-headline">{_brief.get("headline", "")}</div>'
-            f'<div class="brief-impact-row">{_impact_chips}</div>'
-            '<div class="brief-grid">'
-            f'<div class="brief-panel"><div class="brief-panel-title">핵심 이슈</div>{_issues_rows}</div>'
+            f'<ul class="brief-fact-list">{_groups_rows}</ul>'
+            '<div class="brief-bottom-row">'
             f'<div class="brief-panel"><div class="brief-panel-title">분야별 분포</div>{_sector_rows}</div>'
+            f'<div class="brief-panel"><div class="brief-panel-title">오늘의 주요 키워드</div>'
+            f'<div class="brief-keywords">{_kw_tags}</div></div>'
             '</div>'
-            f'<div class="brief-keywords">{_kw_tags}</div>'
-            f'<div class="brief-footer">생성: {_brief.get("generated_at", "")} | 총 {_brief.get("total", 0)}건 분석</div>'
+            f'<div class="brief-footer">생성: {_brief.get("generated_at", "")} | 총 {_brief.get("total", 0)}건 분析</div>'
             '</div>'
         )
     else:
         brief_html = ''
+
+    # ─── 타 단 동향 HTML 생성 ────────────────────────────────────────────
+    _UNIT_HEADER_COLORS = {
+        'standards_planning':   'linear-gradient(90deg,#1e3a5f,#2563eb)',
+        'standards_innovation': 'linear-gradient(90deg,#14532d,#16a34a)',
+        'ai_convergence':       'linear-gradient(90deg,#78350f,#d97706)',
+        'radio_network':        'linear-gradient(90deg,#4c1d95,#7c3aed)',
+    }
+    if other_units_briefs:
+        _unit_cards = ''
+        for _ub in other_units_briefs:
+            _ub_display = _ub.get('display', '')
+            _ub_name    = _ub.get('name', '')
+            _ub_data    = _ub.get('data', {})
+            _ub_total   = _ub_data.get('total', 0)
+            _ub_color   = _UNIT_HEADER_COLORS.get(_ub_name, 'linear-gradient(90deg,#334155,#475569)')
+            _ub_groups  = _ub_data.get('groups', [])
+            _group_rows = ''.join(
+                f'<li class="ou-fact-item">{g}</li>' for g in _ub_groups[:3]
+            ) or '<li class="ou-fact-item ou-empty">분析 결과 없음</li>'
+            _unit_cards += (
+                f'<div class="ou-card">'
+                f'<div class="ou-card-header" style="background:{_ub_color};">'
+                f'<span class="ou-unit-name">{_ub_display}</span>'
+                f'<span class="ou-unit-count">{_ub_total}건</span>'
+                f'</div>'
+                f'<ul class="ou-fact-list">{_group_rows}</ul>'
+                f'</div>'
+            )
+        other_units_html = (
+            '<div class="other-units-wrap">'
+            '<div class="ou-header">'
+            '<span class="ou-title">📡 타 단 동향 요약</span>'
+            '<span class="ou-note">각 단 키워드 기반 분류·분析 결과</span>'
+            '</div>'
+            f'<div class="ou-grid">{_unit_cards}</div>'
+            '</div>'
+        )
+    else:
+        other_units_html = ''
 
     IMPACT_HTML_COLOR = {
         'Critical': '#dc2626',
@@ -5060,58 +5122,33 @@ def send_gmail_report(
             margin-bottom: 10px;
             text-transform: uppercase;
         }
-        .brief-headline {
-            color: #ffffff;
-            font-size: 15px;
-            font-weight: 500;
-            line-height: 1.7;
-            margin-bottom: 14px;
+        .brief-fact-list { list-style: none; margin: 12px 0 16px; }
+        .brief-fact-item {
+            color: #e2e8f0; font-size: 13.5px; line-height: 1.7;
+            padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
         }
-        .brief-impact-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-bottom: 14px;
+        .brief-fact-item:last-child { border-bottom: none; }
+        .brief-fact-num {
+            display: inline-block; width: 20px; height: 20px;
+            background: rgba(245,158,11,0.2); border: 1px solid rgba(245,158,11,0.45);
+            border-radius: 50%; text-align: center; line-height: 20px;
+            font-size: 11px; font-weight: 700; color: #fcd34d;
+            margin-right: 8px; vertical-align: middle;
         }
-        .impact-chip {
-            padding: 3px 10px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
+        .brief-bottom-row {
+            display: table; width: 100%;
+            border-collapse: separate; border-spacing: 10px 0;
+            margin-top: 4px;
         }
-        .impact-chip-critical { background: rgba(220,38,38,0.2); color: #fca5a5; border: 1px solid rgba(220,38,38,0.3); }
-        .impact-chip-high     { background: rgba(234,88,12,0.2); color: #fdba74; border: 1px solid rgba(234,88,12,0.3); }
-        .impact-chip-medium   { background: rgba(37,99,235,0.2); color: #93c5fd; border: 1px solid rgba(37,99,235,0.3); }
-        .impact-chip-low      { background: rgba(107,114,128,0.2); color: #d1d5db; border: 1px solid rgba(107,114,128,0.3); }
-        .brief-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 14px;
-        }
-        @media (max-width: 600px) { .brief-grid { grid-template-columns: 1fr; } }
         .brief-panel {
+            display: table-cell; width: 50%;
             background: rgba(255,255,255,0.07);
-            border-radius: 8px;
-            padding: 14px 16px;
+            border-radius: 8px; padding: 14px 16px; vertical-align: top;
         }
         .brief-panel-title {
-            color: #f59e0b;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            margin-bottom: 10px;
+            color: #f59e0b; font-size: 11px; font-weight: 700;
+            letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px;
         }
-        .brief-issue-item {
-            color: #cbd5e1;
-            font-size: 12.5px;
-            line-height: 1.65;
-            padding: 5px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.07);
-        }
-        .brief-issue-item:last-child { border-bottom: none; }
-        .brief-issue-num { color: #f59e0b; font-weight: 700; margin-right: 6px; }
         .brief-sector-bar { display: flex; align-items: center; margin-bottom: 7px; }
         .brief-sector-label { color: #94a3b8; font-size: 11.5px; min-width: 78px; }
         .brief-bar-track { flex: 1; background: rgba(255,255,255,0.1); border-radius: 3px; height: 6px; margin: 0 8px; }
@@ -5119,14 +5156,49 @@ def send_gmail_report(
         .brief-sector-count { color: #f59e0b; font-size: 11px; font-weight: 700; min-width: 18px; text-align: right; }
         .brief-keywords { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
         .kw-tag {
-            background: rgba(255,255,255,0.1);
-            color: #e2e8f0;
-            font-size: 11px;
-            padding: 3px 9px;
-            border-radius: 12px;
+            background: rgba(255,255,255,0.1); color: #e2e8f0;
+            font-size: 11px; padding: 3px 9px; border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.15);
         }
         .brief-footer { color: #64748b; font-size: 11px; text-align: right; margin-top: 10px; }
+        /* ── 타 단 동향 섹션 ── */
+        .other-units-wrap {
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 20px 26px;
+        }
+        .ou-header {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+        }
+        .ou-title { font-size: 13px; font-weight: 700; color: #1e293b; }
+        .ou-note  { font-size: 11.5px; color: #94a3b8; }
+        .ou-grid  {
+            display: table; width: 100%; border-collapse: separate; border-spacing: 12px 0;
+        }
+        .ou-card  {
+            display: table-cell; width: 33.3%;
+            background: white; border: 1px solid #e2e8f0;
+            border-radius: 10px; overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            vertical-align: top;
+        }
+        .ou-card-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 9px 13px;
+        }
+        .ou-unit-name  { font-size: 12px; font-weight: 700; color: white; }
+        .ou-unit-count {
+            font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.85);
+            background: rgba(255,255,255,0.2); padding: 2px 7px; border-radius: 10px;
+        }
+        .ou-fact-list  { list-style: none; margin: 0; padding: 10px 13px; }
+        .ou-fact-item  {
+            font-size: 12px; color: #374151; line-height: 1.6;
+            padding: 5px 0; border-bottom: 1px solid #f1f5f9;
+        }
+        .ou-fact-item:last-child { border-bottom: none; padding-bottom: 0; }
+        .ou-fact-item strong { color: #1e293b; font-weight: 600; }
+        .ou-empty { color: #94a3b8 !important; }
     """
     
     html_body = f"""
@@ -5150,6 +5222,8 @@ def send_gmail_report(
             </div>
 
             {brief_html}
+
+            {other_units_html}
 
             <div class="doc-link-section">
                 {f'<a href="{doc_url}" class="doc-link-button" target="_blank">📄 Google Docs에서 전체 보고서 보기</a>' if doc_url else '<span style="color:#64748b;font-size:14px;">(Google Docs 생성 실패 — 아래 본문 참조)</span>'}
@@ -6291,11 +6365,33 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                     log_info(f"  분析 완료 {_done}/{len(unique_candidates)}")
     log_info(f"   분析 캐시 {len(analysis_cache)}개 완성")
 
-    # Phase 4: 단별 리포트/이메일 (순차)
+    # Phase 3.5: 타 단 컴팩트 브리프 사전 생성 (Phase 4 cross-unit 표시용)
     import pytz as _pytz_l4
     _kst_date = datetime.datetime.now(_pytz_l4.timezone('Asia/Seoul')).strftime('%Y년 %m월 %d일')
-    _weekday = datetime.date.today().weekday()  # 0=월, 4=금, 5=토, 6=일
-    _skip_email = _weekday >= 5  # 토/일은 이메일 발송 skip
+    _weekday = datetime.date.today().weekday()
+    _skip_email = _weekday >= 5
+
+    _all_unit_analyzed: dict = {}
+    for _uid, _udata in unit_cfgs.items():
+        _pool = unit_pools.get(_uid, [])
+        _all_unit_analyzed[_uid] = [
+            analysis_cache[it['link']] for it in _pool
+            if it['link'] in analysis_cache
+        ][:20]
+
+    _unit_compact_briefs: dict = {}
+    if not _skip_email:
+        log_info("[Phase 3.5] 타 단 컴팩트 브리프 사전 생성 중...")
+        for _uid, _arts in _all_unit_analyzed.items():
+            _disp = unit_cfgs[_uid]['display']
+            _unit_compact_briefs[_uid] = safe_execute(
+                lambda a=_arts, d=_disp: _generate_unit_brief_compact(d, a),
+                error_msg=f"[{_disp}] 컴팩트 브리프 실패",
+                default_return={'groups': [], 'total': len(_arts)},
+            )
+            log_info(f"   [{_disp}] 컴팩트 브리프 생성 완료 ({len(_arts)}건)")
+
+    # Phase 4: 단별 리포트/이메일 (순차)
     if _skip_email:
         log_info(f"[Phase 4] {'토요일' if _weekday == 5 else '일요일'} — 이메일 발송 건너뜀. 수집·분析 결과는 DB에 저장됩니다.")
     log_info("[Phase 4] 단별 리포트/이메일 순차 발송")
@@ -6307,10 +6403,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         summary[display] = unit_result
 
         pool = unit_pools.get(uid, [])
-        analyzed = []
-        for it in pool:
-            if it['link'] in analysis_cache and len(analyzed) < 20:
-                analyzed.append(analysis_cache[it['link']])
+        analyzed = list(_all_unit_analyzed.get(uid, []))  # Phase 3.5 사전 계산값 재사용
 
         # 월요일: DB에서 금·토·일 누적 기사 추가 (오늘치 분析 실패해도 주말분 발송)
         # days=4: 09:00 KST 실행 기준 금요일 기사가 경계에 걸리지 않도록 여유값 사용
@@ -6347,14 +6440,24 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             other_news = [it for it in pool if it['link'] not in {r['link'] for r in analyzed}]
             receivers  = data['email_recipients'] if data['email_recipients'] else None
 
+            # 타 단 브리프: 현재 단 제외한 나머지 3개 단
+            _other_briefs = [
+                {
+                    'display': unit_cfgs[_oid]['display'],
+                    'name':    unit_cfgs[_oid]['name'],
+                    'data':    _unit_compact_briefs.get(_oid, {'groups': [], 'total': 0}),
+                }
+                for _oid in unit_cfgs if _oid != uid
+            ]
+
             _rt = report_title; _du = doc_url; _on = other_news
             _rcv = receivers; _sn = data['sender_name']; _dp = display
-            _esp = data['email_subject_prefix']; _esub = _subj
+            _esp = data['email_subject_prefix']; _esub = _subj; _ob = _other_briefs
             safe_execute(
-                lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub:
+                lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub, ob=_ob:
                     send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
                         unit_display=dp, email_subject_prefix=esp, email_subject_override=esub,
-                        include_daily_brief=True),
+                        include_daily_brief=True, other_units_briefs=ob),
                 error_msg=f"[{display}] 이메일 실패",
                 default_return=None,
             )

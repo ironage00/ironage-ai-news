@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[TTA] AI 융합 동향 보고서 (2026년 06월 11일)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Noto Sans KR',sans-serif; background:#f0f4f8; padding:20px; }
+  .email-wrapper {
+    max-width:900px; margin:0 auto; background:white;
+    border-radius:12px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.12);
+  }
+
+  /* ── 이메일 헤더 (코드 output 동일) ── */
+  .header {
+    background:linear-gradient(135deg,#1e3c72 0%,#2a5298 100%);
+    padding:35px; text-align:center;
+    position:relative; overflow:hidden;
+  }
+  .header h1 {
+    font-size:26px; font-weight:700; color:#fff;
+    margin-bottom:10px; text-shadow:2px 2px 4px rgba(0,0,0,0.2);
+    position:relative; z-index:1;
+  }
+  .header-subtitle {
+    font-size:14px; color:rgba(255,255,255,0.95); font-style:italic;
+    background:rgba(255,255,255,0.15);
+    padding:8px 20px; border-radius:20px; display:inline-block;
+    position:relative; z-index:1;
+  }
+
+  /* ── Daily Brief (코드 출력과 동일한 클래스) ── */
+  .daily-brief {
+    background:linear-gradient(135deg,#0f2027 0%,#203a43 50%,#2c5364 100%);
+    padding:28px 32px;
+    border-bottom:3px solid #f59e0b;
+  }
+  .brief-badge {
+    display:inline-block; background:#f59e0b; color:#0f2027;
+    font-size:10px; font-weight:700; letter-spacing:1.5px;
+    padding:3px 10px; border-radius:20px;
+    margin-bottom:10px; text-transform:uppercase;
+  }
+  .brief-fact-list { list-style:none; margin:12px 0 16px; }
+  .brief-fact-item {
+    color:#e2e8f0; font-size:13.5px; line-height:1.7;
+    padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.08);
+  }
+  .brief-fact-item:last-child { border-bottom:none; }
+  .brief-fact-num {
+    display:inline-block; width:20px; height:20px;
+    background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.45);
+    border-radius:50%; text-align:center; line-height:20px;
+    font-size:11px; font-weight:700; color:#fcd34d;
+    margin-right:8px; vertical-align:middle;
+  }
+  .brief-bottom-row {
+    display:table; width:100%;
+    border-collapse:separate; border-spacing:10px 0;
+    margin-top:4px;
+  }
+  .brief-panel {
+    display:table-cell; width:50%;
+    background:rgba(255,255,255,0.07);
+    border-radius:8px; padding:14px 16px; vertical-align:top;
+  }
+  .brief-panel-title {
+    color:#f59e0b; font-size:11px; font-weight:700;
+    letter-spacing:1px; text-transform:uppercase; margin-bottom:10px;
+  }
+  .brief-sector-bar { display:flex; align-items:center; margin-bottom:7px; }
+  .brief-sector-label { color:#94a3b8; font-size:11.5px; min-width:78px; }
+  .brief-bar-track { flex:1; background:rgba(255,255,255,0.1); border-radius:3px; height:6px; margin:0 8px; }
+  .brief-bar-fill  { height:6px; border-radius:3px; background:linear-gradient(90deg,#f59e0b,#fbbf24); }
+  .brief-sector-count { color:#f59e0b; font-size:11px; font-weight:700; min-width:18px; text-align:right; }
+  .brief-keywords { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+  .kw-tag {
+    background:rgba(255,255,255,0.1); color:#e2e8f0;
+    font-size:11px; padding:3px 9px; border-radius:12px;
+    border:1px solid rgba(255,255,255,0.15);
+  }
+  .brief-footer { color:#64748b; font-size:11px; text-align:right; margin-top:10px; }
+
+  /* ── 타 단 동향 (코드 출력과 동일한 클래스) ── */
+  .other-units-wrap {
+    background:#f8fafc;
+    border-bottom:1px solid #e2e8f0;
+    padding:20px 26px;
+  }
+  .ou-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .ou-title  { font-size:13px; font-weight:700; color:#1e293b; }
+  .ou-note   { font-size:11.5px; color:#94a3b8; }
+  .ou-grid   { display:table; width:100%; border-collapse:separate; border-spacing:12px 0; }
+  .ou-card   {
+    display:table-cell; width:33.3%;
+    background:white; border:1px solid #e2e8f0;
+    border-radius:10px; overflow:hidden;
+    box-shadow:0 1px 4px rgba(0,0,0,0.05);
+    vertical-align:top;
+  }
+  .ou-card-header {
+    padding:10px 14px; display:flex;
+    justify-content:space-between; align-items:center;
+  }
+  .ou-unit-name  { font-size:12px; font-weight:700; color:#fff; }
+  .ou-unit-count { font-size:11px; color:rgba(255,255,255,0.85); background:rgba(255,255,255,0.18); padding:2px 8px; border-radius:10px; }
+  .ou-fact-list  { list-style:none; padding:12px 14px; }
+  .ou-fact-item  { font-size:12px; color:#334155; line-height:1.65; padding:6px 0; border-bottom:1px solid #f1f5f9; }
+  .ou-fact-item:last-child { border-bottom:none; }
+  .ou-empty { color:#94a3b8; font-style:italic; }
+
+  /* ── 뉴스 카드 (기존 이메일 본문) ── */
+  .doc-link-section {
+    background:#eff6ff; border-bottom:1px solid #dbeafe;
+    padding:16px 32px; text-align:center;
+  }
+  .doc-link-section a {
+    display:inline-block; background:#2563eb; color:white;
+    text-decoration:none; padding:10px 28px; border-radius:8px;
+    font-size:13px; font-weight:600;
+  }
+  .news-section-title {
+    padding:20px 32px 12px; font-size:16px; font-weight:700; color:#1e293b;
+    border-bottom:2px solid #e2e8f0; margin-bottom:4px;
+  }
+  .news-card {
+    margin:16px 24px; padding:20px 24px;
+    background:#fff; border-radius:10px;
+    border:1px solid #e2e8f0; border-top:3px solid #2563eb;
+    box-shadow:0 1px 6px rgba(0,0,0,0.05);
+  }
+  .news-number {
+    display:inline-block; width:26px; height:26px; background:#2563eb;
+    border-radius:50%; color:white; font-size:12px; font-weight:700;
+    text-align:center; line-height:26px; margin-right:10px;
+  }
+  .news-title { font-size:15px; font-weight:700; color:#1e293b; margin:6px 0 4px; }
+  .news-meta  { font-size:12px; color:#64748b; }
+
+  /* ── 푸터 (코드 output 동일) ── */
+  .footer {
+    background:linear-gradient(135deg,#2c3e50 0%,#3498db 100%);
+    color:white; padding:25px; text-align:center;
+  }
+  .footer-content { font-size:13px; opacity:0.95; line-height:1.6; }
+  .footer-divider { width:50px; height:2px; background:rgba(255,255,255,0.4); margin:15px auto; }
+  .footer-copyright { font-size:11px; opacity:0.8; margin-top:15px; }
+</style>
+</head>
+<body>
+<div class="email-wrapper">
+
+  <!-- ① 헤더 -->
+  <div class="header">
+    <h1>[TTA] AI 융합 동향 보고서 (2026년 06월 11일)</h1>
+    <div class="header-subtitle">※ 본 보고서의 내용은 IRONAGE AI가 생성한 분析으로, 개인적인 의견을 포함하지 않습니다.</div>
+  </div>
+
+  <!-- ② Daily Brief (코드 output과 동일 구조) -->
+  <div class="daily-brief">
+    <div class="brief-badge">TODAY'S INTELLIGENCE BRIEF</div>
+
+    <ul class="brief-fact-list">
+      <li class="brief-fact-item">
+        <span class="brief-fact-num">1</span>
+        AI 규제·표준화(7건) — EU AI Act 이행지침 발표, ITU-T SG16 AI 신뢰성 과제 채택, NIST AI 600-1 v2 공개
+      </li>
+      <li class="brief-fact-item">
+        <span class="brief-fact-num">2</span>
+        6G·이동통신(5건) — 삼성전자 6G 관련 특허 세계 1위, 3GPP Release 19 일정 6개월 단축, ETSI Open RAN 최종안 배포
+      </li>
+      <li class="brief-fact-item">
+        <span class="brief-fact-num">3</span>
+        보안·암호화(4건) — NIST PQC 표준 3종 ISO 채택 권고, GSMA 양자내성 암호 마이그레이션 가이드라인 발표
+      </li>
+      <li class="brief-fact-item">
+        <span class="brief-fact-num">4</span>
+        국제 표준·기타(4건) — WRC-27 의제 확정, IEEE 802.11bn(Wi-Fi 8) 작업 착수, ISO/IEC JTC1 SC42 신규 과제 등록
+      </li>
+    </ul>
+
+    <!-- 하단 2열: 분야별 분포 | 오늘의 주요 키워드 -->
+    <div class="brief-bottom-row">
+      <div class="brief-panel">
+        <div class="brief-panel-title">분야별 분포</div>
+        <div class="brief-sector-bar">
+          <span class="brief-sector-label">AI·기계학습</span>
+          <div class="brief-bar-track"><div class="brief-bar-fill" style="width:35%"></div></div>
+          <span class="brief-sector-count">7</span>
+        </div>
+        <div class="brief-sector-bar">
+          <span class="brief-sector-label">6G·이동통신</span>
+          <div class="brief-bar-track"><div class="brief-bar-fill" style="width:25%"></div></div>
+          <span class="brief-sector-count">5</span>
+        </div>
+        <div class="brief-sector-bar">
+          <span class="brief-sector-label">보안·암호화</span>
+          <div class="brief-bar-track"><div class="brief-bar-fill" style="width:20%"></div></div>
+          <span class="brief-sector-count">4</span>
+        </div>
+        <div class="brief-sector-bar">
+          <span class="brief-sector-label">국제표준·기타</span>
+          <div class="brief-bar-track"><div class="brief-bar-fill" style="width:20%"></div></div>
+          <span class="brief-sector-count">4</span>
+        </div>
+      </div>
+      <div class="brief-panel">
+        <div class="brief-panel-title">오늘의 주요 키워드</div>
+        <div class="brief-keywords">
+          <span class="kw-tag">EU AI Act</span>
+          <span class="kw-tag">ITU-T SG16</span>
+          <span class="kw-tag">6G 표준화</span>
+          <span class="kw-tag">PQC</span>
+          <span class="kw-tag">Open RAN</span>
+          <span class="kw-tag">Wi-Fi 8</span>
+          <span class="kw-tag">양자내성암호</span>
+          <span class="kw-tag">WRC-27</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="brief-footer">생성: 2026-06-11 09:02 KST | 총 20건 분析</div>
+  </div>
+
+  <!-- ③ 타 단 동향 요약 (코드 output과 동일 구조) -->
+  <div class="other-units-wrap">
+    <div class="ou-header">
+      <span class="ou-title">📡 타 단 동향 요약</span>
+      <span class="ou-note">각 단 키워드 기반 분류·분析 결과</span>
+    </div>
+    <div class="ou-grid">
+
+      <!-- 표준기획단 -->
+      <div class="ou-card">
+        <div class="ou-card-header" style="background:linear-gradient(90deg,#1e3a5f,#2563eb);">
+          <span class="ou-unit-name">표준기획단</span>
+          <span class="ou-unit-count">18건</span>
+        </div>
+        <ul class="ou-fact-list">
+          <li class="ou-fact-item">국제표준 전략(8건) — ISO·IEC 신규 과제 3건 채택, ITU 분담금 조정 결의</li>
+          <li class="ou-fact-item">지식재산·특허(6건) — EPO AI 특허 심사 기준 개정, ETSI IPR 정책 강화</li>
+          <li class="ou-fact-item">표준 거버넌스(4건) — WTO TBT 협정 개정안 논의, APEC 표준 조화 MOU</li>
+        </ul>
+      </div>
+
+      <!-- 표준혁신단 -->
+      <div class="ou-card">
+        <div class="ou-card-header" style="background:linear-gradient(90deg,#14532d,#16a34a);">
+          <span class="ou-unit-name">표준혁신단</span>
+          <span class="ou-unit-count">15건</span>
+        </div>
+        <ul class="ou-fact-list">
+          <li class="ou-fact-item">스마트제조·IoT(7건) — IEC 62443 개정판 발행, Matter 1.3 사양 확정</li>
+          <li class="ou-fact-item">메타버스·XR(5건) — IEEE P2048 XR 안전 표준 초안 발표, ISO/IEC 23005 개정</li>
+          <li class="ou-fact-item">디지털트윈(3건) — ISO 23247-4 최종안 회람, IEC TC65 신규 작업반 구성</li>
+        </ul>
+      </div>
+
+      <!-- 전파네트워크표준단 -->
+      <div class="ou-card">
+        <div class="ou-card-header" style="background:linear-gradient(90deg,#4c1d95,#7c3aed);">
+          <span class="ou-unit-name">전파네트워크표준단</span>
+          <span class="ou-unit-count">22건</span>
+        </div>
+        <ul class="ou-fact-list">
+          <li class="ou-fact-item">주파수·전파(9건) — WRC-27 의제 확정, CEPT ECC 700 MHz 재배치 권고</li>
+          <li class="ou-fact-item">5G·6G 인프라(8건) — 3GPP SA2 Release 19 코어 표준 완료, O-RAN Alliance 명세 v7</li>
+          <li class="ou-fact-item">위성·비지상망(5건) — ITU-R WP4B NTN 공존 표준 채택, SpaceX Starlink 시험 결과 제출</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ④ Google Docs 링크 버튼 -->
+  <div class="doc-link-section">
+    <a href="#">📄 상세 분析 리포트 보기 (Google Docs)</a>
+  </div>
+
+  <!-- ⑤ 뉴스 본문 (일부 샘플) -->
+  <div class="news-section-title">📰 AI융합표준단 주요 뉴스 (20건)</div>
+
+  <div class="news-card">
+    <div>
+      <span class="news-number">1</span>
+      <span style="display:inline-block;background:#fff1f2;color:#dc2626;border:1px solid #dc2626;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;">🚨 Critical</span>
+    </div>
+    <h3 class="news-title">EU AI Act 이행지침 2차 초안 공개 — 고위험 AI 시스템 적합성 평가 절차 명시</h3>
+    <div class="news-meta">📰 Euractiv &nbsp;|&nbsp; 📅 2026-06-11</div>
+  </div>
+
+  <div class="news-card">
+    <div>
+      <span class="news-number">2</span>
+      <span style="display:inline-block;background:#fff7ed;color:#ea580c;border:1px solid #ea580c;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;">⚠️ High</span>
+    </div>
+    <h3 class="news-title">ITU-T SG16, AI 신뢰성 평가 프레임워크 표준 과제(Q.AITRE) 최종 채택</h3>
+    <div class="news-meta">📰 ITU News &nbsp;|&nbsp; 📅 2026-06-10</div>
+  </div>
+
+  <div style="padding:12px 24px 20px;text-align:center;color:#94a3b8;font-size:12px;">
+    … 이하 18건 생략 (실제 이메일에는 전체 포함) …
+  </div>
+
+  <!-- ⑥ 푸터 -->
+  <div class="footer">
+    <div class="footer-content">
+      <strong>한국정보통신기술협회(TTA)</strong><br>
+      AI융합표준단
+    </div>
+    <div class="footer-divider"></div>
+    <div class="footer-copyright">
+      본 리포트는 IRONAGE AI Analytics System을 통해 자동 생성되었습니다.<br>
+      © 2024 TTA. All rights reserved.
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
