@@ -4412,7 +4412,7 @@ def _generate_daily_brief(sorted_data: list) -> dict:
     prompt = (
         "다음 ICT 뉴스 기사 목록을 보고 오늘의 뉴스 브리프를 JSON으로 작성하세요.\n\n"
         "[절대 규칙]\n"
-        "- 시사점·전망·권고사항·분析의견은 절대 포함 금지\n"
+        "- 시사점·전망·권고사항·분석의견은 절대 포함 금지\n"
         "- 기사에서 실제 발생한 팩트(WHO+WHAT)만 기술\n"
         "- '~해야 한다', '~필요하다', '~중요하다' 같은 평가·의견 표현 금지\n"
         "- 각 그룹 형식: '주제명(건수) — 기관명+행동1, 기관명+행동2' (팩트만, 한 줄)\n"
@@ -4429,7 +4429,7 @@ def _generate_daily_brief(sorted_data: list) -> dict:
             model=OPENAI_MODEL_DEFAULT,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=700,
+            max_tokens=1000,
             response_format={"type": "json_object"},
         )
         result = json.loads(resp.choices[0].message.content)
@@ -4554,7 +4554,7 @@ def send_gmail_report(
             f'<div class="brief-panel"><div class="brief-panel-title">오늘의 주요 키워드</div>'
             f'<div class="brief-keywords">{_kw_tags}</div></div>'
             '</div>'
-            f'<div class="brief-footer">생성: {_brief.get("generated_at", "")} | 총 {_brief.get("total", 0)}건 분析</div>'
+            f'<div class="brief-footer">생성: {_brief.get("generated_at", "")} | 총 {_brief.get("total", 0)}건 분석</div>'
             '</div>'
         )
     else:
@@ -4578,7 +4578,7 @@ def send_gmail_report(
             _ub_groups  = _ub_data.get('groups', [])
             _group_rows = ''.join(
                 f'<li class="ou-fact-item">{g}</li>' for g in _ub_groups[:3]
-            ) or '<li class="ou-fact-item ou-empty">분析 결과 없음</li>'
+            ) or '<li class="ou-fact-item ou-empty">분석 결과 없음</li>'
             _unit_cards += (
                 f'<div class="ou-card">'
                 f'<div class="ou-card-header" style="background:{_ub_color};">'
@@ -4592,7 +4592,7 @@ def send_gmail_report(
             '<div class="other-units-wrap">'
             '<div class="ou-header">'
             '<span class="ou-title">📡 타 단 동향 요약</span>'
-            '<span class="ou-note">각 단 키워드 기반 분류·분析 결과</span>'
+            '<span class="ou-note">각 단 키워드 기반 분류·분석 결과</span>'
             '</div>'
             f'<div class="ou-grid">{_unit_cards}</div>'
             '</div>'
@@ -5122,7 +5122,7 @@ def send_gmail_report(
             margin-bottom: 10px;
             text-transform: uppercase;
         }
-        .brief-fact-list { list-style: none; margin: 12px 0 16px; }
+        .brief-fact-list { list-style: none; margin: 12px 0 16px; padding: 0; }
         .brief-fact-item {
             color: #e2e8f0; font-size: 13.5px; line-height: 1.7;
             padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -6413,7 +6413,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             _extra = [a for a in _acc if a['link'] not in _today_links]
             if _extra:
                 log_info(f"   [{display}] 주말 누적 기사 {len(_extra)}개 추가 포함")
-                analyzed = _extra + analyzed
+                analyzed = (_extra + analyzed)[:20]
 
         if not analyzed:
             unit_result['errors'].append('분析 결과 없음')
