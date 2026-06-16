@@ -62,7 +62,7 @@ def _now_kst() -> datetime.datetime:
 
 # Google API
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -5474,10 +5474,32 @@ def save_analysis_to_weekly_excel(
         log_info(f"   📅 분석 주차: {week_str} ({monday.strftime('%Y.%m.%d')} ~ {sunday.strftime('%Y.%m.%d')})")
         log_info(f"   📂 파일: {filepath}")
         
+        # Google Drive에서 기존 파일 먼저 다운로드 (GitHub Actions 환경: 로컬 파일 없음)
+        if not filepath.exists():
+            try:
+                _, _dl_drive = get_google_docs_service()
+                _dl_existing = _dl_drive.files().list(
+                    q=f"name='{filename}' and '{REPORT_FOLDER_ID}' in parents and trashed=false",
+                    fields='files(id)',
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                ).execute().get('files', [])
+                if _dl_existing:
+                    import io as _io
+                    _dl_req = _dl_drive.files().get_media(fileId=_dl_existing[0]['id'])
+                    with open(str(filepath), 'wb') as _fh:
+                        _downloader = MediaIoBaseDownload(_fh, _dl_req)
+                        _done = False
+                        while not _done:
+                            _, _done = _downloader.next_chunk()
+                    log_info(f"   ☁️ Google Drive에서 기존 파일 다운로드: {filename}")
+            except Exception as _dl_err:
+                log_warning(f"   ⚠️ Drive 다운로드 실패 (신규 생성): {_dl_err}")
+
         # 기존 데이터 로드 (파일이 있으면)
         existing_df = None
         existing_links = set()
-        
+
         if filepath.exists():
             try:
                 existing_df = pd.read_excel(filepath, sheet_name='뉴스 분석 결과')
