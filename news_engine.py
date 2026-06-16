@@ -1876,8 +1876,8 @@ def get_news_data(rss_urls=None, naver_queries=None):
     failed_urls = []
 
     stats = {
-        'google_alerts': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0},
-        'naver': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0}
+        'google_alerts': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0, 'early_filtered': 0},
+        'naver': {'total': 0, 'success': 0, 'failed': 0, 'filtered_out': 0, 'early_filtered': 0}
     }
 
     # rss_urls/naver_queries 미지정이면 전역값 사용
@@ -1973,9 +1973,17 @@ def get_news_data(rss_urls=None, naver_queries=None):
                         else:
                             published_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
                         
+                        # 조기 Stage 0 — 제목+요약으로 비ICT 즉시 제외 (URL 요청 전)
+                        _early_summary = _clean_text_hint(
+                            getattr(entry, 'summary', '') or getattr(entry, 'description', '')
+                        )
+                        if _collect_stage_filter_reason({'title': entry.title, 'summary': _early_summary}):
+                            stats['google_alerts']['early_filtered'] += 1
+                            continue
+
                         current_idx = batch_start + j
                         log_info(f"        🔄 [{current_idx}/{len(feed.entries)}] {title_preview}...")
-                        
+
                         # URL 추출 및 처리
                         try:
                             extracted_url = extract_google_alerts_url(entry.link)
@@ -2009,8 +2017,8 @@ def get_news_data(rss_urls=None, naver_queries=None):
                                 "summary": summary_hint,
                                 "content_hint_len": len(summary_hint),
                             })
-                            
-                            time.sleep(0.3)
+
+                            time.sleep(0.1)
                             
                         except Exception as url_error:
                             stats['google_alerts']['failed'] += 1
@@ -2098,17 +2106,29 @@ def get_news_data(rss_urls=None, naver_queries=None):
                         continue
                     
                     published_date = pub_date.strftime('%Y-%m-%d %H:%M')
-                    
+
+                    # 조기 Stage 0 — 제목+요약으로 비ICT 즉시 제외 (URL 요청 전)
+                    _naver_summary = _clean_text_hint(item.get("description", ""))
+                    if _collect_stage_filter_reason({'title': clean_title, 'summary': _naver_summary}):
+                        stats['naver']['early_filtered'] += 1
+                        continue
+
                     log_info(f"        🔄 [{j}/{len(items)}] {title_preview}...")
-                    
+
                     try:
                         raw_link = item.get("originallink", item["link"])
-                        
+
                         if not raw_link.startswith('http'):
                             log_info(f"           ❌ 잘못된 URL")
                             stats['naver']['failed'] += 1
                             continue
-                        
+
+                        # 조기 도메인 블랙리스트 — Naver는 originallink로 실제 도메인 확인 가능
+                        _raw_domain = urlparse(raw_link).netloc.replace('www.', '').replace('m.', '')
+                        if any(_raw_domain == bd or _raw_domain.endswith('.' + bd) for bd in BLOCKED_DOMAINS):
+                            stats['naver']['early_filtered'] += 1
+                            continue
+
                         final_link, source, success = get_final_url_and_source(raw_link)
                         
                         if success:
@@ -2131,7 +2151,7 @@ def get_news_data(rss_urls=None, naver_queries=None):
                             "content_hint_len": len(summary_hint),
                         })
                         
-                        time.sleep(0.2)
+                        time.sleep(0.1)
                         
                     except Exception as url_error:
                         stats['naver']['failed'] += 1
@@ -2207,13 +2227,17 @@ def get_news_data(rss_urls=None, naver_queries=None):
     total_success = stats['google_alerts']['success'] + stats['naver']['success']
     
     if total_items > 0:
+        total_early = stats['google_alerts']['early_filtered'] + stats['naver']['early_filtered']
         filter_rate = (total_filtered / total_items * 100) if total_items > 0 else 0
-        success_rate = (total_success / (total_items - total_filtered) * 100) if (total_items - total_filtered) > 0 else 0
-        
+        _after_time = total_items - total_filtered
+        _url_processed = _after_time - total_early
+        success_rate = (total_success / _url_processed * 100) if _url_processed > 0 else 0
+
         log_info(f"\n📈 최종 결과:")
         log_info(f"    • 전체 발견: {total_items}개")
         log_info(f"    • 시간 필터 제외: {total_filtered}개 ({filter_rate:.1f}%) ⏰")
-        log_info(f"    • 시간 범위 내 후보: {total_items - total_filtered}개")
+        log_info(f"    • 조기 비ICT 제외 (URL 요청 전): {total_early}개")
+        log_info(f"    • URL 처리 대상: {_url_processed}개")
         log_info(f"    • 수집 성공: {total_success}개 ({success_rate:.1f}%)")
         log_info(f"    • 수집 단계 비ICT 제외: {_removed_collect}개")
         log_info(f"    • 중복 제거 후 최종 후보: {len(unique_news_items)}개")
