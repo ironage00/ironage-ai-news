@@ -950,9 +950,9 @@ def _show_article_detail(art: dict):
         st.info("분석 내용이 없습니다.")
 
     if _tta_action or _std_gap:
-        with st.expander("📌 TTA 조치사항 / 표준화 격차"):
+        with st.expander("📌 TTA 검토과제 / 표준화 격차"):
             if _tta_action:
-                st.markdown(f"**TTA 조치사항:** {_tta_action}")
+                st.markdown(f"**TTA 검토과제:** {_tta_action}")
             if _std_gap:
                 st.markdown(f"**표준화 격차:** {_std_gap}")
 

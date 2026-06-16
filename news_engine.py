@@ -2860,7 +2860,7 @@ def analyze_news_with_ai(news_item, max_retries=3, ai_model: str = None):
 **현재 날짜: {_today.strftime('%Y년 %m월 %d일')} (올해: {_current_year}년)**
 - 기사 본문의 **'올해'·'금년'·'이번 해'는 반드시 {_current_year}년**으로, **'내년'은 {_current_year + 1}년**, **'지난해'·'작년'은 {_current_year - 1}년**으로 변환하여 서술할 것.
 - AI 학습 데이터 기준의 연도({_current_year - 3}년 이전 등)를 절대 사용하지 말 것.
-- TTA 조치 사항 작성 시 이 날짜 이후의 미래 시점으로 서술할 것.
+- TTA 검토과제 작성 시 이 날짜 이후의 미래 시점으로 서술할 것.
 
 **중요**: 전체 분석 내용 중 **가장 핵심적인 30% 이내**만 별표로 강조하세요.
 
@@ -2984,7 +2984,7 @@ def analyze_news_with_ai(news_item, max_retries=3, ai_model: str = None):
 - "Medium": 지속 모니터링이 필요한 일반 업계 동향
 - "Low": 참고 수준의 배경 정보성 뉴스
 
-**TTA 조치 사항(tta_action_item) 작성 기준:**
+**TTA 검토과제(tta_action_item) 작성 기준:**
 - TTA 표준화본부 관점의 구체적 행동 지침 (예: "3GPP SA2 회의 참여 강화", "ITU-T SG13 의견서 제출 검토")
 - 기사 내용에 직접 근거한 실질적 대응 방안
 - 반드시 한 문장 이상 기재 (빈 문자열 불허)
@@ -4252,10 +4252,10 @@ def generate_google_doc_report(analyzed_data, unit_name=None, unit_display=None)
                 })
                 index += _utf16_len(section_body)
             
-            # ── TTA 조치사항 (뉴스 마지막 배치) ────────────────
+            # ── TTA 검토과제 (뉴스 마지막 배치) ────────────────
             tta = impact_info['tta_action_item']
             if tta:
-                tta_label = "▶ TTA 조치 사항\n"
+                tta_label = "▶ TTA 검토과제\n"
                 requests_list.append({'insertText': {'location': {'index': index}, 'text': tta_label}})
                 requests_list.append({
                     'updateTextStyle': {
@@ -4763,7 +4763,7 @@ def send_gmail_report(
             tta_inline = (
                 f'<p style="margin-top:10px; padding-top:8px; border-top:1px solid {impact_color}33; '
                 f'color:{impact_color}; font-size:13px; font-weight:600;">'
-                f'🏛️ <strong>TTA 조치:</strong> {impact_info["tta_action_item"]}</p>'
+                f'🏛️ <strong>TTA 검토과제:</strong> {impact_info["tta_action_item"]}</p>'
             )
         std_gap_html = ""
         if impact_info['standardization_gap'] and impact_info['standardization_gap'] != '기사에서 표준화 현황 정보 미확인':
@@ -5577,7 +5577,7 @@ def save_analysis_to_weekly_excel(
                 '영향도': impact_info.get('impact_level', 'Medium'),
                 '주요 내용 요약': analysis_summary,
                 '시사점 및 전망': implications_summary,
-                'TTA 조치 사항': impact_info.get('tta_action_item', ''),
+                'TTA 검토과제': impact_info.get('tta_action_item', ''),
                 '표준화 격차': impact_info.get('standardization_gap', ''),
                 '핵심 키워드': keywords_str,
                 'AI 모델': item.get('ai_model', CONFIG.get('ai_model', 'openai')),
@@ -5635,7 +5635,7 @@ def save_analysis_to_weekly_excel(
                     '영향도': 10,
                     '주요 내용 요약': 60,
                     '시사점 및 전망': 60,
-                    'TTA 조치 사항': 40,
+                    'TTA 검토과제': 40,
                     '표준화 격차': 30,
                     '핵심 키워드': 30,
                     'AI 모델': 12,

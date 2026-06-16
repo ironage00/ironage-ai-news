@@ -1507,7 +1507,7 @@ def save_analyzed_news_to_markdown(analyzed_data: List[Dict]) -> Optional[str]:
                 icon = IMPACT_LEVEL_ICON.get(info['impact_level'], '📋')
                 level = info['impact_level']
                 tta = info['tta_action_item'] or '추가 모니터링 필요'
-                md_lines.append(f"- {icon} **[{level}]** {art['title'][:80]}  \n  → **TTA 조치:** {tta}")
+                md_lines.append(f"- {icon} **[{level}]** {art['title'][:80]}  \n  → **TTA 검토과제:** {tta}")
                 
         # 각 뉴스 아이템 상세 분석
         md_lines.append("\n## 📰 상세 뉴스 분석")
@@ -1522,7 +1522,7 @@ def save_analyzed_news_to_markdown(analyzed_data: List[Dict]) -> Optional[str]:
             md_lines.append(f"- **{impact_icon} 영향도:** {impact_level}")
             
             if impact_info.get('tta_action_item'):
-                md_lines.append(f"- **💼 TTA 조치 사항:** {impact_info['tta_action_item']}")
+                md_lines.append(f"- **💼 TTA 검토과제:** {impact_info['tta_action_item']}")
             if impact_info.get('standardization_gap'):
                 md_lines.append(f"- **📐 표준화 공백 영역:** {impact_info['standardization_gap']}")
                 
