@@ -4477,7 +4477,13 @@ def _extract_top_keywords(analyzed_data: list, top_n: int = 8) -> list:
     kw_counter = Counter()
     for d in analyzed_data:
         kw_raw = d.get('extracted_keywords', '') or ''
-        for kw in re.split(r'[,/\n·•]', kw_raw):
+        # JSON 형식 {"keywords": [{"term": "...", ...}, ...]} 우선 파싱
+        try:
+            kw_data = json.loads(kw_raw)
+            terms = [kw.get('term', '') for kw in kw_data.get('keywords', [])]
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            terms = re.split(r'[,/\n·•]', kw_raw)
+        for kw in terms:
             kw = kw.strip().strip('#').strip()
             if 2 <= len(kw) <= 15:
                 kw_counter[kw] += 1
