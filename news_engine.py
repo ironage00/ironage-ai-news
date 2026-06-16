@@ -998,6 +998,21 @@ _COLLECT_STAGE_AI_CONTEXT_MARKERS = [
     '플랫폼', '디지털 전환', '자동화', '로봇', '자율주행', '모빌리티',
 ]
 
+# 수집 단계 도메인 블랙리스트 — 연예·스포츠·생활 전문 도메인은 전량 차단
+BLOCKED_DOMAINS: frozenset = frozenset({
+    # 연예·가십
+    'osen.co.kr', 'dispatch.co.kr', 'heraldpop.com', 'spotvnews.co.kr',
+    'star.mt.co.kr', 'isplus.joins.com', 'tenasia.hankyung.com',
+    'entertain.nate.com', 'kstyle.com',
+    # 스포츠
+    'sports.chosun.com', 'sports.khan.co.kr', 'sports.donga.com',
+    'sports.mt.co.kr', 'isports.joins.com', 'xportsnews.com',
+    # 부동산·생활
+    'land.naver.com', 'r.land.naver.com', 'realty.chosun.com',
+    # 저품질 블로그·카페
+    'blog.naver.com', 'cafe.naver.com', 'post.naver.com',
+})
+
 _NON_ICT_COLLECT_PATTERNS = {
     'sports': re.compile(
         r'야구|축구|농구|배구|골프|컬링|스포츠|월드컵|올림픽|리그|선발 라인업|'
@@ -1021,6 +1036,27 @@ _NON_ICT_COLLECT_PATTERNS = {
     ),
     'real_estate_lifestyle': re.compile(
         r'분양|재개발|아파트|부동산|웨딩|패션|반려동물|중장년 취업|창업',
+        re.IGNORECASE,
+    ),
+    # ── 신규 패턴 ──────────────────────────────────────────────────────────
+    'hr_recruitment': re.compile(
+        r'채용공고|채용 공고|취업박람회|채용박람회|구직|이력서|연봉협상|이직률|'
+        r'신입사원|공개채용|수시채용|인턴 모집',
+        re.IGNORECASE,
+    ),
+    'stock_finance': re.compile(
+        r'주가 급등|주가 급락|코스피|코스닥|시가총액|주식 매수|주식 매도|'
+        r'영업이익 전년|순이익 증가|배당금|증권가 전망|목표주가',
+        re.IGNORECASE,
+    ),
+    'marketing_promo': re.compile(
+        r'할인 이벤트|사전예약|한정판 출시|체험단 모집|출시 기념|프로모션 코드|'
+        r'무료 증정|쿠폰|캐시백|포인트 적립',
+        re.IGNORECASE,
+    ),
+    'local_admin': re.compile(
+        r'시청 행사|도청 발표|구청 안내|읍사무소|면사무소|동사무소|주민센터 운영|'
+        r'지자체 복지|시·군·구청',
         re.IGNORECASE,
     ),
 }
@@ -2134,6 +2170,26 @@ def get_news_data(rss_urls=None, naver_queries=None):
             + (f" — {reason_summary}" if reason_summary else "")
         )
 
+    # ===== 도메인 블랙리스트 필터 =====
+    _before_domain = len(news_list)
+    _domain_filtered = []
+    for item in news_list:
+        try:
+            parsed_link = urlparse(item.get('link', ''))
+            item_domain = parsed_link.netloc.replace('www.', '').replace('m.', '')
+            if any(
+                item_domain == bd or item_domain.endswith('.' + bd)
+                for bd in BLOCKED_DOMAINS
+            ):
+                continue
+        except Exception:
+            pass
+        _domain_filtered.append(item)
+    news_list = _domain_filtered
+    _removed_domain = _before_domain - len(news_list)
+    if _removed_domain:
+        log_info(f"  • 도메인 블랙리스트 제외: {_removed_domain}개 ({_before_domain}→{len(news_list)})")
+
     # ===== 중복 제거 및 최종 결과 =====
     log_info(f"\n🔄 중복 제거 전: {len(news_list)}개 뉴스")
     unique_news_items = deduplicate_news(news_list)
@@ -2490,6 +2546,10 @@ def filter_news_by_ai(
 - 여행, 관광, 맛집, 생활 정보 뉴스
 - 날씨, 재난, 사건·사고(ICT 인프라와 무관한 것)
 - ICT/통신/표준화와 직접 관련 없는 일반 경제·사회 뉴스
+- 기업 채용·인사 공고 (ICT 기술직 채용 포함, 기업의 일반 HR 소식)
+- 주가·실적 뉴스 중 기술/정책 내용이 없는 순수 재무·투자 기사
+- ICT 기술을 활용한 일반 소비자 서비스 홍보 (AI 맛집 추천, 스마트 반려동물 앱 등)
+- 지자체 일반 행정 디지털화 사업 중 국가 표준·ICT 정책과 무관한 단순 전산화 기사
 → ICT/통신/표준화 기술 및 정책에 직접 관련된 기사만 선택합니다.
 
 [중복 판단 예시]
@@ -6766,19 +6826,19 @@ def run_daily_collection(ai_model: str = None):
     log_info(f"   📊 수집된 뉴스: {len(unique_news_items)}개")
     
     news_to_analyze = safe_execute(
-        lambda: filter_news_by_ai(unique_news_items, ai_model=ai_model, max_results=50),
+        lambda: filter_news_by_ai(unique_news_items, ai_model=ai_model, max_results=30),
         error_msg="AI 선별 실패",
         default_return=unique_news_items[:20]
     )
     
     log_info(f"   ✅ AI 선별 완료: {len(news_to_analyze)}개 (중복 제거 후)")
-    log_info(f"   🔄 중복 제거율: {(1 - len(news_to_analyze) / 50) * 100:.1f}%")
+    log_info(f"   🔄 중복 제거율: {(1 - len(news_to_analyze) / 30) * 100:.1f}%")
 
     log_info(f"\n[작업 4/9] 심층 분석 중 ({ai_model.upper()})...")
     log_info(f"   🎯 목표: 상위 20개 분석")
 
-    # 선별된 50개 중 상위 20개를 먼저 분석 시도.
-    # 대체 후보 우선순위: 선별된 나머지 30개(news_to_analyze[20:]) → 전체 수집 뉴스
+    # 선별된 30개 중 상위 20개를 먼저 분석 시도.
+    # 대체 후보 우선순위: 선별된 나머지 10개(news_to_analyze[20:]) → 전체 수집 뉴스
     _replacement_pool = news_to_analyze[20:] + [
         item for item in unique_news_items
         if item['link'] not in {n['link'] for n in news_to_analyze}
