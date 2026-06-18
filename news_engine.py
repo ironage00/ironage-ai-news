@@ -5483,24 +5483,36 @@ def save_analysis_to_weekly_excel(
         # Google Drive에서 기존 파일 먼저 다운로드 (GitHub Actions 환경: 로컬 파일 없음)
         if not filepath.exists():
             try:
+                import io as _io
                 _, _dl_drive = get_google_docs_service()
+                log_info(f"   🔍 Drive에서 기존 파일 검색 중: {filename}")
                 _dl_existing = _dl_drive.files().list(
                     q=f"name='{filename}' and '{REPORT_FOLDER_ID}' in parents and trashed=false",
-                    fields='files(id)',
+                    fields='files(id, name, size)',
                     supportsAllDrives=True,
                     includeItemsFromAllDrives=True,
+                    corpora='allDrives',
                 ).execute().get('files', [])
                 if _dl_existing:
-                    import io as _io
-                    _dl_req = _dl_drive.files().get_media(fileId=_dl_existing[0]['id'])
+                    _dl_file_id = _dl_existing[0]['id']
+                    _dl_size = _dl_existing[0].get('size', '?')
+                    log_info(f"   ☁️ Drive에서 기존 파일 발견: {filename} (id={_dl_file_id}, size={_dl_size}B) — 다운로드 중...")
+                    _dl_req = _dl_drive.files().get_media(fileId=_dl_file_id)
+                    # BytesIO 버퍼에 완전히 받은 뒤 파일 쓰기 (중단 시 부분 파일 방지)
+                    _dl_buf = _io.BytesIO()
+                    _downloader = MediaIoBaseDownload(_dl_buf, _dl_req)
+                    _dl_done = False
+                    while not _dl_done:
+                        _, _dl_done = _downloader.next_chunk()
+                    _dl_bytes = _dl_buf.getvalue()
                     with open(str(filepath), 'wb') as _fh:
-                        _downloader = MediaIoBaseDownload(_fh, _dl_req)
-                        _done = False
-                        while not _done:
-                            _, _done = _downloader.next_chunk()
-                    log_info(f"   ☁️ Google Drive에서 기존 파일 다운로드: {filename}")
+                        _fh.write(_dl_bytes)
+                    log_info(f"   ✅ Drive 다운로드 완료: {filename} ({len(_dl_bytes):,} bytes)")
+                else:
+                    log_info(f"   ✨ Drive에 기존 파일 없음 — 신규 생성: {filename}")
             except Exception as _dl_err:
-                log_warning(f"   ⚠️ Drive 다운로드 실패 (신규 생성): {_dl_err}")
+                log_warning(f"   ⚠️ Drive 다운로드 실패 (신규 생성 진행): {_dl_err}")
+                log_warning(traceback.format_exc())
 
         # 기존 데이터 로드 (파일이 있으면)
         existing_df = None
@@ -5781,9 +5793,34 @@ def save_keyword_summary_to_weekly_excel(
         news_filepath = Path(output_dir) / news_filename
         
         if not news_filepath.exists():
+            try:
+                import io as _io2
+                _, _kw_drive = get_google_docs_service()
+                _kw_existing = _kw_drive.files().list(
+                    q=f"name='{news_filename}' and '{REPORT_FOLDER_ID}' in parents and trashed=false",
+                    fields='files(id)',
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora='allDrives',
+                ).execute().get('files', [])
+                if _kw_existing:
+                    _kw_req = _kw_drive.files().get_media(fileId=_kw_existing[0]['id'])
+                    _kw_buf = _io2.BytesIO()
+                    _kw_dl = MediaIoBaseDownload(_kw_buf, _kw_req)
+                    _kw_done = False
+                    while not _kw_done:
+                        _, _kw_done = _kw_dl.next_chunk()
+                    Path(output_dir).mkdir(parents=True, exist_ok=True)
+                    with open(str(news_filepath), 'wb') as _fh:
+                        _fh.write(_kw_buf.getvalue())
+                    log_info(f"   ☁️ Drive에서 키워드 원본 파일 다운로드: {news_filename}")
+            except Exception as _kw_err:
+                log_warning(f"   ⚠️ 키워드 원본 Drive 다운로드 실패: {_kw_err}")
+
+        if not news_filepath.exists():
             log_warning(f"⚠️ 주간 뉴스 파일이 없습니다: {news_filepath}")
             return None
-        
+
         log_info(f"\n📊 주간 키워드 통계 생성 중...")
         log_info(f"   📂 원본 파일: {news_filepath}")
         
