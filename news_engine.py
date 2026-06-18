@@ -1173,8 +1173,85 @@ def article_richness_score(item: Dict) -> tuple:
 
 
 def _best_representative(items: List[Dict]) -> Dict:
-    """중복 후보 중 실제 분석 가치가 가장 높은 대표 기사 선택."""
+    """중복 후보 중 실제 분析 가치가 가장 높은 대표 기사 선택."""
     return max(items, key=article_richness_score)
+
+
+def _dedup_pool_by_title(pool: list,
+                         threshold_numeric: float = 0.35,
+                         threshold_text: float = 0.50) -> list:
+    """같은 사건을 다른 언론사가 보도한 기사를 Jaccard 제목 유사도로 병합.
+
+    기존 is_similar_news(0.5/0.6)보다 완화된 임계값을 적용해 '갤럭시 A37 5G' 류
+    동일 제품/이벤트 기사를 분析 전에 클러스터링한다.
+    """
+    if len(pool) <= 1:
+        return list(pool)
+    used: set = set()
+    result: list = []
+    for i, item in enumerate(pool):
+        if i in used:
+            continue
+        group = [item]
+        used.add(i)
+        for j in range(i + 1, len(pool)):
+            if j in used:
+                continue
+            if is_similar_news(item.get('title', ''), pool[j].get('title', ''),
+                               threshold_numeric=threshold_numeric,
+                               threshold_text=threshold_text):
+                group.append(pool[j])
+                used.add(j)
+        result.append(_best_representative(group))
+    return result
+
+
+def _dedup_analyzed_by_keywords(analyzed: list, threshold: float = 0.30) -> list:
+    """분析 후 extracted_keywords Jaccard로 동일 주제 기사를 클러스터링.
+
+    타이틀 유사도로 잡히지 않는 '한일 6G 전파 협력' 류 의미적 중복을 제거한다.
+    두 기사의 AI 추출 키워드가 30 % 이상 겹치면 같은 주제로 간주, 앞에 나온 기사만 남긴다.
+    """
+    if len(analyzed) <= 1:
+        return list(analyzed)
+
+    def _kw_set(item: dict) -> set:
+        try:
+            kw_data = json.loads(item.get('extracted_keywords') or '{}')
+            terms = {kw.get('term', '').lower()
+                     for kw in kw_data.get('keywords', [])
+                     if kw.get('term')}
+            if terms:
+                return terms
+        except Exception:
+            pass
+        return get_title_keywords(item.get('title', ''))
+
+    kw_sets = [_kw_set(a) for a in analyzed]
+    used: set = set()
+    result: list = []
+
+    for i in range(len(analyzed)):
+        if i in used:
+            continue
+        used.add(i)
+        result.append(analyzed[i])
+        kw_i = kw_sets[i]
+        if not kw_i:
+            continue
+        for j in range(i + 1, len(analyzed)):
+            if j in used:
+                continue
+            kw_j = kw_sets[j]
+            if not kw_j:
+                continue
+            union = kw_i | kw_j
+            if not union:
+                continue
+            if len(kw_i & kw_j) / len(union) >= threshold:
+                used.add(j)
+
+    return result
 
 
 def reclassify_article_unit(article_id: int, extracted_kw_json: str) -> bool:
@@ -6459,6 +6536,17 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         except Exception as _e:
             log_warning(f"DB 저장 실패 (unit_id={puid}): {_e}")
 
+    # Phase 2.5: 단별 풀 타이틀 유사도 클러스터링 (분析 전 동일 이벤트 중복 제거)
+    log_info("[Phase 2.5] 단별 풀 타이틀 유사도 클러스터링 (threshold_numeric=0.35 / threshold_text=0.50)")
+    for _uid2 in list(unit_pools.keys()):
+        _p_before = len(unit_pools[_uid2])
+        unit_pools[_uid2] = _dedup_pool_by_title(unit_pools[_uid2],
+                                                  threshold_numeric=0.35,
+                                                  threshold_text=0.50)
+        _p_after = len(unit_pools[_uid2])
+        if _p_before > _p_after:
+            log_info(f"   {unit_cfgs[_uid2]['display']}: {_p_before}→{_p_after}개 (타이틀 중복 {_p_before - _p_after}건 클러스터링)")
+
     # Phase 3: Unique 기사 병렬 심층 분析
     _TOP = 50
     _needed: dict = {}
@@ -6534,6 +6622,17 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             analysis_cache[it['link']] for it in _pool
             if it['link'] in analysis_cache
         ][:20]
+
+    # Phase 3.6: 키워드 기반 의미적 중복 클러스터링 (타이틀 유사도로 잡히지 않는 동일 주제 제거)
+    log_info("[Phase 3.6] 분析 결과 키워드 기반 의미적 중복 클러스터링 (threshold=0.30)")
+    for _uid3 in list(_all_unit_analyzed.keys()):
+        _a_before = len(_all_unit_analyzed[_uid3])
+        _all_unit_analyzed[_uid3] = _dedup_analyzed_by_keywords(
+            _all_unit_analyzed[_uid3], threshold=0.30
+        )
+        _a_after = len(_all_unit_analyzed[_uid3])
+        if _a_before > _a_after:
+            log_info(f"   {unit_cfgs[_uid3]['display']}: {_a_before}→{_a_after}개 (의미 중복 {_a_before - _a_after}건 클러스터링)")
 
     _unit_compact_briefs: dict = {}
     if not _skip_email:
