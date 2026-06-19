@@ -5513,6 +5513,60 @@ def get_week_date_range(date: datetime.datetime = None) -> Tuple[datetime.dateti
     return monday, sunday
 
 
+def _article_to_export_item(article: NewsArticle) -> Dict:
+    """DB NewsArticle row를 엑셀 export 입력 dict로 변환."""
+    return {
+        'id': article.id,
+        'title': article.title or '',
+        'link': article.link or '',
+        'source': article.source or '',
+        'published': article.published.strftime('%Y-%m-%d %H:%M') if article.published else '',
+        'collected_at': article.collected_at.strftime('%Y-%m-%d %H:%M') if article.collected_at else '',
+        'content': article.content or '',
+        'quality_score': article.quality_score or 0.0,
+        'is_analyzed': article.is_analyzed,
+        'analysis_result': article.analysis_result or '',
+        'ai_model': article.ai_model or CONFIG.get('ai_model', 'openai'),
+        'extracted_keywords': article.extracted_keywords or '',
+        'unit_id': article.unit_id,
+        'unit_ids': article.unit_ids,
+    }
+
+
+def load_weekly_analyzed_articles_from_db(
+    monday: datetime.datetime,
+    sunday: datetime.datetime,
+) -> List[Dict]:
+    """이번 주 분석 완료 기사를 DB 원장 기준으로 로드한다.
+
+    GitHub Actions는 로컬 파일 시스템이 매 실행 초기화되므로, 주간 엑셀 누적의
+    원장은 Google Drive xlsx가 아니라 DB(news_articles)여야 한다.
+    """
+    if not SessionLocal:
+        log_error("❌ DB 세션이 초기화되지 않았습니다.")
+        return []
+
+    with get_db_session() as session:
+        try:
+            rows = (
+                session.query(NewsArticle)
+                .filter(
+                    NewsArticle.is_analyzed == True,
+                    NewsArticle.analysis_result.isnot(None),
+                    NewsArticle.analysis_result != '',
+                    NewsArticle.collected_at >= monday,
+                    NewsArticle.collected_at <= sunday,
+                )
+                .order_by(NewsArticle.published.desc(), NewsArticle.collected_at.desc())
+                .all()
+            )
+            return [_article_to_export_item(row) for row in rows]
+        except Exception as e:
+            log_error(f"❌ 주간 엑셀용 DB 조회 실패: {e}")
+            log_error(traceback.format_exc())
+            return []
+
+
 # ==============================================================================
 # --- 주간 누적 엑셀 저장 함수 ---
 # ==============================================================================
@@ -5557,60 +5611,32 @@ def save_analysis_to_weekly_excel(
         log_info(f"   📅 분석 주차: {week_str} ({monday.strftime('%Y.%m.%d')} ~ {sunday.strftime('%Y.%m.%d')})")
         log_info(f"   📂 파일: {filepath}")
         
-        # Google Drive에서 기존 파일 먼저 다운로드 (GitHub Actions 환경: 로컬 파일 없음)
-        if not filepath.exists():
-            try:
-                import io as _io
-                _, _dl_drive = get_google_docs_service()
-                log_info(f"   🔍 Drive에서 기존 파일 검색 중: {filename}")
-                _dl_existing = _dl_drive.files().list(
-                    q=f"name='{filename}' and '{REPORT_FOLDER_ID}' in parents and trashed=false",
-                    fields='files(id, name, size)',
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                    corpora='allDrives',
-                ).execute().get('files', [])
-                if _dl_existing:
-                    _dl_file_id = _dl_existing[0]['id']
-                    _dl_size = _dl_existing[0].get('size', '?')
-                    log_info(f"   ☁️ Drive에서 기존 파일 발견: {filename} (id={_dl_file_id}, size={_dl_size}B) — 다운로드 중...")
-                    _dl_req = _dl_drive.files().get_media(fileId=_dl_file_id)
-                    # BytesIO 버퍼에 완전히 받은 뒤 파일 쓰기 (중단 시 부분 파일 방지)
-                    _dl_buf = _io.BytesIO()
-                    _downloader = MediaIoBaseDownload(_dl_buf, _dl_req)
-                    _dl_done = False
-                    while not _dl_done:
-                        _, _dl_done = _downloader.next_chunk()
-                    _dl_bytes = _dl_buf.getvalue()
-                    with open(str(filepath), 'wb') as _fh:
-                        _fh.write(_dl_bytes)
-                    log_info(f"   ✅ Drive 다운로드 완료: {filename} ({len(_dl_bytes):,} bytes)")
-                else:
-                    log_info(f"   ✨ Drive에 기존 파일 없음 — 신규 생성: {filename}")
-            except Exception as _dl_err:
-                log_warning(f"   ⚠️ Drive 다운로드 실패 (신규 생성 진행): {_dl_err}")
-                log_warning(traceback.format_exc())
+        # DB 원장 기준으로 이번 주 전체 분석 완료 기사 로드.
+        # GitHub Actions의 클린 환경에서 Drive xlsx를 내려받아 병합하면 다운로드 실패 시
+        # 누적 파일을 당일 데이터로 덮어쓸 위험이 있으므로, Drive 파일은 산출물로만 취급한다.
+        weekly_db_items = load_weekly_analyzed_articles_from_db(monday, sunday)
+        log_info(f"   🗄️ DB 원장 로드: 이번 주 분석 완료 {len(weekly_db_items)}개")
 
-        # 기존 데이터 로드 (파일이 있으면)
-        existing_df = None
-        existing_links = set()
-
-        if filepath.exists():
-            try:
-                existing_df = pd.read_excel(filepath, sheet_name='뉴스 분석 결과')
-                existing_links = set(existing_df['링크'].tolist())
-                log_info(f"   📥 기존 데이터 로드: {len(existing_df)}개")
-            except Exception as e:
-                log_warning(f"   ⚠️ 기존 파일 로드 실패 (새로 생성): {e}")
-                existing_df = None
-        else:
-            log_info(f"   ✨ 신규 파일 생성")
+        # 방금 분석된 결과가 DB 반영 직후 조회 지연/로컬 테스트 등으로 누락될 수 있어 link 기준 보강.
+        export_items_by_link = {
+            item.get('link', ''): item
+            for item in weekly_db_items
+            if item.get('link')
+        }
+        for item in analyzed_results:
+            link = item.get('link', '')
+            if link and link not in export_items_by_link:
+                export_items_by_link[link] = item
+        export_items = list(export_items_by_link.values())
+        if len(export_items) > len(weekly_db_items):
+            log_info(f"   ➕ 현재 실행 결과 보강: {len(export_items) - len(weekly_db_items)}개")
         
         # 새 데이터 준비 (중복 제거)
         new_data = []
         duplicate_count = 0
+        existing_links = set()
         
-        for item in analyzed_results:
+        for item in export_items:
             link = item.get('link', '')
             
             # 중복 체크
@@ -5709,17 +5735,11 @@ def save_analysis_to_weekly_excel(
             log_info(f"   🔄 중복 제거: {duplicate_count}개")
         
         if not new_data:
-            log_warning(f"   ⚠️ 새로 추가할 데이터가 없습니다. (모두 중복)")
-            return str(filepath) if filepath.exists() else None
+            log_warning(f"   ⚠️ 엑셀로 내보낼 데이터가 없습니다.")
+            return None
         
-        # 새 데이터 DataFrame 생성
-        new_df = pd.DataFrame(new_data)
-        
-        # 기존 데이터와 병합
-        if existing_df is not None:
-            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        else:
-            combined_df = new_df
+        # DB 원장에서 매번 전체 주간 파일을 재생성한다.
+        combined_df = pd.DataFrame(new_data)
         
         # 번호 재정렬 (기존 번호 컨럼 제거 후 삽입)
         if '번호' in combined_df.columns:
@@ -5800,8 +5820,8 @@ def save_analysis_to_weekly_excel(
             _save_to_excel(filepath)
         
         log_info(f"   ✅ 엑셀 파일 저장 완료!")
-        log_info(f"      - 기존 데이터: {len(existing_df) if existing_df is not None else 0}개")
-        log_info(f"      - 신규 추가: {len(new_data)}개")
+        log_info(f"      - DB 원장 데이터: {len(weekly_db_items)}개")
+        log_info(f"      - 현재 실행 보강 후: {len(new_data)}개")
         log_info(f"      - 최종 합계: {len(combined_df)}개")
         log_info(f"      - 파일 크기: {filepath.stat().st_size / 1024:.1f} KB")
 
@@ -5816,6 +5836,7 @@ def save_analysis_to_weekly_excel(
                 fields='files(id)',
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
+                corpora='allDrives',
             ).execute().get('files', [])
             _media = MediaFileUpload(str(filepath), mimetype=_excel_mime, resumable=False)
             if _existing:
