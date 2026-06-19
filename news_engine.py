@@ -5426,6 +5426,9 @@ def send_gmail_report(
     """
 
     actual_receivers = list(receivers) if receivers else list(RECEIVER_EMAIL)
+    if os.environ.get('DISABLE_EMAIL', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        log_warning(f"  ⚠️ DISABLE_EMAIL 설정으로 이메일 발송 건너뜀. 대상 {len(actual_receivers)}명")
+        return
     if not actual_receivers:
         log_warning("  ⚠️ 이메일 수신자가 없습니다. 발송 건너뜀.")
         return
