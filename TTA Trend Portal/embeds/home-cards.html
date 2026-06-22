@@ -1,0 +1,59 @@
+<!--
+Google Sites > Insert > Embed > Embed code 에 붙여 넣는 홈 화면용 카드 블록입니다.
+Streamlit: http://192.168.131.5:8507
+보고서 링크: 실제 Google Docs/Sheets URL로 교체하세요 (GOOGLE_DOCS_WEEKLY_URL, GOOGLE_SHEETS_OR_EXCEL_URL).
+-->
+<section style="font-family:Arial, sans-serif; color:#111827;">
+  <div style="border:1px solid #d7dee8; border-radius:10px; padding:22px; background:#f8fafc; margin-bottom:18px;">
+    <div style="font-size:13px; color:#2563eb; font-weight:700; margin-bottom:6px;">TTA ICT Trend Radar</div>
+    <h2 style="font-size:28px; margin:0 0 8px 0; letter-spacing:0;">오늘 확인해야 할 ICT 표준화 이슈</h2>
+    <p style="font-size:15px; line-height:1.6; margin:0; color:#475569;">
+      수집된 ICT 뉴스, AI 분석 결과, 관계 그래프, 주간·월간 보고서를 한 곳에서 확인하는 TTA 내부 인텔리전스 포털입니다.
+    </p>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:18px;">
+    <a href="http://192.168.131.5:8507?embed=1" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
+      <div style="font-size:14px; color:#2563eb; font-weight:700;">AI 검색</div>
+      <div style="font-size:20px; font-weight:700; margin:8px 0;">뉴스 원장 검색</div>
+      <div style="font-size:14px; color:#64748b; line-height:1.5;">RAG 기반으로 기존 기사와 분석 결과를 검색합니다.</div>
+    </a>
+    <a href="http://192.168.131.5:8507?embed=1" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
+      <div style="font-size:14px; color:#7c3aed; font-weight:700;">이슈 맵</div>
+      <div style="font-size:20px; font-weight:700; margin:8px 0;">기술·기업 관계</div>
+      <div style="font-size:14px; color:#64748b; line-height:1.5;">GraphRAG 관점으로 기술, 기업, 국가의 관계를 봅니다.</div>
+    </a>
+    <a href="GOOGLE_DOCS_WEEKLY_URL" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
+      <div style="font-size:14px; color:#059669; font-weight:700;">보고서</div>
+      <div style="font-size:20px; font-weight:700; margin:8px 0;">주간·월간 리포트</div>
+      <div style="font-size:14px; color:#64748b; line-height:1.5;">Google Docs 보고서와 Excel 누적표를 확인합니다.</div>
+    </a>
+    <a href="GOOGLE_SHEETS_OR_EXCEL_URL" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
+      <div style="font-size:14px; color:#dc2626; font-weight:700;">원자료</div>
+      <div style="font-size:20px; font-weight:700; margin:8px 0;">Excel 누적표</div>
+      <div style="font-size:14px; color:#64748b; line-height:1.5;">분석 기사 목록과 키워드 요약표를 검토합니다.</div>
+    </a>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;">
+    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:white;">
+      <strong>직원 활용 흐름</strong>
+      <ol style="margin:10px 0 0 18px; padding:0; color:#475569; line-height:1.7; font-size:14px;">
+        <li>홈에서 오늘의 주요 이슈 확인</li>
+        <li>AI 검색에서 근거 기사 확인</li>
+        <li>이슈 맵에서 관련 기업·기술·국가 확인</li>
+        <li>보고서 보관함에서 공유 문서 확인</li>
+      </ol>
+    </div>
+    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:white;">
+      <strong>권장 검색 예시</strong>
+      <ul style="margin:10px 0 0 18px; padding:0; color:#475569; line-height:1.7; font-size:14px;">
+        <li>최근 3개월 AI-RAN 표준화 이슈</li>
+        <li>NTN 위성통신 정책 변화 시사점</li>
+        <li>6G 국제표준 경쟁 동향</li>
+        <li>양자통신 관련 기업과 국가</li>
+      </ul>
+    </div>
+  </div>
+</section>
+

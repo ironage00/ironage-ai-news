@@ -35,3 +35,10 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# 대용량 바이너리 / 공유 패키지
+*.zip
+*.pptx
+build/
+.codex/
+04-codex-result.md

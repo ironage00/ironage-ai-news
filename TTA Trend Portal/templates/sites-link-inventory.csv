@@ -1,0 +1,8 @@
+page,section,label,url,status,notes
+홈,바로가기,AI 검색 열기,STREAMLIT_URL?embed=1,pending,배포 URL 교체 필요
+홈,바로가기,주간 보고서 보기,GOOGLE_DOCS_WEEKLY_URL,pending,최신 주간 보고서 링크 필요
+홈,바로가기,Excel 누적표 보기,GOOGLE_SHEETS_OR_EXCEL_URL,pending,공유 권한 확인 필요
+AI 검색,임베드,TTA ICT Trend Radar,STREAMLIT_URL?embed=1,pending,iframe 동작 확인 필요
+보고서 보관함,보고서,월간 보고서,GOOGLE_DOCS_MONTHLY_URL,pending,문서 링크 필요
+운영 현황,대시보드,운영 점검,STREAMLIT_URL?embed=1,pending,관리자 접근 범위 결정 필요
+

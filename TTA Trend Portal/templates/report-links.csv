@@ -1,0 +1,5 @@
+report_type,title,period_start,period_end,google_doc_url,excel_file_url,owner,visibility,status,notes
+weekly,2026년 6월 3주차 ICT 동향 보고서,2026-06-15,2026-06-21,GOOGLE_DOCS_WEEKLY_URL,GOOGLE_SHEETS_OR_EXCEL_URL,표준화본부,tta_internal,draft,URL 교체 필요
+monthly,2026년 6월 ICT 종합 보고서,2026-06-01,2026-06-30,GOOGLE_DOCS_MONTHLY_URL,GOOGLE_SHEETS_OR_EXCEL_URL,표준화본부,tta_internal,draft,URL 교체 필요
+excel,주간 뉴스 분석 Excel,2026-06-15,2026-06-21,,GOOGLE_SHEETS_OR_EXCEL_URL,표준화본부,tta_internal,draft,URL 교체 필요
+
