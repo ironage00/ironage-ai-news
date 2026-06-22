@@ -1,24 +1,31 @@
-<!--
-운영 현황 페이지에 넣는 정적 상태 카드입니다.
-숫자는 수동으로 갱신하거나 이후 report_artifacts/운영 API와 연결하세요.
--->
-<section style="font-family:Arial, sans-serif; color:#111827;">
-  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px;">
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:#ffffff;">
-      <div style="font-size:13px; color:#64748b;">전체 기사</div>
-      <div style="font-size:28px; font-weight:700;">33,137</div>
+<section style="font-family:Inter, Segoe UI, Arial, sans-serif; color:#0f172a; background:#ffffff; border:1px solid #dbe3ee; border-radius:18px; padding:20px;">
+  <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+    <div>
+      <div style="font-size:12px; color:#b45309; font-weight:900; letter-spacing:.08em; text-transform:uppercase;">Operations</div>
+      <div style="font-size:25px; font-weight:900; margin-top:4px;">운영 상태 요약</div>
     </div>
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:#ffffff;">
-      <div style="font-size:13px; color:#64748b;">분석 완료</div>
-      <div style="font-size:28px; font-weight:700;">695</div>
+    <div style="font-size:12px; color:#64748b; align-self:flex-end;">기준: 2026-06-22 · 내부망 대시보드 연결</div>
+  </div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px;">
+    <div style="border:1px solid #e2e8f0; border-radius:14px; padding:15px; background:#f8fafc;">
+      <div style="font-size:12px; color:#64748b;">전체 기사</div>
+      <div style="font-size:30px; font-weight:900; margin-top:4px;">33,137</div>
+      <div style="font-size:12px; color:#64748b;">수집 원장 기준</div>
     </div>
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:#ffffff;">
-      <div style="font-size:13px; color:#64748b;">임베딩 완료</div>
-      <div style="font-size:28px; font-weight:700;">695</div>
+    <div style="border:1px solid #e2e8f0; border-radius:14px; padding:15px; background:#f8fafc;">
+      <div style="font-size:12px; color:#64748b;">분석 완료</div>
+      <div style="font-size:30px; font-weight:900; margin-top:4px;">695</div>
+      <div style="font-size:12px; color:#64748b;">로컬 SQLite 기준</div>
     </div>
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:#ffffff;">
-      <div style="font-size:13px; color:#64748b;">최근 보고서</div>
-      <div style="font-size:18px; font-weight:700;">2026-06-22 주간 보고서</div>
+    <div style="border:1px solid #e2e8f0; border-radius:14px; padding:15px; background:#f8fafc;">
+      <div style="font-size:12px; color:#64748b;">임베딩 상태</div>
+      <div style="font-size:30px; font-weight:900; margin-top:4px;">Ready</div>
+      <div style="font-size:12px; color:#64748b;">RAG/GraphRAG 검색 가능</div>
+    </div>
+    <div style="border:1px solid #e2e8f0; border-radius:14px; padding:15px; background:#f8fafc;">
+      <div style="font-size:12px; color:#64748b;">서비스 URL</div>
+      <div style="font-size:18px; font-weight:900; margin-top:8px;">10.10.10.27:8507</div>
+      <div style="font-size:12px; color:#64748b;">내부망 접속 전용</div>
     </div>
   </div>
 </section>

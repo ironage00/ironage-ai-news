@@ -43,37 +43,68 @@ def apply_portal_style(embed_mode: bool):
     st.markdown(
         f"""
         <style>
+        :root {{
+            --tta-navy: #071427;
+            --tta-blue: #0e5aa7;
+            --tta-cyan: #0f766e;
+            --tta-line: #dbe3ee;
+            --tta-soft: #f6f8fb;
+            --tta-text: #0f172a;
+        }}
+        html, body, [data-testid="stAppViewContainer"] {{
+            background: #f6f8fb;
+            color: var(--tta-text);
+        }}
         .block-container {{
             padding-top: {top_padding};
             padding-bottom: 2rem;
             max-width: 1320px;
         }}
+        div[data-testid="stTabs"] button {{
+            font-weight: 800;
+        }}
         div[data-testid="stMetric"] {{
             background: #ffffff;
-            border: 1px solid #d7dee8;
-            border-radius: 8px;
-            padding: 10px 12px;
+            border: 1px solid var(--tta-line);
+            border-radius: 12px;
+            padding: 12px 14px;
+            box-shadow: 0 10px 22px rgba(15,23,42,.045);
         }}
         .portal-hero {{
-            border: 1px solid #d7dee8;
-            border-radius: 8px;
-            padding: 16px 18px;
-            background: linear-gradient(90deg, #f8fafc 0%, #eef6ff 100%);
-            margin-bottom: 14px;
+            border: 1px solid #1e3a5f;
+            border-radius: 18px;
+            padding: 26px 28px;
+            background: linear-gradient(135deg, #071427 0%, #12396c 58%, #0f766e 100%);
+            color: #ffffff;
+            margin-bottom: 16px;
+            box-shadow: 0 18px 42px rgba(15,23,42,.14);
         }}
         .portal-hero h1 {{
             margin: 0 0 6px 0;
-            font-size: 1.55rem;
+            font-size: 1.85rem;
             letter-spacing: 0;
+            font-weight: 900;
         }}
         .portal-hero p {{
             margin: 0;
-            color: #475569;
+            color: #d7e6f5;
             font-size: 0.95rem;
+            line-height: 1.65;
         }}
-        .quick-query {{
-            font-size: 0.9rem;
-            color: #334155;
+        .stDataFrame, div[data-testid="stDataFrame"] {{
+            border-radius: 12px;
+            overflow: hidden;
+        }}
+        div[data-testid="stAlert"] {{
+            border-radius: 12px;
+        }}
+        .quick-query-panel {{
+            border: 1px solid var(--tta-line);
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 14px 14px 4px 14px;
+            margin-bottom: 10px;
+            box-shadow: 0 10px 22px rgba(15,23,42,.04);
         }}
         </style>
         """,
@@ -139,7 +170,7 @@ def render_header(stats: dict, embed_mode: bool):
 
 
 def render_quick_queries():
-    st.markdown("#### 빠른 질문")
+    st.markdown('<div class="quick-query-panel"><strong>빠른 질문</strong>', unsafe_allow_html=True)
     examples = [
         "최근 3개월 AI-RAN 표준화 이슈",
         "NTN 위성통신 정책 변화 시사점",
@@ -150,6 +181,7 @@ def render_quick_queries():
     for idx, example in enumerate(examples):
         if cols[idx].button(example, key=f"quick_query_{idx}", use_container_width=True):
             st.session_state["portal_query"] = example
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main():

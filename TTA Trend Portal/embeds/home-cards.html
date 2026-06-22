@@ -1,58 +1,82 @@
 <!--
-Google Sites > Insert > Embed > Embed code 에 붙여 넣는 홈 화면용 카드 블록입니다.
-Streamlit: http://10.10.10.27:8507
-보고서 링크: 2026-06-22 기준 최신 주간 보고서와 W26 Excel 링크 반영.
+Google Sites > Insert > Embed > Embed code
+Home hero and executive radar panel for TTA Trend Portal.
+Internal dashboard: http://10.10.10.27:8507?embed=1
 -->
-<section style="font-family:Arial, sans-serif; color:#111827;">
-  <div style="border:1px solid #d7dee8; border-radius:10px; padding:22px; background:#f8fafc; margin-bottom:18px;">
-    <div style="font-size:13px; color:#2563eb; font-weight:700; margin-bottom:6px;">TTA ICT Trend Radar</div>
-    <h2 style="font-size:28px; margin:0 0 8px 0; letter-spacing:0;">오늘 확인해야 할 ICT 표준화 이슈</h2>
-    <p style="font-size:15px; line-height:1.6; margin:0; color:#475569;">
-      수집된 ICT 뉴스, AI 분석 결과, 관계 그래프, 주간·월간 보고서를 한 곳에서 확인하는 TTA 내부 인텔리전스 포털입니다.
-    </p>
-  </div>
-
-  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:18px;">
-    <a href="http://10.10.10.27:8507?embed=1" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
-      <div style="font-size:14px; color:#2563eb; font-weight:700;">AI 검색</div>
-      <div style="font-size:20px; font-weight:700; margin:8px 0;">뉴스 원장 검색</div>
-      <div style="font-size:14px; color:#64748b; line-height:1.5;">RAG 기반으로 기존 기사와 분석 결과를 검색합니다.</div>
-    </a>
-    <a href="http://10.10.10.27:8507?embed=1" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
-      <div style="font-size:14px; color:#7c3aed; font-weight:700;">이슈 맵</div>
-      <div style="font-size:20px; font-weight:700; margin:8px 0;">기술·기업 관계</div>
-      <div style="font-size:14px; color:#64748b; line-height:1.5;">GraphRAG 관점으로 기술, 기업, 국가의 관계를 봅니다.</div>
-    </a>
-    <a href="https://docs.google.com/document/d/1315EoXpg5fqime4_Ib_Q_bq-nEOSfHRlIoey6XRUA_8/edit?usp=drivesdk" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
-      <div style="font-size:14px; color:#059669; font-weight:700;">보고서</div>
-      <div style="font-size:20px; font-weight:700; margin:8px 0;">주간·월간 리포트</div>
-      <div style="font-size:14px; color:#64748b; line-height:1.5;">Google Docs 보고서와 Excel 누적표를 확인합니다.</div>
-    </a>
-    <a href="https://docs.google.com/spreadsheets/d/1sEgS1W0fjnTHnjN1c37QvoCa3wrpMQIn/edit?usp=drivesdk&amp;ouid=115840160158812816037&amp;rtpof=true&amp;sd=true" target="_blank" style="display:block; padding:18px; border:1px solid #d7dee8; border-radius:10px; background:white; text-decoration:none; color:#111827;">
-      <div style="font-size:14px; color:#dc2626; font-weight:700;">원자료</div>
-      <div style="font-size:20px; font-weight:700; margin:8px 0;">Excel 누적표</div>
-      <div style="font-size:14px; color:#64748b; line-height:1.5;">분석 기사 목록과 키워드 요약표를 검토합니다.</div>
-    </a>
-  </div>
-
-  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;">
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:white;">
-      <strong>직원 활용 흐름</strong>
-      <ol style="margin:10px 0 0 18px; padding:0; color:#475569; line-height:1.7; font-size:14px;">
-        <li>홈에서 오늘의 주요 이슈 확인</li>
-        <li>AI 검색에서 근거 기사 확인</li>
-        <li>이슈 맵에서 관련 기업·기술·국가 확인</li>
-        <li>보고서 보관함에서 공유 문서 확인</li>
-      </ol>
+<section style="font-family:Inter, Segoe UI, Arial, sans-serif; color:#0f172a; background:#f6f8fb; border:1px solid #d8e0ea; border-radius:18px; overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#071427 0%,#0e2b52 52%,#155e75 100%); color:white; padding:34px 34px 28px 34px; position:relative;">
+    <div style="max-width:980px;">
+      <div style="display:inline-block; padding:6px 10px; border:1px solid rgba(255,255,255,.26); border-radius:999px; color:#b9e6ff; font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;">TTA Intelligence Radar</div>
+      <h1 style="margin:14px 0 10px 0; font-size:38px; line-height:1.12; letter-spacing:0; font-weight:900;">오늘의 ICT 표준화 신호를 한 화면에서 읽습니다</h1>
+      <p style="margin:0; max-width:780px; color:#d7e6f5; font-size:16px; line-height:1.7;">뉴스 원장, AI 분석 결과, 표준화 대응 후보, 관계 맵, 주간 보고서를 연결해 TTA 직원이 바로 판단할 수 있는 내부 인텔리전스 포털입니다.</p>
     </div>
-    <div style="border:1px solid #d7dee8; border-radius:10px; padding:16px; background:white;">
-      <strong>권장 검색 예시</strong>
-      <ul style="margin:10px 0 0 18px; padding:0; color:#475569; line-height:1.7; font-size:14px;">
-        <li>최근 3개월 AI-RAN 표준화 이슈</li>
-        <li>NTN 위성통신 정책 변화 시사점</li>
-        <li>6G 국제표준 경쟁 동향</li>
-        <li>양자통신 관련 기업과 국가</li>
-      </ul>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-top:24px;">
+      <div style="background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:14px;">
+        <div style="font-size:12px; color:#b9e6ff;">Radar</div>
+        <div style="font-size:24px; font-weight:900; margin-top:4px;">Daily</div>
+        <div style="font-size:12px; color:#c9d8e8; margin-top:4px;">급등 키워드와 신규 엔티티</div>
+      </div>
+      <div style="background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:14px;">
+        <div style="font-size:12px; color:#b9e6ff;">Board</div>
+        <div style="font-size:24px; font-weight:900; margin-top:4px;">Action</div>
+        <div style="font-size:12px; color:#c9d8e8; margin-top:4px;">영향도, 긴급도, 조치 메모</div>
+      </div>
+      <div style="background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:14px;">
+        <div style="font-size:12px; color:#b9e6ff;">Graph</div>
+        <div style="font-size:24px; font-weight:900; margin-top:4px;">Map</div>
+        <div style="font-size:12px; color:#c9d8e8; margin-top:4px;">기업, 기술, 국가 관계</div>
+      </div>
+      <div style="background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:14px;">
+        <div style="font-size:12px; color:#b9e6ff;">Reports</div>
+        <div style="font-size:24px; font-weight:900; margin-top:4px;">Archive</div>
+        <div style="font-size:12px; color:#c9d8e8; margin-top:4px;">Docs와 Excel 산출물</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding:22px 24px 26px 24px;">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px;">
+      <a href="http://10.10.10.27:8507?embed=1" target="_blank" style="display:block; text-decoration:none; color:#0f172a; background:white; border:1px solid #dbe3ee; border-radius:14px; padding:18px; box-shadow:0 10px 24px rgba(15,23,42,.06);">
+        <div style="font-size:12px; color:#0369a1; font-weight:900; text-transform:uppercase; letter-spacing:.06em;">Live Radar</div>
+        <div style="font-size:21px; font-weight:900; margin:8px 0 8px 0;">오늘의 레이더 열기</div>
+        <div style="font-size:14px; line-height:1.55; color:#475569;">급등 키워드, 신규 엔티티, 단별 추천 이슈를 바로 확인합니다.</div>
+      </a>
+      <a href="http://10.10.10.27:8507?embed=1" target="_blank" style="display:block; text-decoration:none; color:#0f172a; background:white; border:1px solid #dbe3ee; border-radius:14px; padding:18px; box-shadow:0 10px 24px rgba(15,23,42,.06);">
+        <div style="font-size:12px; color:#7c2d12; font-weight:900; text-transform:uppercase; letter-spacing:.06em;">Action Board</div>
+        <div style="font-size:21px; font-weight:900; margin:8px 0 8px 0;">표준화 대응 보드</div>
+        <div style="font-size:14px; line-height:1.55; color:#475569;">영향도와 긴급도를 보고 검토 상태와 조치 메모를 남깁니다.</div>
+      </a>
+      <a href="https://docs.google.com/document/d/1315EoXpg5fqime4_Ib_Q_bq-nEOSfHRlIoey6XRUA_8/edit?usp=drivesdk" target="_blank" style="display:block; text-decoration:none; color:#0f172a; background:white; border:1px solid #dbe3ee; border-radius:14px; padding:18px; box-shadow:0 10px 24px rgba(15,23,42,.06);">
+        <div style="font-size:12px; color:#047857; font-weight:900; text-transform:uppercase; letter-spacing:.06em;">Weekly Brief</div>
+        <div style="font-size:21px; font-weight:900; margin:8px 0 8px 0;">최신 주간 보고서</div>
+        <div style="font-size:14px; line-height:1.55; color:#475569;">2026년 6월 4주차 ICT 동향 보고서를 엽니다.</div>
+      </a>
+      <a href="https://docs.google.com/spreadsheets/d/1sEgS1W0fjnTHnjN1c37QvoCa3wrpMQIn/edit?usp=drivesdk&amp;ouid=115840160158812816037&amp;rtpof=true&amp;sd=true" target="_blank" style="display:block; text-decoration:none; color:#0f172a; background:white; border:1px solid #dbe3ee; border-radius:14px; padding:18px; box-shadow:0 10px 24px rgba(15,23,42,.06);">
+        <div style="font-size:12px; color:#6d28d9; font-weight:900; text-transform:uppercase; letter-spacing:.06em;">Evidence Table</div>
+        <div style="font-size:21px; font-weight:900; margin:8px 0 8px 0;">뉴스 분석 Excel</div>
+        <div style="font-size:14px; line-height:1.55; color:#475569;">기사 목록, 분석 결과, 키워드 원자료를 확인합니다.</div>
+      </a>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1.2fr .8fr; gap:14px; margin-top:16px;">
+      <div style="background:#ffffff; border:1px solid #dbe3ee; border-radius:14px; padding:18px;">
+        <div style="font-size:15px; font-weight:900;">직원이 바로 쓰는 판단 흐름</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-top:12px;">
+          <div style="border-left:4px solid #0284c7; padding-left:10px; color:#475569; font-size:13px; line-height:1.5;"><strong style="color:#0f172a;">1. 감지</strong><br>오늘 급등한 기술과 엔티티 확인</div>
+          <div style="border-left:4px solid #b45309; padding-left:10px; color:#475569; font-size:13px; line-height:1.5;"><strong style="color:#0f172a;">2. 선별</strong><br>영향도와 긴급도 기준 후보 분류</div>
+          <div style="border-left:4px solid #047857; padding-left:10px; color:#475569; font-size:13px; line-height:1.5;"><strong style="color:#0f172a;">3. 근거</strong><br>RAG 검색으로 관련 기사 확인</div>
+          <div style="border-left:4px solid #6d28d9; padding-left:10px; color:#475569; font-size:13px; line-height:1.5;"><strong style="color:#0f172a;">4. 공유</strong><br>보고서와 조치 메모로 확산</div>
+        </div>
+      </div>
+      <div style="background:#0f172a; color:white; border-radius:14px; padding:18px;">
+        <div style="font-size:13px; color:#93c5fd; font-weight:800;">Recommended Queries</div>
+        <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px;">
+          <span style="padding:7px 9px; border-radius:999px; background:#1e293b; color:#dbeafe; font-size:12px;">AI-RAN 표준화</span>
+          <span style="padding:7px 9px; border-radius:999px; background:#1e293b; color:#dbeafe; font-size:12px;">NTN 위성통신</span>
+          <span style="padding:7px 9px; border-radius:999px; background:#1e293b; color:#dbeafe; font-size:12px;">6G 국제표준</span>
+          <span style="padding:7px 9px; border-radius:999px; background:#1e293b; color:#dbeafe; font-size:12px;">양자통신</span>
+        </div>
+      </div>
     </div>
   </div>
 </section>
