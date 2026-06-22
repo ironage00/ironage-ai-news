@@ -9,7 +9,7 @@ $Action = New-ScheduledTaskAction `
   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`""
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
-$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel LeastPrivilege
+$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask `
   -TaskName $TaskName `
@@ -20,4 +20,3 @@ Register-ScheduledTask `
   -Force
 
 Write-Host "Registered startup task: $TaskName"
-

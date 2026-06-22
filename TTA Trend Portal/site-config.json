@@ -8,17 +8,21 @@
     "editor_group": "trend-admins@tta.or.kr"
   },
   "linked_systems": {
-    "streamlit_dashboard": "http://192.168.131.5:8507",
-    "streamlit_embed_url": "http://192.168.131.5:8507?embed=1",
-    "weekly_report_folder": "GOOGLE_DRIVE_WEEKLY_FOLDER_URL",
-    "monthly_report_folder": "GOOGLE_DRIVE_MONTHLY_FOLDER_URL",
-    "weekly_excel": "GOOGLE_SHEETS_OR_EXCEL_URL"
+    "streamlit_dashboard": "http://10.10.10.27:8507",
+    "streamlit_embed_url": "http://10.10.10.27:8507?embed=1",
+    "weekly_report_folder": "https://drive.google.com/drive/u/0/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT",
+    "monthly_report_folder": "https://drive.google.com/drive/u/0/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT",
+    "latest_weekly_report": "https://docs.google.com/document/d/1315EoXpg5fqime4_Ib_Q_bq-nEOSfHRlIoey6XRUA_8/edit?usp=drivesdk",
+    "weekly_excel": "https://docs.google.com/spreadsheets/d/1sEgS1W0fjnTHnjN1c37QvoCa3wrpMQIn/edit?usp=drivesdk&ouid=115840160158812816037&rtpof=true&sd=true"
   },
   "local_dashboard": {
     "default_port": 8507,
+    "dashboard_dir": "dashboard",
     "local_embed_url": "http://localhost:8507/?embed=1",
     "run_script": "deploy/Run-Portal-Dashboard.cmd",
-    "startup_script": "deploy/Register-Portal-Dashboard-Startup.ps1"
+    "startup_script": "deploy/Register-Portal-Dashboard-Startup.ps1",
+    "report_artifacts_csv": "data/report_artifacts.csv",
+    "issue_actions_csv": "data/issue_actions.csv"
   },
   "pages": [
     "home",

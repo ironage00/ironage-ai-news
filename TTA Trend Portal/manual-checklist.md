@@ -22,11 +22,11 @@
 ## 연결
 
 - [ ] Streamlit 대시보드 URL 연결
-- [ ] `embeds/home-cards.html`의 placeholder URL 교체
-- [ ] `embeds/streamlit-embed.html`의 `STREAMLIT_URL` 교체
-- [ ] `embeds/report-library.html`의 보고서/Excel URL 교체
-- [ ] `templates/sites-link-inventory.csv`에 실제 링크 기록
-- [ ] `templates/report-links.csv`에 보고서 링크 기록
+- [ ] `embeds/home-cards.html`의 주간 보고서/Excel 링크 확인
+- [ ] `embeds/streamlit-embed.html`의 Streamlit 내부 주소 확인
+- [ ] `embeds/report-library.html`의 보고서/Excel URL 확인
+- [ ] `templates/sites-link-inventory.csv`에 실제 링크 기록 확인
+- [ ] `templates/report-links.csv`에 보고서 링크 기록 확인
 - [ ] 주간 보고서 Google Docs 링크 연결
 - [ ] 월간 보고서 Google Docs 링크 연결
 - [ ] Excel 누적표 링크 연결
@@ -37,6 +37,7 @@
 - [ ] 내부 실행 PC/서버 결정
 - [ ] `TTA Trend Portal\deploy\Run-Portal-Dashboard.cmd`로 실행 확인
 - [ ] `http://localhost:8507/?embed=1` 로컬 확인
+- [ ] `http://10.10.10.27:8507/?embed=1` 내부망 확인
 - [ ] 내부 직원이 접근 가능한 URL 확보
 - [ ] Google Sites iframe 또는 버튼 링크 연결
 
