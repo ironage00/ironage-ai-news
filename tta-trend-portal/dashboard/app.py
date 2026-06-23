@@ -31,6 +31,13 @@ UNIT_OPTIONS = {
 
 UNIT_NAMES = {value: label for label, value in UNIT_OPTIONS.items() if value is not None}
 
+UNIT_COLORS = {
+    "표준기획단": "#0284c7",
+    "표준진흥단": "#059669",
+    "AI융합단": "#7c3aed",
+    "전파네트워크단": "#b45309",
+}
+
 
 def is_embed_mode() -> bool:
     value = st.query_params.get("embed", "")
@@ -430,6 +437,104 @@ def apply_portal_style(embed_mode: bool):
                 padding: 22px 20px;
             }}
         }}
+
+        /* ── Executive KPI strip ──────────────────── */
+        .kpi-strip {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 14px;
+        }}
+        .kpi-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 14px 16px;
+        }}
+        .kpi-label {{
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            color: #64748b;
+            margin-bottom: 5px;
+        }}
+        .kpi-value {{
+            font-size: 22px;
+            font-weight: 900;
+            color: #0f172a;
+            line-height: 1;
+        }}
+        .kpi-value.red {{ color: #b91c1c; }}
+        .kpi-value.small {{ font-size: 14px; margin-top: 4px; }}
+        .kpi-sub {{ font-size: 11px; color: #64748b; margin-top: 4px; }}
+
+        /* ── Keyword bar chart ────────────────────── */
+        .kw-bar-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 17px 18px;
+            height: 100%;
+        }}
+        .kw-eyebrow {{
+            font-size: 11px;
+            font-weight: 900;
+            color: #0284c7;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            margin-bottom: 12px;
+        }}
+        .kw-bar-row {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 9px;
+        }}
+        .kw-bar-label {{ font-size: 12px; color: #0f172a; font-weight: 850; min-width: 80px; }}
+        .kw-bar-bg {{ flex: 1; height: 5px; background: #e2e8f0; border-radius: 3px; }}
+        .kw-bar-fill {{ height: 5px; border-radius: 3px; background: #0284c7; }}
+        .kw-bar-pct {{ font-size: 11px; font-weight: 900; color: #0369a1; min-width: 36px; text-align: right; }}
+
+        /* ── Urgent section ───────────────────────── */
+        .urgent-banner {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-left: 3px solid #e24b4a;
+            border-radius: 0 14px 14px 0;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }}
+        .urgent-title {{
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            color: #b91c1c;
+            margin-bottom: 10px;
+        }}
+        .urgent-item {{
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 7px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }}
+        .urgent-item:last-child {{ border-bottom: 0; }}
+        .urgent-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }}
+        .urgent-text {{ font-size: 12.5px; color: #0f172a; line-height: 1.4; }}
+        .urgent-meta {{ font-size: 11px; color: #64748b; margin-top: 2px; }}
+
+        /* ── Unit card header ─────────────────────── */
+        .unit-card-header {{ display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }}
+        .unit-dot {{ width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }}
+
+        @media (max-width: 900px) {{
+            .kpi-strip {{ grid-template-columns: 1fr 1fr; }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -640,23 +745,16 @@ def render_issue_cards(board: pd.DataFrame):
     top = board.iloc[0]
     st.markdown(
         f"""
-        <div class="signal-grid">
-          <div class="briefing-card dark">
-            <div class="briefing-eyebrow">Top Signal</div>
-            <div class="briefing-title">{esc(top.get("이슈 후보"), 180)}</div>
-            <div class="briefing-meta">
-              <span class="meta-pill">영향도 {esc(top.get("영향도"))}/10</span>
-              <span class="meta-pill">긴급도 {esc(top.get("긴급도"))}/10</span>
-              <span class="meta-pill">{esc(top.get("담당 단"))}</span>
-            </div>
-            <div class="briefing-body">{esc(top.get("권장 조치"), 260)}</div>
-            <a class="briefing-link" href="{esc(top.get("관련 기사"))}" target="_blank">근거 기사 열기</a>
+        <div class="briefing-card dark" style="margin-bottom:12px;">
+          <div class="briefing-eyebrow">Top Signal</div>
+          <div class="briefing-title">{esc(top.get("이슈 후보"), 180)}</div>
+          <div class="briefing-meta">
+            <span class="meta-pill">영향도 {esc(top.get("영향도"))}/10</span>
+            <span class="meta-pill">긴급도 {esc(top.get("긴급도"))}/10</span>
+            <span class="meta-pill">{esc(top.get("담당 단"))}</span>
           </div>
-          <div class="briefing-card">
-            <div class="briefing-eyebrow">Radar Readout</div>
-            <div class="briefing-title">오늘 먼저 볼 표준화 후보</div>
-            <div class="briefing-body">영향도와 긴급도를 함께 높게 받은 이슈부터 검토하면, 단순 뉴스 소비가 아니라 회의 안건·표준화 대응 후보로 바로 연결할 수 있습니다.</div>
-          </div>
+          <div class="briefing-body">{esc(top.get("권장 조치"), 260)}</div>
+          <a class="briefing-link" href="{esc(top.get("관련 기사"))}" target="_blank">근거 기사 열기</a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -664,15 +762,17 @@ def render_issue_cards(board: pd.DataFrame):
 
     html_parts = ['<div class="mini-grid">']
     for _, row in board.head(4).iterrows():
-        html_parts.append(
-            f"""
-            <div class="mini-card">
-              <div class="mini-label">{esc(row.get("담당 단"))}</div>
-              <div class="mini-value">{esc(row.get("이슈 후보"), 58)}</div>
-              <div class="mini-desc">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10<br>{esc(row.get("출처"), 35)}</div>
-            </div>
-            """
-        )
+        unit_raw = str(row.get("담당 단", ""))
+        dot_color = UNIT_COLORS.get(unit_raw, "#64748b")
+        html_parts.append(f"""
+        <div class="mini-card">
+          <div class="unit-card-header" style="margin-bottom:4px;">
+            <div class="unit-dot" style="background:{dot_color};"></div>
+            <div class="mini-label">{esc(unit_raw)}</div>
+          </div>
+          <div class="mini-value">{esc(row.get("이슈 후보"), 58)}</div>
+          <div class="mini-desc">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10<br>{esc(row.get("출처"), 35)}</div>
+        </div>""")
     html_parts.append("</div>")
     st.markdown("".join(html_parts), unsafe_allow_html=True)
 
@@ -683,17 +783,108 @@ def render_unit_briefs(unit_summary: pd.DataFrame):
         return
     html_parts = ['<div class="unit-brief-grid">']
     for _, row in unit_summary.head(8).iterrows():
-        html_parts.append(
-            f"""
-            <div class="unit-card">
-              <div class="unit-name">{esc(row.get("단"), 40)}</div>
-              <div class="unit-issue">{esc(row.get("추천 이슈"), 115)}</div>
-              <div class="row-meta">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10</div>
-            </div>
-            """
-        )
+        unit_raw = first_present(row.get("단"), "")
+        dot_color = UNIT_COLORS.get(unit_raw, "#64748b")
+        html_parts.append(f"""
+        <div class="unit-card">
+          <div class="unit-card-header">
+            <div class="unit-dot" style="background:{dot_color};"></div>
+            <div class="unit-name">{esc(unit_raw, 40)}</div>
+          </div>
+          <div class="unit-issue">{esc(row.get("추천 이슈"), 115)}</div>
+          <div class="row-meta">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10</div>
+        </div>""")
     html_parts.append("</div>")
     st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_kpi_strip(stats: dict, board: pd.DataFrame, keywords: pd.DataFrame, reports: pd.DataFrame):
+    total = stats.get("articles", 0)
+    urgent_count = 0
+    if not board.empty and "긴급도" in board.columns:
+        urgent_count = int((pd.to_numeric(board["긴급도"], errors="coerce") >= 8).sum())
+    kw_count = len(keywords)
+    latest_report = ""
+    if not reports.empty and "title" in reports.columns:
+        latest_report = esc(str(reports.iloc[0].get("title", "")), 26)
+    red_cls = " red" if urgent_count > 0 else ""
+    st.markdown(
+        f"""
+        <div class="kpi-strip">
+          <div class="kpi-card">
+            <div class="kpi-label">전체 수집 기사</div>
+            <div class="kpi-value">{total:,}</div>
+            <div class="kpi-sub">누적 원장</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">긴급 대응 필요</div>
+            <div class="kpi-value{red_cls}">{urgent_count}</div>
+            <div class="kpi-sub">긴급도 8점 이상</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">급등 키워드</div>
+            <div class="kpi-value">{kw_count}</div>
+            <div class="kpi-sub">이번 기간 감지</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">최신 보고서</div>
+            <div class="kpi-value small">{latest_report if latest_report else "—"}</div>
+            <div class="kpi-sub">보고서 보관함</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_keyword_bars(keywords: pd.DataFrame):
+    if keywords.empty:
+        st.info("급등 키워드 신호가 없습니다.")
+        return
+    rows = keywords.head(7)
+    scores = pd.to_numeric(rows.get("레이더점수", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    max_score = float(scores.max()) or 1.0
+    html_parts = ['<div class="kw-bar-card"><div class="kw-eyebrow">급등 키워드 TOP 7</div>']
+    for _, row in rows.iterrows():
+        label = esc(row.get("키워드"), 20)
+        score = pd.to_numeric(row.get("레이더점수", 0), errors="coerce") or 0
+        pct = round(float(score) / max_score * 100)
+        category = str(row.get("구분", ""))
+        pct_label = f"+{pct}%" if category == "급등" else ("신규" if category == "신규" else f"{pct}%")
+        html_parts.append(f"""
+        <div class="kw-bar-row">
+          <div class="kw-bar-label">{label}</div>
+          <div class="kw-bar-bg"><div class="kw-bar-fill" style="width:{pct}%;"></div></div>
+          <div class="kw-bar-pct">{pct_label}</div>
+        </div>""")
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_urgent_section(board: pd.DataFrame):
+    if board.empty or "긴급도" not in board.columns:
+        return
+    urgent = board[pd.to_numeric(board["긴급도"], errors="coerce") >= 8].head(3)
+    if urgent.empty:
+        return
+    items = []
+    for _, row in urgent.iterrows():
+        unit_raw = str(row.get("담당 단", ""))
+        dot_color = UNIT_COLORS.get(unit_raw, "#64748b")
+        issue = esc(row.get("이슈 후보"), 80)
+        urgency = esc(row.get("긴급도"))
+        items.append(f"""
+        <div class="urgent-item">
+          <div class="urgent-dot" style="background:{dot_color};"></div>
+          <div>
+            <div class="urgent-text">{issue}</div>
+            <div class="urgent-meta">{esc(unit_raw)} · 긴급도 {urgency}/10</div>
+          </div>
+        </div>""")
+    st.markdown(
+        f'<div class="urgent-banner"><div class="urgent-title">즉시 검토 필요</div>{"".join(items)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_latest_lists(recent_df: pd.DataFrame, reports: pd.DataFrame):
@@ -770,28 +961,34 @@ def render_home(engine, stats: dict):
     st.markdown("### 인텔리전스 홈")
     st.caption(f"최근 {window_days}일 기준 실데이터 브리핑입니다. DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}")
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("브리핑 기사", f"{len(recent_df):,}", f"최근 {window_days}일")
-    metric_cols[1].metric("급등 키워드", f"{len(keywords):,}")
-    metric_cols[2].metric("신규 엔티티", f"{len(entities):,}")
-    metric_cols[3].metric("대응 후보", f"{len(board):,}")
+    # ── KPI strip ────────────────────────────────────
+    render_kpi_strip(stats, board, keywords, reports)
 
+    # ── 핵심 시그널 + 키워드 바 (나란히) ───────────────
     st.markdown('<div class="home-section-title">오늘의 핵심 시그널</div>', unsafe_allow_html=True)
     st.markdown('<div class="home-section-sub">AI 분석문, 키워드, 최신성, 표준화 관련도를 조합해 직원이 먼저 볼 이슈를 띄웁니다.</div>', unsafe_allow_html=True)
-    render_issue_cards(board)
+    sig_col, kw_col = st.columns([13, 9])
+    with sig_col:
+        render_issue_cards(board)
+    with kw_col:
+        render_keyword_bars(keywords)
 
-    st.markdown('<div class="home-section-title">급등 키워드</div>', unsafe_allow_html=True)
-    render_chip_cloud(keywords, "키워드", "레이더점수", "최근 기간에 충분한 키워드 신호가 없습니다. 기간을 넓혀 보세요.")
-
-    st.markdown('<div class="home-section-title">신규 등장 엔티티</div>', unsafe_allow_html=True)
-    render_chip_cloud(entities, "엔티티", "최근등장", "새로 등장한 엔티티가 아직 감지되지 않았습니다.")
-
+    # ── 단별 브리핑 ───────────────────────────────────
     st.markdown('<div class="home-section-title">단별 브리핑</div>', unsafe_allow_html=True)
     render_unit_briefs(unit_summary)
 
+    # ── 즉시 검토 필요 배너 ───────────────────────────
+    render_urgent_section(board)
+
+    # ── 신규 엔티티 ───────────────────────────────────
+    st.markdown('<div class="home-section-title">신규 등장 엔티티</div>', unsafe_allow_html=True)
+    render_chip_cloud(entities, "엔티티", "최근등장", "새로 등장한 엔티티가 아직 감지되지 않았습니다.")
+
+    # ── 최신 기사 / 보고서 ────────────────────────────
     render_latest_lists(recent_df, reports)
     st.caption(f"보고서 목록 출처: {report_source}")
 
+    # ── 질문형 분석 추천 ──────────────────────────────
     st.markdown('<div class="home-section-title">질문형 분석 추천</div>', unsafe_allow_html=True)
     st.markdown('<div class="home-section-sub">버튼을 누르면 질문형 분석실 입력창에 질문이 준비됩니다.</div>', unsafe_allow_html=True)
     render_suggested_questions(keywords, entities)
