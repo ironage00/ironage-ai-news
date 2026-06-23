@@ -1,4 +1,4 @@
--- TTA Trend Portal supplemental tables.
+-- TTA Radar supplemental tables.
 -- Apply this to Supabase/PostgreSQL after the existing news tables are ready.
 
 CREATE TABLE IF NOT EXISTS report_artifacts (
@@ -45,5 +45,5 @@ CREATE INDEX IF NOT EXISTS idx_issue_actions_status
 CREATE INDEX IF NOT EXISTS idx_issue_actions_updated
     ON issue_actions (updated_at DESC);
 
-COMMENT ON TABLE report_artifacts IS 'TTA Trend Portal Google Docs and Excel report registry.';
-COMMENT ON TABLE issue_actions IS 'TTA Trend Portal standardization response board state.';
+COMMENT ON TABLE report_artifacts IS 'TTA Radar Google Docs and Excel report registry.';
+COMMENT ON TABLE issue_actions IS 'TTA Radar standardization response board state.';

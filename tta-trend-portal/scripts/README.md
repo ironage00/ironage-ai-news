@@ -1,4 +1,4 @@
-# TTA Trend Portal Scripts
+# TTA Radar Scripts
 
 이 폴더는 기존 운영 코드와 분리된 포털 관리 스크립트입니다.
 
@@ -6,16 +6,16 @@
 
 ```powershell
 $env:DATABASE_URL="postgresql://..."
-python "TTA Trend Portal\scripts\setup_supabase_tables.py"
+python "tta-trend-portal\scripts\setup_supabase_tables.py"
 ```
 
 ## 보고서 산출물 CSV를 Supabase로 동기화
 
 ```powershell
 $env:DATABASE_URL="postgresql://..."
-python "TTA Trend Portal\scripts\sync_report_artifacts.py"
+python "tta-trend-portal\scripts\sync_report_artifacts.py"
 ```
 
 `DATABASE_URL`이 없거나 Supabase 테이블이 아직 없으면 대시보드는 계속
-`TTA Trend Portal\data\report_artifacts.csv`와
-`TTA Trend Portal\data\issue_actions.csv`를 사용합니다.
+`tta-trend-portal\data\report_artifacts.csv`와
+`tta-trend-portal\data\issue_actions.csv`를 사용합니다.

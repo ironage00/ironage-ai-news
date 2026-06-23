@@ -1,15 +1,15 @@
 {
-  "site_name": "TTA ICT Trend Radar",
-  "recommended_url": "https://sites.google.com/tta.or.kr/trend-radar",
+  "site_name": "TTA Radar",
+  "recommended_url": "https://tta-radar.streamlit.app",
   "audience": "TTA employees",
   "access_policy": {
-    "published_site": "restricted",
-    "viewer_group": "trend-viewers@tta.or.kr",
+    "published_site": "streamlit_cloud",
+    "viewer_domain": "tta.or.kr",
     "editor_group": "trend-admins@tta.or.kr"
   },
   "linked_systems": {
-    "streamlit_dashboard": "http://10.10.10.27:8507",
-    "streamlit_embed_url": "http://10.10.10.27:8507?embed=1",
+    "streamlit_dashboard": "https://tta-radar.streamlit.app",
+    "streamlit_embed_url": "https://tta-radar.streamlit.app/?embed=1",
     "weekly_report_folder": "https://drive.google.com/drive/u/0/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT",
     "monthly_report_folder": "https://drive.google.com/drive/u/0/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT",
     "latest_weekly_report": "https://docs.google.com/document/d/1315EoXpg5fqime4_Ib_Q_bq-nEOSfHRlIoey6XRUA_8/edit?usp=drivesdk",
@@ -25,11 +25,10 @@
     "issue_actions_csv": "data/issue_actions.csv"
   },
   "pages": [
-    "home",
-    "ai-search",
+    "today-radar",
+    "standardization-board",
+    "report-archive",
     "issue-map",
-    "reports",
-    "guide",
-    "operations"
+    "qa-analysis"
   ]
 }

@@ -29,7 +29,8 @@ TTA 직원이 기존 뉴스 원장(Supabase/PostgreSQL 또는 로컬 SQLite)을 
   - 근거 기사
   - 답변 생성
 - 기사 조건 검색: 날짜, 단, 출처, 분석 여부, 키워드
-- Google Sites 임베드용 포털 화면: `?embed=1`
+- Streamlit Cloud 운영 화면: `https://tta-radar.streamlit.app`
+- 경량 표시용 포털 모드: `?embed=1`
 - 요약 지표 카드: 전체 기사, 분석 완료, 임베딩, 임베딩 누락
 - 빠른 질문 버튼: 자주 쓰는 표준화 질의 즉시 실행
 - 자연어 검색:
@@ -52,7 +53,7 @@ TTA 직원이 기존 뉴스 원장(Supabase/PostgreSQL 또는 로컬 SQLite)을 
 ## 실행
 
 ```powershell
-cd "TTA Trend Portal\dashboard"
+cd "tta-trend-portal\dashboard"
 python -m pip install -r requirements.txt
 streamlit run app.py
 ```
@@ -60,16 +61,16 @@ streamlit run app.py
 또는:
 
 ```powershell
-"TTA Trend Portal\deploy\Run-Portal-Dashboard.cmd"
+"tta-trend-portal\deploy\Run-Portal-Dashboard.cmd"
 ```
 
-Google Sites 임베드 테스트:
+경량 표시 모드 테스트:
 
 ```text
 http://localhost:8507?embed=1
 ```
 
-실제 Google Sites 게시에는 로컬 주소가 아니라 배포된 Streamlit URL을 사용해야 합니다.
+운영 접속은 `https://tta-radar.streamlit.app`을 사용합니다.
 
 ## 환경 변수
 
@@ -84,8 +85,8 @@ $env:OPENAI_API_KEY="sk-..."
 
 ## 로컬 포털 데이터
 
-- `TTA Trend Portal\data\report_artifacts.csv`: Google Docs/Excel 산출물 목록
-- `TTA Trend Portal\data\issue_actions.csv`: 표준화 대응 보드의 담당 단, 검토 상태, 조치 메모
+- `tta-trend-portal\data\report_artifacts.csv`: Google Docs/Excel 산출물 목록
+- `tta-trend-portal\data\issue_actions.csv`: 표준화 대응 보드의 담당 단, 검토 상태, 조치 메모
 
 Supabase에 `report_artifacts`, `issue_actions` 테이블이 있으면 대시보드는 DB를 우선 사용합니다.
 테이블이 없거나 접속할 수 없으면 위 CSV 파일로 fallback합니다.
