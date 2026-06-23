@@ -43,6 +43,6 @@ AI 검색 대시보드 열기
 
 ```text
 Google Sites의 Insert → Embed → Embed code 메뉴에서 embeds/streamlit-embed.html 내용을 붙여 넣습니다.
-STREAMLIT_URL은 실제 배포된 Streamlit 대시보드 주소로 교체합니다.
-Sites 임베드용 주소는 STREAMLIT_URL?embed=1 형식을 사용합니다.
+대시보드 주소: http://10.10.10.27:8507?embed=1
+Sites 임베드용 embed=1 파라미터가 이미 포함되어 있습니다.
 ```

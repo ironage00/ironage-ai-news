@@ -42,18 +42,11 @@ trend-admins@tta.or.kr
 
 그룹이 아직 없다면 1차 버전은 특정 사용자 이메일로 제한하고, 이후 Google Workspace 그룹으로 전환합니다.
 
-## 3. URL 제안
+## 3. 확정 URL
 
-가능하면 다음 주소를 사용합니다.
-
-```text
-https://sites.google.com/tta.or.kr/trend
-```
-
-이미 사용 중이면:
+사이트 URL이 확정되었습니다.
 
 ```text
-https://sites.google.com/tta.or.kr/ict-trend
 https://sites.google.com/tta.or.kr/trend-radar
 ```
 
@@ -88,7 +81,7 @@ Insert → Embed → Embed code
 ```
 
 그 후 `embeds/streamlit-embed.html` 내용을 붙여 넣습니다.
-`STREAMLIT_URL`은 실제 배포 주소로 교체합니다.
+배포 주소는 이미 `http://10.10.10.27:8507?embed=1`로 설정되어 있습니다.
 
 ## 6. 게시 전 체크
 
