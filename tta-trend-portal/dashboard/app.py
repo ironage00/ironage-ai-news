@@ -1,3 +1,4 @@
+import html
 import os
 from datetime import datetime
 
@@ -226,6 +227,209 @@ def apply_portal_style(embed_mode: bool):
             padding: 14px 14px 4px 14px;
             margin-bottom: 10px;
         }}
+
+        /* ── Intelligence home ─────────────────── */
+        .home-section-title {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            font-size: 1.05rem;
+            font-weight: 950;
+            color: #0f172a;
+            margin: 12px 0 8px 0;
+        }}
+        .home-section-sub {{
+            font-size: 0.82rem;
+            color: #64748b;
+            margin: -4px 0 10px 0;
+        }}
+        .signal-grid {{
+            display: grid;
+            grid-template-columns: 1.25fr .75fr;
+            gap: 13px;
+            margin-bottom: 14px;
+        }}
+        .briefing-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 17px 18px;
+            box-shadow: 0 10px 24px rgba(15,23,42,.05);
+        }}
+        .briefing-card.dark {{
+            background: linear-gradient(135deg, #0f172a 0%, #164e63 100%);
+            color: #ffffff;
+            border-color: #164e63;
+        }}
+        .briefing-eyebrow {{
+            color: #0284c7;
+            font-size: 11px;
+            font-weight: 950;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }}
+        .briefing-card.dark .briefing-eyebrow {{ color: #a5f3fc; }}
+        .briefing-title {{
+            font-size: 1.12rem;
+            font-weight: 950;
+            color: #0f172a;
+            line-height: 1.35;
+            margin-bottom: 8px;
+        }}
+        .briefing-card.dark .briefing-title {{ color: #ffffff; }}
+        .briefing-meta {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin: 9px 0;
+        }}
+        .meta-pill {{
+            border-radius: 999px;
+            padding: 5px 9px;
+            background: #eff6ff;
+            color: #075985;
+            font-size: 11px;
+            font-weight: 800;
+        }}
+        .briefing-card.dark .meta-pill {{
+            background: rgba(255,255,255,.13);
+            color: #e0f2fe;
+        }}
+        .briefing-body {{
+            color: #475569;
+            font-size: 0.84rem;
+            line-height: 1.58;
+        }}
+        .briefing-card.dark .briefing-body {{ color: #dbeafe; }}
+        .briefing-link {{
+            display: inline-block;
+            margin-top: 9px;
+            color: #0369a1;
+            font-size: 0.8rem;
+            font-weight: 900;
+            text-decoration: none;
+        }}
+        .briefing-card.dark .briefing-link {{ color: #bae6fd; }}
+        .mini-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }}
+        .mini-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 13px;
+            padding: 13px 14px;
+            min-height: 112px;
+        }}
+        .mini-label {{
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin-bottom: 5px;
+        }}
+        .mini-value {{
+            color: #0f172a;
+            font-size: 1.25rem;
+            font-weight: 950;
+            line-height: 1.15;
+        }}
+        .mini-desc {{
+            color: #64748b;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            margin-top: 8px;
+        }}
+        .chip-cloud {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 14px;
+        }}
+        .radar-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            background: #ffffff;
+            padding: 7px 10px;
+            color: #0f172a;
+            font-size: 0.8rem;
+            font-weight: 850;
+        }}
+        .radar-chip span {{
+            color: #0369a1;
+            font-size: 0.72rem;
+            font-weight: 950;
+        }}
+        .home-two-col {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 14px;
+        }}
+        .list-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 15px 16px;
+        }}
+        .list-row {{
+            border-top: 1px solid #e2e8f0;
+            padding: 10px 0;
+        }}
+        .list-row:first-of-type {{ border-top: 0; padding-top: 2px; }}
+        .row-title {{
+            color: #0f172a;
+            font-size: 0.86rem;
+            font-weight: 900;
+            line-height: 1.35;
+        }}
+        .row-meta {{
+            color: #64748b;
+            font-size: 0.74rem;
+            margin-top: 4px;
+        }}
+        .unit-brief-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }}
+        .unit-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 13px;
+            padding: 13px 14px;
+        }}
+        .unit-name {{
+            font-weight: 950;
+            color: #0f172a;
+            margin-bottom: 6px;
+        }}
+        .unit-issue {{
+            color: #475569;
+            font-size: 0.8rem;
+            line-height: 1.45;
+        }}
+        @media (max-width: 900px) {{
+            .hero-stat-grid,
+            .workflow-steps,
+            .signal-grid,
+            .home-two-col {{
+                grid-template-columns: 1fr;
+            }}
+            .portal-hero {{
+                padding: 22px 20px;
+            }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -372,6 +576,227 @@ def render_quick_queries():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def esc(value, max_len: int | None = None) -> str:
+    if pd.isna(value):
+        value = ""
+    text = "" if value is None else str(value)
+    text = " ".join(text.split())
+    if max_len and len(text) > max_len:
+        text = text[: max_len - 1].rstrip() + "…"
+    return html.escape(text)
+
+
+def first_present(*values) -> str:
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def date_label(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    try:
+        return str(pd.to_datetime(value, errors="coerce"))[:10]
+    except Exception:
+        return str(value)[:10]
+
+
+def choose_home_window(df: pd.DataFrame) -> tuple[int, pd.DataFrame, pd.DataFrame]:
+    if df.empty:
+        return 30, df, df
+    for days in [7, 14, 30, 90]:
+        recent, baseline = split_recent_baseline(df, days)
+        if len(recent) >= 3:
+            return days, recent, baseline
+    recent, baseline = split_recent_baseline(df, 365)
+    if recent.empty:
+        recent = df.head(50).copy()
+    return 365, recent, baseline
+
+
+def render_chip_cloud(chips: pd.DataFrame, label_col: str, score_col: str, fallback: str):
+    if chips.empty:
+        st.info(fallback)
+        return
+    html_parts = ['<div class="chip-cloud">']
+    for _, row in chips.head(12).iterrows():
+        label = esc(row.get(label_col), 38)
+        category = esc(row.get("구분", ""), 12)
+        score = esc(row.get(score_col, ""), 16)
+        html_parts.append(f'<div class="radar-chip">{label}<span>{category} {score}</span></div>')
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_issue_cards(board: pd.DataFrame):
+    if board.empty:
+        st.info("표준화 대응 후보를 만들 수 있는 분석 기사가 아직 부족합니다.")
+        return
+
+    top = board.iloc[0]
+    st.markdown(
+        f"""
+        <div class="signal-grid">
+          <div class="briefing-card dark">
+            <div class="briefing-eyebrow">Top Signal</div>
+            <div class="briefing-title">{esc(top.get("이슈 후보"), 180)}</div>
+            <div class="briefing-meta">
+              <span class="meta-pill">영향도 {esc(top.get("영향도"))}/10</span>
+              <span class="meta-pill">긴급도 {esc(top.get("긴급도"))}/10</span>
+              <span class="meta-pill">{esc(top.get("담당 단"))}</span>
+            </div>
+            <div class="briefing-body">{esc(top.get("권장 조치"), 260)}</div>
+            <a class="briefing-link" href="{esc(top.get("관련 기사"))}" target="_blank">근거 기사 열기</a>
+          </div>
+          <div class="briefing-card">
+            <div class="briefing-eyebrow">Radar Readout</div>
+            <div class="briefing-title">오늘 먼저 볼 표준화 후보</div>
+            <div class="briefing-body">영향도와 긴급도를 함께 높게 받은 이슈부터 검토하면, 단순 뉴스 소비가 아니라 회의 안건·표준화 대응 후보로 바로 연결할 수 있습니다.</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    html_parts = ['<div class="mini-grid">']
+    for _, row in board.head(4).iterrows():
+        html_parts.append(
+            f"""
+            <div class="mini-card">
+              <div class="mini-label">{esc(row.get("담당 단"))}</div>
+              <div class="mini-value">{esc(row.get("이슈 후보"), 58)}</div>
+              <div class="mini-desc">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10<br>{esc(row.get("출처"), 35)}</div>
+            </div>
+            """
+        )
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_unit_briefs(unit_summary: pd.DataFrame):
+    if unit_summary.empty:
+        st.info("단별 추천 이슈가 아직 없습니다.")
+        return
+    html_parts = ['<div class="unit-brief-grid">']
+    for _, row in unit_summary.head(8).iterrows():
+        html_parts.append(
+            f"""
+            <div class="unit-card">
+              <div class="unit-name">{esc(row.get("단"), 40)}</div>
+              <div class="unit-issue">{esc(row.get("추천 이슈"), 115)}</div>
+              <div class="row-meta">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10</div>
+            </div>
+            """
+        )
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_latest_lists(recent_df: pd.DataFrame, reports: pd.DataFrame):
+    st.markdown('<div class="home-two-col">', unsafe_allow_html=True)
+    left, right = st.columns(2)
+    with left:
+        st.markdown('<div class="list-card"><div class="home-section-title">최신 분석 기사</div>', unsafe_allow_html=True)
+        if recent_df.empty:
+            st.info("최신 분석 기사가 없습니다.")
+        else:
+            for _, row in recent_df.head(5).iterrows():
+                st.markdown(
+                    f"""
+                    <div class="list-row">
+                      <div class="row-title"><a href="{esc(row.get("link"))}" target="_blank">{esc(row.get("title"), 95)}</a></div>
+                      <div class="row-meta">{esc(row.get("source"), 45)} · {esc(date_label(first_present(row.get("published"), row.get("collected_at"))))}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with right:
+        st.markdown('<div class="list-card"><div class="home-section-title">최근 보고서/Excel</div>', unsafe_allow_html=True)
+        if reports.empty:
+            st.info("등록된 보고서 산출물이 없습니다.")
+        else:
+            for _, row in reports.head(5).iterrows():
+                url = first_present(row.get("google_doc_url"), row.get("excel_file_url"))
+                count = row.get("source_article_count", 0)
+                st.markdown(
+                    f"""
+                    <div class="list-row">
+                      <div class="row-title"><a href="{esc(url)}" target="_blank">{esc(row.get("title"), 95)}</a></div>
+                      <div class="row-meta">{esc(row.get("report_type"), 30)} · 기사 {esc(count)}건 · {esc(row.get("period_end"), 20)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_suggested_questions(keywords: pd.DataFrame, entities: pd.DataFrame):
+    base_terms = []
+    if not keywords.empty:
+        base_terms.extend(keywords["키워드"].dropna().astype(str).head(3).tolist())
+    if not entities.empty:
+        base_terms.extend(entities["엔티티"].dropna().astype(str).head(2).tolist())
+    if not base_terms:
+        base_terms = ["AI-RAN", "NTN", "6G", "양자통신"]
+
+    questions = [
+        f"최근 {base_terms[0]} 이슈의 표준화 시사점은?",
+        f"{base_terms[min(1, len(base_terms)-1)]} 관련 주요 기업과 국가는?",
+        f"{base_terms[min(2, len(base_terms)-1)]} 동향에서 TTA가 우선 검토할 점은?",
+        "최근 90일간 긴급도가 높은 표준화 대응 후보를 정리해줘",
+    ]
+    cols = st.columns(4)
+    for idx, question in enumerate(questions):
+        if cols[idx].button(question, key=f"home_question_{idx}", use_container_width=True):
+            st.session_state["portal_query"] = question
+            st.toast("질문형 분석실 입력창에 추천 질문을 넣었습니다.")
+
+
+def render_home(engine, stats: dict):
+    full_df = fetch_articles(engine, days=365, analyzed_only=True, limit=2500)
+    window_days, recent_df, baseline_df = choose_home_window(full_df)
+    keywords = trending_keywords(recent_df, baseline_df, limit=12)
+    entities = new_entities(recent_df, baseline_df, limit=12)
+    board = issue_board(recent_df if not recent_df.empty else full_df, limit=8, unit_names=UNIT_NAMES)
+    unit_summary = unit_issue_summary(recent_df if not recent_df.empty else full_df, UNIT_NAMES, limit_per_unit=2)
+    reports, report_source = fetch_report_artifacts(engine)
+
+    st.markdown("### 인텔리전스 홈")
+    st.caption(f"최근 {window_days}일 기준 실데이터 브리핑입니다. DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}")
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("브리핑 기사", f"{len(recent_df):,}", f"최근 {window_days}일")
+    metric_cols[1].metric("급등 키워드", f"{len(keywords):,}")
+    metric_cols[2].metric("신규 엔티티", f"{len(entities):,}")
+    metric_cols[3].metric("대응 후보", f"{len(board):,}")
+
+    st.markdown('<div class="home-section-title">오늘의 핵심 시그널</div>', unsafe_allow_html=True)
+    st.markdown('<div class="home-section-sub">AI 분석문, 키워드, 최신성, 표준화 관련도를 조합해 직원이 먼저 볼 이슈를 띄웁니다.</div>', unsafe_allow_html=True)
+    render_issue_cards(board)
+
+    st.markdown('<div class="home-section-title">급등 키워드</div>', unsafe_allow_html=True)
+    render_chip_cloud(keywords, "키워드", "레이더점수", "최근 기간에 충분한 키워드 신호가 없습니다. 기간을 넓혀 보세요.")
+
+    st.markdown('<div class="home-section-title">신규 등장 엔티티</div>', unsafe_allow_html=True)
+    render_chip_cloud(entities, "엔티티", "최근등장", "새로 등장한 엔티티가 아직 감지되지 않았습니다.")
+
+    st.markdown('<div class="home-section-title">단별 브리핑</div>', unsafe_allow_html=True)
+    render_unit_briefs(unit_summary)
+
+    render_latest_lists(recent_df, reports)
+    st.caption(f"보고서 목록 출처: {report_source}")
+
+    st.markdown('<div class="home-section-title">질문형 분석 추천</div>', unsafe_allow_html=True)
+    st.markdown('<div class="home-section-sub">버튼을 누르면 질문형 분석실 입력창에 질문이 준비됩니다.</div>', unsafe_allow_html=True)
+    render_suggested_questions(keywords, entities)
+
+
 def main():
     embed_mode = is_embed_mode()
     apply_portal_style(embed_mode)
@@ -391,13 +816,17 @@ def main():
         st.metric("분석 완료", f"{stats.get('analyzed', 0):,}")
         st.metric("임베딩", f"{stats.get('embeddings', 0):,}")
 
-    tab_radar, tab_board, tab_reports, tab_map, tab_qa = st.tabs([
+    tab_home, tab_radar, tab_board, tab_reports, tab_map, tab_qa = st.tabs([
+        "홈",
         "오늘의 레이더",
         "표준화 대응 보드",
         "보고서 보관함",
         "이슈 맵",
         "질문형 분석실",
     ])
+
+    with tab_home:
+        render_home(engine, stats)
 
     with tab_radar:
         st.subheader("오늘의 레이더")
