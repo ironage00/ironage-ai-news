@@ -43,68 +43,188 @@ def apply_portal_style(embed_mode: bool):
     st.markdown(
         f"""
         <style>
-        :root {{
-            --tta-navy: #071427;
-            --tta-blue: #0e5aa7;
-            --tta-cyan: #0f766e;
-            --tta-line: #dbe3ee;
-            --tta-soft: #f6f8fb;
-            --tta-text: #0f172a;
-        }}
         html, body, [data-testid="stAppViewContainer"] {{
             background: #f6f8fb;
-            color: var(--tta-text);
+            color: #0f172a;
         }}
         .block-container {{
             padding-top: {top_padding};
             padding-bottom: 2rem;
             max-width: 1320px;
         }}
-        div[data-testid="stTabs"] button {{
-            font-weight: 800;
-        }}
-        div[data-testid="stMetric"] {{
-            background: #ffffff;
-            border: 1px solid var(--tta-line);
-            border-radius: 12px;
-            padding: 12px 14px;
-            box-shadow: 0 10px 22px rgba(15,23,42,.045);
-        }}
+        div[data-testid="stTabs"] button {{ font-weight: 800; }}
+        .stDataFrame, div[data-testid="stDataFrame"] {{ border-radius: 12px; overflow: hidden; }}
+        div[data-testid="stAlert"] {{ border-radius: 12px; }}
+
+        /* ── Hero ──────────────────────────────── */
         .portal-hero {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
             border: 1px solid #1e3a5f;
             border-radius: 18px;
-            padding: 26px 28px;
-            background: linear-gradient(135deg, #071427 0%, #12396c 58%, #0f766e 100%);
+            padding: 30px 32px 26px 32px;
+            background: linear-gradient(135deg, #071427 0%, #0e2b52 52%, #155e75 100%);
             color: #ffffff;
-            margin-bottom: 16px;
-            box-shadow: 0 18px 42px rgba(15,23,42,.14);
+            margin-bottom: 14px;
+        }}
+        .portal-badge {{
+            display: inline-block;
+            padding: 5px 11px;
+            border: 1px solid rgba(255,255,255,.26);
+            border-radius: 999px;
+            color: #b9e6ff;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .09em;
+            text-transform: uppercase;
+            margin-bottom: 14px;
         }}
         .portal-hero h1 {{
-            margin: 0 0 6px 0;
-            font-size: 1.85rem;
-            letter-spacing: 0;
+            margin: 0 0 10px 0;
+            font-size: 1.95rem;
+            line-height: 1.12;
             font-weight: 900;
+            letter-spacing: -.01em;
         }}
-        .portal-hero p {{
-            margin: 0;
+        .hero-desc {{
+            margin: 0 0 22px 0;
             color: #d7e6f5;
-            font-size: 0.95rem;
-            line-height: 1.65;
+            font-size: 0.93rem;
+            line-height: 1.7;
+            max-width: 780px;
         }}
-        .stDataFrame, div[data-testid="stDataFrame"] {{
-            border-radius: 12px;
-            overflow: hidden;
+        .hero-stat-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
         }}
-        div[data-testid="stAlert"] {{
-            border-radius: 12px;
+        .hero-stat-card {{
+            background: rgba(255,255,255,.1);
+            border: 1px solid rgba(255,255,255,.18);
+            border-radius: 13px;
+            padding: 13px 15px;
         }}
+        .hero-stat-label {{
+            font-size: 11px;
+            color: #b9e6ff;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+        }}
+        .hero-stat-value {{
+            font-size: 22px;
+            font-weight: 900;
+            margin-top: 4px;
+            line-height: 1;
+        }}
+        .hero-stat-sub {{
+            font-size: 11px;
+            color: #c9d8e8;
+            margin-top: 5px;
+        }}
+
+        /* ── Action cards ───────────────────────── */
+        .action-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 12px;
+        }}
+        .action-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 17px 19px;
+            box-shadow: 0 10px 24px rgba(15,23,42,.05);
+        }}
+        .action-tag {{
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            margin-bottom: 7px;
+        }}
+        .action-title {{
+            font-size: 18px;
+            font-weight: 900;
+            color: #0f172a;
+            margin-bottom: 7px;
+            line-height: 1.2;
+        }}
+        .action-desc {{
+            font-size: 13px;
+            line-height: 1.55;
+            color: #475569;
+        }}
+
+        /* ── Bottom panels ──────────────────────── */
+        .bottom-panels {{
+            display: grid;
+            grid-template-columns: 1.3fr .7fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }}
+        .workflow-panel {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 14px;
+            padding: 16px 18px;
+        }}
+        .panel-title {{
+            font-size: 14px;
+            font-weight: 900;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }}
+        .workflow-steps {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }}
+        .workflow-step {{
+            border-left: 4px solid #94a3b8;
+            border-radius: 0;
+            padding-left: 10px;
+            color: #475569;
+            font-size: 12.5px;
+            line-height: 1.5;
+        }}
+        .query-panel {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #0f172a;
+            color: #ffffff;
+            border-radius: 14px;
+            padding: 16px 18px;
+        }}
+        .query-panel-title {{
+            font-size: 12px;
+            color: #93c5fd;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin-bottom: 10px;
+        }}
+        .query-chips {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+        }}
+        .query-chip {{
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #1e293b;
+            color: #dbeafe;
+            font-size: 12px;
+        }}
+
+        /* ── Quick query panel (QA tab) ─────────── */
         .quick-query-panel {{
-            border: 1px solid var(--tta-line);
+            border: 1px solid #dbe3ee;
             border-radius: 14px;
             background: #ffffff;
             padding: 14px 14px 4px 14px;
             margin-bottom: 10px;
-            box-shadow: 0 10px 22px rgba(15,23,42,.04);
         }}
         </style>
         """,
@@ -149,24 +269,92 @@ def article_table(df: pd.DataFrame):
 
 
 def render_header(stats: dict, embed_mode: bool):
+    articles = stats.get("articles", 0)
+    analyzed = stats.get("analyzed", 0)
+    embeddings = stats.get("embeddings", 0)
+    missing = max(analyzed - embeddings, 0)
+    today = datetime.now().strftime("%Y.%m.%d")
+
     st.markdown(
-        """
+        f"""
         <div class="portal-hero">
-          <h1>TTA Intelligence Radar v0.1</h1>
-          <p>급등 이슈, 표준화 대응 후보, 관계 맵, 근거 기반 질의응답을 한 곳에서 보는 직원용 인텔리전스 화면입니다.</p>
+          <div class="portal-badge">TTA Intelligence Radar</div>
+          <h1>오늘의 ICT 표준화 신호를<br>한 화면에서 읽습니다</h1>
+          <p class="hero-desc">뉴스 원장, AI 분석 결과, 표준화 대응 후보, 관계 맵, 주간 보고서를 연결해 TTA 직원이 바로 판단할 수 있는 내부 인텔리전스 포털입니다.</p>
+          <div class="hero-stat-grid">
+            <div class="hero-stat-card">
+              <div class="hero-stat-label">전체 기사</div>
+              <div class="hero-stat-value">{articles:,}</div>
+              <div class="hero-stat-sub">수집·저장된 뉴스 원장</div>
+            </div>
+            <div class="hero-stat-card">
+              <div class="hero-stat-label">AI 분석</div>
+              <div class="hero-stat-value">{analyzed:,}</div>
+              <div class="hero-stat-sub">GPT 분석 완료 기사</div>
+            </div>
+            <div class="hero-stat-card">
+              <div class="hero-stat-label">RAG 임베딩</div>
+              <div class="hero-stat-value">{embeddings:,}</div>
+              <div class="hero-stat-sub">의미 검색 가능 기사</div>
+            </div>
+            <div class="hero-stat-card">
+              <div class="hero-stat-label">업데이트</div>
+              <div class="hero-stat-value">Daily</div>
+              <div class="hero-stat-sub">{today} 기준</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-grid">
+          <div class="action-card">
+            <div class="action-tag" style="color:#0369a1;">Daily Radar</div>
+            <div class="action-title">오늘의 레이더</div>
+            <div class="action-desc">급등 키워드, 신규 엔티티, 단별 추천 이슈를 바로 확인합니다.</div>
+          </div>
+          <div class="action-card">
+            <div class="action-tag" style="color:#7c2d12;">Action Board</div>
+            <div class="action-title">표준화 대응 보드</div>
+            <div class="action-desc">영향도와 긴급도를 보고 검토 상태와 조치 메모를 남깁니다.</div>
+          </div>
+          <div class="action-card">
+            <div class="action-tag" style="color:#047857;">Reports</div>
+            <div class="action-title">보고서 보관함</div>
+            <div class="action-desc">Google Docs와 Excel 산출물을 한 곳에서 조회합니다.</div>
+          </div>
+          <div class="action-card">
+            <div class="action-tag" style="color:#6d28d9;">Issue Map</div>
+            <div class="action-title">이슈 맵</div>
+            <div class="action-desc">기업·기술·국가 공출현 관계를 그래프로 시각화합니다.</div>
+          </div>
+        </div>
+
+        <div class="bottom-panels">
+          <div class="workflow-panel">
+            <div class="panel-title">직원이 바로 쓰는 판단 흐름</div>
+            <div class="workflow-steps">
+              <div class="workflow-step" style="border-left-color:#0284c7;"><strong style="color:#0f172a;">1. 감지</strong><br>오늘 급등한 기술과 엔티티 확인</div>
+              <div class="workflow-step" style="border-left-color:#b45309;"><strong style="color:#0f172a;">2. 선별</strong><br>영향도·긴급도 기준 후보 분류</div>
+              <div class="workflow-step" style="border-left-color:#047857;"><strong style="color:#0f172a;">3. 근거</strong><br>RAG 검색으로 관련 기사 확인</div>
+              <div class="workflow-step" style="border-left-color:#6d28d9;"><strong style="color:#0f172a;">4. 공유</strong><br>보고서와 조치 메모로 확산</div>
+            </div>
+          </div>
+          <div class="query-panel">
+            <div class="query-panel-title">추천 검색어</div>
+            <div class="query-chips">
+              <span class="query-chip">AI-RAN 표준화</span>
+              <span class="query-chip">NTN 위성통신</span>
+              <span class="query-chip">6G 국제표준</span>
+              <span class="query-chip">양자통신</span>
+              <span class="query-chip">오픈랜 정책</span>
+              <span class="query-chip">B5G 주파수</span>
+            </div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     if not embed_mode:
         st.caption("별도 대시보드 프로그램입니다. 기존 운영 코드는 수정하거나 import하지 않습니다.")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("전체 기사", f"{stats.get('articles', 0):,}")
-    m2.metric("분석 완료", f"{stats.get('analyzed', 0):,}")
-    m3.metric("임베딩", f"{stats.get('embeddings', 0):,}")
-    missing = max(stats.get("analyzed", 0) - stats.get("embeddings", 0), 0)
-    m4.metric("임베딩 누락", f"{missing:,}")
 
 
 def render_quick_queries():
