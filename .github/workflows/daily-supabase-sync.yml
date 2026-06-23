@@ -1,4 +1,4 @@
-name: Daily Supabase Sync
+name: Daily Supabase Sync + Home Cards
 
 on:
   schedule:
@@ -15,6 +15,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
@@ -33,6 +35,23 @@ jobs:
             news-db-
 
       - name: Sync SQLite → Supabase (incremental)
-        run: python "TTA Trend Portal/scripts/daily_sync.py"
+        run: python tta-trend-portal/scripts/daily_sync.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Generate home-cards.html from Supabase
+        run: python tta-trend-portal/scripts/generate_home_cards.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          STREAMLIT_URL: ${{ secrets.STREAMLIT_URL }}
+          WEEKLY_DOC_URL: ${{ secrets.WEEKLY_DOC_URL }}
+          EXCEL_URL: ${{ secrets.EXCEL_URL }}
+
+      - name: Commit updated home-cards.html
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tta-trend-portal/embeds/home-cards.html
+          git diff --cached --quiet && echo "no changes" || \
+            git commit -m "auto: regenerate home-cards.html [skip ci]" && \
+            git push
