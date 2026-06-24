@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Iterable
@@ -47,6 +48,247 @@ URGENCY_TERMS = [
     "경쟁",
     "투자",
     "협력",
+]
+
+ICT_TERMS = [
+    "ICT",
+    "통신",
+    "이동통신",
+    "무선",
+    "네트워크",
+    "망",
+    "주파수",
+    "전파",
+    "5G",
+    "6G",
+    "B5G",
+    "AI",
+    "인공지능",
+    "AI-RAN",
+    "오픈랜",
+    "O-RAN",
+    "RAN",
+    "NTN",
+    "위성",
+    "위성통신",
+    "양자",
+    "양자통신",
+    "보안",
+    "사이버",
+    "클라우드",
+    "데이터센터",
+    "반도체",
+    "디스플레이",
+    "IoT",
+    "사물인터넷",
+    "로봇",
+    "자율주행",
+    "스마트",
+    "표준",
+    "표준화",
+    "ITU",
+    "3GPP",
+    "IEEE",
+    "ETSI",
+    "MPEG",
+    "Wi-Fi",
+    "와이파이",
+    "블루투스",
+    "UAM",
+    "드론",
+    "메타버스",
+    "XR",
+    "AR",
+    "VR",
+]
+
+FOCUS_ICT_TERMS = [
+    "통신",
+    "이동통신",
+    "네트워크",
+    "주파수",
+    "전파",
+    "5G",
+    "6G",
+    "B5G",
+    "AI-RAN",
+    "오픈랜",
+    "O-RAN",
+    "NTN",
+    "위성통신",
+    "양자통신",
+    "보안",
+    "사이버",
+    "표준",
+    "표준화",
+    "ITU",
+    "3GPP",
+    "IEEE",
+    "ETSI",
+]
+
+NON_ICT_TERMS = [
+    "선거",
+    "대선",
+    "총선",
+    "후보",
+    "여론조사",
+    "부동산",
+    "아파트",
+    "재건축",
+    "분양",
+    "맛집",
+    "연예",
+    "스포츠",
+    "야구",
+    "축구",
+    "주가",
+    "증시",
+    "공약",
+    "사설",
+    "횡령",
+    "배임",
+    "오너",
+    "굿즈",
+    "캐릭터",
+    "협찬",
+]
+
+TITLE_ICT_TERMS = FOCUS_ICT_TERMS + [
+    "ICT",
+    "AI",
+    "인공지능",
+    "양자",
+    "위성",
+    "인공위성",
+    "반도체",
+    "클라우드",
+    "데이터센터",
+    "로봇",
+    "자율주행",
+    "디스플레이",
+    "보안",
+    "해킹",
+    "satellite",
+    "direct-to-device",
+    "standards-based",
+    "standard",
+    "telecom",
+    "wireless",
+    "network",
+    "cyber",
+    "security",
+    "quantum",
+    "semiconductor",
+]
+
+TITLE_STRONG_ICT_TERMS = FOCUS_ICT_TERMS + [
+    "ICT",
+    "인공지능",
+    "위성",
+    "인공위성",
+    "반도체",
+    "클라우드",
+    "데이터센터",
+    "로봇",
+    "자율주행",
+    "디스플레이",
+    "해킹",
+    "satellite",
+    "direct-to-device",
+    "standards-based",
+    "standard",
+    "telecom",
+    "wireless",
+    "network",
+    "cyber",
+    "security",
+    "quantum",
+    "semiconductor",
+]
+
+TITLE_LOW_VALUE_TERMS = [
+    "선거",
+    "대선",
+    "총선",
+    "여론조사",
+    "부동산",
+    "아파트",
+    "재건축",
+    "분양",
+    "사설",
+    "공약",
+    "주가",
+    "증시",
+    "횡령",
+    "배임",
+    "오너",
+    "굿즈",
+    "춘식이",
+    "증권",
+    "주식",
+    "리서치",
+    "리포트 발간",
+    "회담",
+    "종전협상",
+    "이란",
+    "대만",
+    "트럼프",
+    "서울시장",
+    "오세훈",
+    "후보",
+    "금융권",
+    "핀테크",
+    "항암",
+    "신약",
+    "임플란트",
+    "화장품",
+    "발효",
+    "물류",
+    "요금제",
+    "번역",
+    "리테일",
+    "retailer",
+    "goods",
+    "daiso",
+    "retail",
+    "농축업",
+    "농업",
+    "도축",
+    "오이",
+    "딸기",
+]
+
+TITLE_ALWAYS_EXCLUDE_TERMS = [
+    "양자 토론",
+]
+
+AI_TITLE_CONTEXT_TERMS = [
+    "표준",
+    "표준화",
+    "국제표준",
+    "인증",
+    "보안",
+    "공격",
+    "사이버",
+    "해킹",
+    "반도체",
+    "데이터센터",
+    "클라우드",
+    "통신",
+    "네트워크",
+    "망",
+    "관제",
+    "주파수",
+    "5G",
+    "6G",
+    "KT",
+    "LG유플러스",
+    "LGU+",
+    "SK텔레콤",
+    "SKT",
+    "NHN",
+    "AX",
 ]
 
 
@@ -151,7 +393,67 @@ def _text_blob(row: pd.Series) -> str:
 
 def _term_hits(text: str, terms: Iterable[str]) -> int:
     lower = text.lower()
-    return sum(1 for term in terms if term.lower() in lower)
+    hits = 0
+    for term in terms:
+        term_value = str(term).strip()
+        if not term_value:
+            continue
+        if re.fullmatch(r"[A-Za-z0-9]{1,3}", term_value):
+            pattern = rf"(?<![A-Za-z0-9]){re.escape(term_value)}(?![A-Za-z0-9])"
+            if re.search(pattern, text, flags=re.IGNORECASE):
+                hits += 1
+        elif term_value.lower() in lower:
+            hits += 1
+    return hits
+
+
+def is_home_title_relevant(title: Any) -> bool:
+    clean_title = clean_text(title, 300)
+    if _term_hits(clean_title, TITLE_ALWAYS_EXCLUDE_TERMS):
+        return False
+    if _term_hits(clean_title, TITLE_LOW_VALUE_TERMS) and not _term_hits(clean_title, TITLE_STRONG_ICT_TERMS):
+        return False
+    if _term_hits(clean_title, TITLE_STRONG_ICT_TERMS):
+        return True
+    return _term_hits(clean_title, ["AI"]) > 0 and _term_hits(clean_title, AI_TITLE_CONTEXT_TERMS) > 0
+
+
+def ict_relevance_score(row: pd.Series) -> int:
+    title = clean_text(row.get("title"), 300)
+    if not is_home_title_relevant(title):
+        return -10
+    text = _text_blob(row)
+    focus_hits = _term_hits(text, FOCUS_ICT_TERMS)
+    score = focus_hits * 2
+    score += _term_hits(text, ICT_TERMS)
+    score += _term_hits(text, IMPACT_TERMS)
+    for _, category in keyword_items(row):
+        if category in {"기술", "표준"}:
+            score += 2
+        elif category == "기업":
+            score += 1
+    non_ict_hits = _term_hits(text, NON_ICT_TERMS)
+    if non_ict_hits:
+        score -= non_ict_hits if focus_hits else non_ict_hits * 4
+    return score
+
+
+def filter_ict_articles(df: pd.DataFrame, min_score: int = 3) -> pd.DataFrame:
+    if df.empty:
+        return df
+    scored = df.copy()
+    scored["_ict_score"] = scored.apply(ict_relevance_score, axis=1)
+    filtered = scored[scored["_ict_score"] >= min_score].copy()
+    return filtered.drop(columns=["_ict_score"], errors="ignore")
+
+
+def filter_home_articles(df: pd.DataFrame, min_score: int = 3) -> pd.DataFrame:
+    filtered = filter_ict_articles(df, min_score=min_score)
+    if filtered.empty:
+        return filtered
+    title_mask = filtered["title"].apply(is_home_title_relevant)
+    focused = filtered[title_mask].copy()
+    return focused if not focused.empty else filtered
 
 
 def issue_scores(row: pd.Series) -> tuple[int, int]:
@@ -210,6 +512,12 @@ def article_unit_label(row: pd.Series, unit_names: dict[int, str] | None = None)
 def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | None = None) -> pd.DataFrame:
     rows = []
     for _, row in df.iterrows():
+        title = clean_text(row.get("title"), 300)
+        if not is_home_title_relevant(title):
+            continue
+        ict_score = ict_relevance_score(row)
+        if ict_score < 3:
+            continue
         impact, urgency = issue_scores(row)
         entities = [name for name, _ in keyword_items(row)][:6]
         rows.append(
@@ -224,7 +532,7 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
                 "출처": clean_text(row.get("source"), 80),
                 "권장 조치": recommended_action(row, impact, urgency),
                 "조치 메모": "",
-                "_score": impact * 1.2 + urgency,
+                "_score": impact * 1.2 + urgency + min(ict_score, 10) * 0.4,
             }
         )
     if not rows:

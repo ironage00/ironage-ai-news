@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from html import unescape
 from typing import Any, Dict, List
 
 import numpy as np
@@ -17,6 +18,8 @@ ANSWER_MODEL = os.getenv("TTA_SEARCH_ANSWER_MODEL", "gpt-4o")
 
 def clean_text(value: Any, max_len: int = 1200) -> str:
     text_value = "" if value is None else str(value)
+    text_value = unescape(text_value)
+    text_value = re.sub(r"<[^>]+>", " ", text_value)
     text_value = re.sub(r"\s+", " ", text_value).strip()
     return text_value[:max_len]
 

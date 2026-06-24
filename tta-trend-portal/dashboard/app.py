@@ -8,8 +8,8 @@ import streamlit as st
 from artifact_utils import fetch_report_artifacts
 from db import fetch_articles, fetch_sources, fetch_stats, get_engine, is_postgres
 from graph_utils import build_edges, graph_summary
-from radar_utils import issue_board, new_entities, split_recent_baseline, trending_keywords, unit_issue_summary
-from search import build_answer, hybrid_search
+from radar_utils import filter_home_articles, issue_board, new_entities, split_recent_baseline, trending_keywords, unit_issue_summary
+from search import build_answer, clean_text, hybrid_search
 from workflow_utils import STATUS_OPTIONS, merge_issue_actions, save_issue_actions
 
 
@@ -684,9 +684,8 @@ def render_quick_queries():
 def esc(value, max_len: int | None = None) -> str:
     if pd.isna(value):
         value = ""
-    text = "" if value is None else str(value)
-    text = " ".join(text.split())
-    if max_len and len(text) > max_len:
+    text = clean_text(value, max_len or 1200)
+    if max_len and len(text) >= max_len:
         text = text[: max_len - 1].rstrip() + "…"
     return html.escape(text)
 
@@ -950,7 +949,10 @@ def render_suggested_questions(keywords: pd.DataFrame, entities: pd.DataFrame):
 
 
 def render_home(engine, stats: dict):
-    full_df = fetch_articles(engine, days=365, analyzed_only=True, limit=2500)
+    raw_df = fetch_articles(engine, days=365, analyzed_only=True, limit=2500)
+    full_df = filter_home_articles(raw_df)
+    if full_df.empty:
+        full_df = raw_df
     window_days, recent_df, baseline_df = choose_home_window(full_df)
     keywords = trending_keywords(recent_df, baseline_df, limit=12)
     entities = new_entities(recent_df, baseline_df, limit=12)
