@@ -7113,34 +7113,46 @@ def run_daily_collection(ai_model: str = None):
     _all_selected_links: set = set()
 
     if _all_units:
-        # ── Step B: 단별 선별 + 분析 ─────────────────────────────────────
-        for _unit in _all_units:
-            _uid      = _unit['id']
-            _udisplay = _unit['display_name']
-            _unit_cfg = load_unit_settings(_uid)
-            _keywords = _unit_cfg.get('keywords', [])
+        # == Step B-0: 4단 선별 병렬 실행 ===================================
+        log_info(f"  [B-0] 단별 선별 병렬 실행 ({len(_all_units)}단)...")
 
-            log_info(f"\n  🏢 [{_udisplay}] 처리 시작 (키워드 {len(_keywords)}개)")
-
-            # B-1. AI 선별 — 단별 키워드 + 1~5순위 정책 우선순위 적용
+        def _do_select(unit_tuple):
+            uid, udisplay, ukeywords = unit_tuple
             try:
-                _selected = filter_news_by_ai(
+                sel = filter_news_by_ai(
                     _deduped_pool,
                     ai_model=ai_model,
                     max_results=50,
-                    unit_keywords=_keywords,
-                    unit_display=_udisplay,
+                    unit_keywords=ukeywords,
+                    unit_display=udisplay,
                 )
-            except Exception as _e:
-                log_warning(f"⚠️ [{_udisplay}] AI 선별 실패: {_e} — 키워드 매칭 상위 25개로 대체")
-                _selected = _deduped_pool[:25]
+            except Exception as _se:
+                log_warning(f"[{udisplay}] AI 선별 실패: {_se} - 상위 25개 대체")
+                sel = _deduped_pool[:25]
+            log_info(f"     [{udisplay}] AI 선별: {len(sel)}개")
+            return uid, udisplay, sel
 
-            log_info(f"     ✅ AI 선별: {len(_selected)}개 (목표 50)")
-            _unit_selected[_uid] = _selected
-            _all_selected_links.update(a['link'] for a in _selected)
+        _unit_tuples = []
+        for _unit in _all_units:
+            _uid      = _unit["id"]
+            _udisplay = _unit["display_name"]
+            _unit_cfg = load_unit_settings(_uid)
+            _keywords = _unit_cfg.get("keywords", [])
+            _unit_tuples.append((_uid, _udisplay, _keywords))
 
-            # B-2. 선별 50개 → DB에 is_selected=True + unit_id 태깅
-            _sel_links_batch = [a['link'] for a in _selected]
+        with ThreadPoolExecutor(max_workers=len(_unit_tuples)) as _sel_exec:
+            _sel_futs = {_sel_exec.submit(_do_select, t): t[0] for t in _unit_tuples}
+            for _fut in as_completed(_sel_futs):
+                try:
+                    _fuid, _fdisp, _fsel = _fut.result()
+                    _unit_selected[_fuid] = _fsel
+                    _all_selected_links.update(a["link"] for a in _fsel)
+                except Exception as _fe:
+                    log_warning(f"선별 future 오류 (uid={_sel_futs[_fut]}): {_fe}")
+
+        # == Step B-1: is_selected DB 태깅 ===================================
+        for _uid, _unit_sel in _unit_selected.items():
+            _sel_links_batch = [a["link"] for a in _unit_sel]
             try:
                 with get_db_session() as _s:
                     for _a in _s.query(NewsArticle).filter(
@@ -7149,46 +7161,86 @@ def run_daily_collection(ai_model: str = None):
                         _a.is_selected = True
                         if _a.unit_id is None:
                             _a.unit_id = _uid
-            except Exception as _e:
-                log_warning(f"⚠️ [{_udisplay}] is_selected 태깅 실패: {_e}")
+            except Exception as _de:
+                log_warning(f"is_selected 태깅 실패 (uid={_uid}): {_de}")
 
-            # B-3. 우선순위 순서(AI 선별 순) 상위 30개 → 20개 분析 목표
-            #      캐시 히트 먼저 채우고, 나머지를 신규 분析
-            _pre_cached = []
-            _fresh_queue = []
-            for _art in _selected[:30]:
-                if _art['link'] in _analysis_cache:
-                    _pre_cached.append(_analysis_cache[_art['link']])
-                else:
-                    _fresh_queue.append(_art)
+        # == Step B-2: 분析 unique pool 수집 (라운드로빈, 단별 우선순위 보존) ==
+        _analysis_pool_ordered = []
+        _pool_seen: set = set()
+        _max_rank = max((len(s) for s in _unit_selected.values()), default=0)
+        for _rank in range(min(30, _max_rank)):
+            for _uid_k in sorted(_unit_selected.keys()):
+                _sl = _unit_selected[_uid_k]
+                if _rank < len(_sl) and _sl[_rank]["link"] not in _pool_seen:
+                    _analysis_pool_ordered.append(_sl[_rank])
+                    _pool_seen.add(_sl[_rank]["link"])
 
-            _need = max(0, 20 - len(_pre_cached))
-            _newly = []
-            if _fresh_queue and _need > 0:
-                # 대체 풀: 선별 31~50위 + 중복제거 풀 미선별분
-                _sel_links_set = {n['link'] for n in _selected}
-                _repl = _selected[30:] + [
-                    x for x in _deduped_pool if x['link'] not in _sel_links_set
-                ]
+        log_info(
+            f"  [B-2] 통합 병렬 분析 풀: {len(_analysis_pool_ordered)}개 unique"
+            f" (4단 top-30 합산, workers=5)"
+        )
+
+        # == Step B-3: 병렬 분析 =============================================
+        _analysis_cache: dict = {}
+        _cache_lock = threading.Lock()
+
+        def _analyze_one(art_item):
+            try:
+                art_item = dict(art_item)
+                art_item["content"] = get_article_content(art_item["link"])
+                if any(k in art_item["content"] for k in [
+                    "실패", "추출하지 못했습니다", "너무 짧아", "품질이 낮아"
+                ]):
+                    return art_item["link"], None
+                analysis = analyze_news_with_ai(art_item, ai_model=ai_model)
+                if is_valid_analysis(analysis):
+                    art_item["analysis_result"] = analysis
+                    return art_item["link"], art_item
+                return art_item["link"], None
+            except Exception as _ae:
+                log_warning(f"병렬 분析 오류 ({art_item.get(\"title\",\"\")[:30]}): {_ae}")
+                return art_item["link"], None
+
+        _workers = min(5, max(1, len(_analysis_pool_ordered)))
+        with ThreadPoolExecutor(max_workers=_workers) as _ana_exec:
+            _ana_futs = [_ana_exec.submit(_analyze_one, a) for a in _analysis_pool_ordered]
+            _done_cnt = 0
+            for _fut in as_completed(_ana_futs):
                 try:
-                    _newly = analyze_news_with_replacement(
-                        _fresh_queue[:_need + 5],  # 여유 5개로 실패 대체 흡수
-                        _repl,
-                        target_count=_need,
-                        ai_model=ai_model,
-                    )
-                except Exception as _e:
-                    log_warning(f"⚠️ [{_udisplay}] 분析 실패: {_e}")
+                    _lnk, _res = _fut.result()
+                    _done_cnt += 1
+                    if _res is not None:
+                        with _cache_lock:
+                            _analysis_cache[_lnk] = _res
+                        log_info(
+                            f"     [{_done_cnt}/{len(_analysis_pool_ordered)}]"
+                            f" {_res[\"title\"][:40]}..."
+                        )
+                    else:
+                        log_info(f"     [{_done_cnt}/{len(_analysis_pool_ordered)}] 실패/건너뜀")
+                except Exception as _fae:
+                    log_warning(f"분析 future 오류: {_fae}")
 
-            for _r in _newly:
-                _analysis_cache[_r['link']] = _r
+        log_info(
+            f"  [B-3] 병렬 분析 완료: {len(_analysis_cache)}개 성공"
+            f" / {len(_analysis_pool_ordered)}개 시도"
+        )
 
-            _unit_results = (_pre_cached + _newly)[:20]
-            _unit_analyzed[_uid] = _unit_results
+        # == Step B-4: 단별 top-20 배정 (선별 순서대로 캐시에서 픽) =========
+        for _unit in _all_units:
+            _uid      = _unit["id"]
+            _udisplay = _unit["display_name"]
+            _sel      = _unit_selected.get(_uid, [])
+            _unit_res = []
+            for _art in _sel:
+                if _art["link"] in _analysis_cache:
+                    _unit_res.append(_analysis_cache[_art["link"]])
+                if len(_unit_res) >= 20:
+                    break
+            _unit_analyzed[_uid] = _unit_res
             log_info(
-                f"     ✅ 분析: {len(_unit_results)}개 "
-                f"(캐시 재활용 {len(_pre_cached)}개 / 신규 {len(_newly)}개) "
-                f"/ 추가수집뉴스: {len(_selected) - len(_unit_results)}개"
+                f"  [{_udisplay}] 분析 배정: {len(_unit_res)}개"
+                f" / 추가수집뉴스: {len(_sel) - len(_unit_res)}개"
             )
 
         # ── Step C: 결과 저장 + 단 배정 재검토 ──────────────────────────
