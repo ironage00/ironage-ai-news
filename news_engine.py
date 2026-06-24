@@ -7088,81 +7088,164 @@ def run_daily_collection(ai_model: str = None):
     )
     log_info(f"   ✅ {saved_count}개 저장 완료")
 
-    log_info(f"\n[작업 3/9] AI 선별 + 중복 제거 중 ({ai_model.upper()})...")
-    log_info(f"   📊 수집된 뉴스: {len(unique_news_items)}개")
-    
-    news_to_analyze = safe_execute(
-        lambda: filter_news_by_ai(unique_news_items, ai_model=ai_model, max_results=30),
-        error_msg="AI 선별 실패",
-        default_return=unique_news_items[:20]
-    )
-    
-    log_info(f"   ✅ AI 선별 완료: {len(news_to_analyze)}개 (중복 제거 후)")
-    log_info(f"   🔄 중복 제거율: {(1 - len(news_to_analyze) / 30) * 100:.1f}%")
+    log_info(f"\n[작업 3-5/9] 단별 AI 선별 + 심층 분析 + 저장 ({ai_model.upper()})...")
+    log_info(f"   📊 전체 수집: {len(unique_news_items)}개 → 단별 50개 선별 → 20개 분析 목표")
 
-    log_info(f"\n[작업 4/9] 심층 분석 중 ({ai_model.upper()})...")
-    log_info(f"   🎯 목표: 상위 20개 분석")
+    _all_units = get_all_units()
 
-    # 선별된 30개 중 상위 20개를 먼저 분석 시도.
-    # 대체 후보 우선순위: 선별된 나머지 10개(news_to_analyze[20:]) → 전체 수집 뉴스
-    _replacement_pool = news_to_analyze[20:] + [
-        item for item in unique_news_items
-        if item['link'] not in {n['link'] for n in news_to_analyze}
-    ]
-    analyzed_results = safe_execute(
-        lambda: analyze_news_with_replacement(
-            news_to_analyze[:20],
-            _replacement_pool,
-            target_count=20,
-            ai_model=ai_model
-        ),
-        error_msg="뉴스 분석 실패",
-        default_return=[]
-    )
-    
-    if not analyzed_results:
-        # 월요일이면 주말 누적 기사만으로 발송 가능 — 조기 종료하지 않고 계속 진행
-        _is_monday_fallback = (datetime.date.today().weekday() == 0)
-        if not _is_monday_fallback:
-            log_error("❌ 분석된 뉴스가 없습니다. 리포트 생성을 건너뜁니다.")
-            return []
-        log_warning("⚠️ 오늘(월요일) 분석된 뉴스 없음 — 주말 누적 기사로만 발송을 시도합니다.")
-    
-    log_info("\n[작업 5/9] 분析 결과 저장 + 단(unit) 배정 중...")
-    saved_analysis = 0
-    unit_assigned = 0
-    for result in analyzed_results:
-        try:
-            with get_db_session() as session:
-                article = session.query(NewsArticle).filter_by(
-                    link=result['link']
-                ).first()
+    _analysis_cache: dict = {}
+    _unit_analyzed: dict = {}
+    _all_selected_links: set = set()
 
-                if article:
-                    article.is_analyzed = True
-                    article.analysis_result = result.get('analysis_result', '')
-                    article.ai_model = result.get('ai_model', ai_model)
-                    if result.get('extracted_keywords'):
-                        article.extracted_keywords = result['extracted_keywords']
-                    _saved_art_id = article.id
-                    saved_analysis += 1
-                else:
-                    _saved_art_id = None
-        except Exception as e:
-            log_warning(f"⚠️ 분析 결과 저장 실패: {result['title'][:30]}...")
-            log_error(traceback.format_exc())
-            _saved_art_id = None
+    if _all_units:
+        for _unit in _all_units:
+            _uid      = _unit['id']
+            _udisplay = _unit['display_name']
+            _unit_cfg = load_unit_settings(_uid)
+            _keywords = _unit_cfg.get('keywords', [])
 
-        # 단 배정: 추출 키워드를 단별 모니터링 키워드와 매칭
-        if _saved_art_id and result.get('extracted_keywords'):
+            log_info(f"\n  🏢 [{_udisplay}] 단별 선별 시작 (키워드 {len(_keywords)}개)")
+
             try:
-                changed = reclassify_article_unit(_saved_art_id, result['extracted_keywords'])
-                if changed:
-                    unit_assigned += 1
+                _selected = filter_news_by_ai(
+                    unique_news_items,
+                    ai_model=ai_model,
+                    max_results=50,
+                    unit_keywords=_keywords,
+                    unit_display=_udisplay,
+                )
+            except Exception as _e:
+                log_warning(f"⚠️ [{_udisplay}] AI 선별 실패: {_e}")
+                _selected = unique_news_items[:25]
+
+            log_info(f"     ✅ AI 선별: {len(_selected)}개")
+            _all_selected_links.update(a['link'] for a in _selected)
+
+            _pre_cached = []
+            _to_analyze_fresh = []
+            for _art in _selected[:30]:
+                if _art['link'] in _analysis_cache:
+                    _pre_cached.append(_analysis_cache[_art['link']])
+                else:
+                    _to_analyze_fresh.append(_art)
+
+            _need_count = max(0, 20 - len(_pre_cached))
+            _newly = []
+            if _to_analyze_fresh and _need_count > 0:
+                _sel_links = {n['link'] for n in _selected}
+                _repl = _selected[30:] + [
+                    x for x in unique_news_items if x['link'] not in _sel_links
+                ]
+                try:
+                    _newly = analyze_news_with_replacement(
+                        _to_analyze_fresh[:_need_count + 5],
+                        _repl,
+                        target_count=_need_count,
+                        ai_model=ai_model,
+                    )
+                except Exception as _e:
+                    log_warning(f"⚠️ [{_udisplay}] 분析 실패: {_e}")
+
+            for _r in _newly:
+                _analysis_cache[_r['link']] = _r
+
+            _unit_results = (_pre_cached + _newly)[:20]
+            _unit_analyzed[_uid] = _unit_results
+            log_info(
+                f"     ✅ 분析: {len(_unit_results)}개 "
+                f"(캐시 재활용 {len(_pre_cached)}개 / 신규 {len(_newly)}개)"
+            )
+
+        log_info(f"\n[작업 5/9] 분析 결과 저장 + 단 배정 중...")
+        analyzed_results = []
+        _saved_links_global: set = set()
+        saved_analysis = 0
+        unit_assigned = 0
+
+        for _unit in _all_units:
+            _uid      = _unit['id']
+            _udisplay = _unit['display_name']
+            for _result in _unit_analyzed.get(_uid, []):
+                _saved_art_id = None
+                try:
+                    with get_db_session() as session:
+                        _article = session.query(NewsArticle).filter_by(
+                            link=_result['link']
+                        ).first()
+                        if _article:
+                            _article.is_analyzed = True
+                            _article.analysis_result = _result.get('analysis_result', '')
+                            _article.ai_model      = _result.get('ai_model', ai_model)
+                            if _result.get('extracted_keywords'):
+                                _article.extracted_keywords = _result['extracted_keywords']
+                            if _article.unit_id is None:
+                                _article.unit_id = _uid
+                            _saved_art_id = _article.id
+                            saved_analysis += 1
+                except Exception:
+                    log_warning(f"⚠️ [{_udisplay}] 저장 실패: {_result['title'][:30]}...")
+                    log_error(traceback.format_exc())
+
+                if _saved_art_id and _result.get('extracted_keywords'):
+                    try:
+                        if reclassify_article_unit(_saved_art_id, _result['extracted_keywords']):
+                            unit_assigned += 1
+                    except Exception:
+                        pass
+
+                if _result['link'] not in _saved_links_global:
+                    analyzed_results.append(_result)
+                    _saved_links_global.add(_result['link'])
+
+        log_info(
+            f"   ✅ 저장 {saved_analysis}개 / 리포트용 {len(analyzed_results)}개 "
+            f"(4개 단 합산 중복 제거) / 단 배정 변경 {unit_assigned}개"
+        )
+        news_to_analyze = [
+            a for a in unique_news_items if a['link'] in _all_selected_links
+        ]
+
+    else:
+        log_info("   (폴백) 단 미등록 — 전역 선별 30개 → 20개 분析")
+        news_to_analyze = safe_execute(
+            lambda: filter_news_by_ai(unique_news_items, ai_model=ai_model, max_results=30),
+            error_msg="AI 선별 실패",
+            default_return=unique_news_items[:20]
+        )
+        _repl0 = news_to_analyze[20:] + [
+            x for x in unique_news_items if x['link'] not in {n['link'] for n in news_to_analyze}
+        ]
+        analyzed_results = safe_execute(
+            lambda: analyze_news_with_replacement(
+                news_to_analyze[:20], _repl0, target_count=20, ai_model=ai_model
+            ),
+            error_msg="뉴스 분析 실패",
+            default_return=[]
+        )
+        saved_analysis = 0
+        for _result in analyzed_results:
+            try:
+                with get_db_session() as session:
+                    _article = session.query(NewsArticle).filter_by(
+                        link=_result['link']
+                    ).first()
+                    if _article:
+                        _article.is_analyzed = True
+                        _article.analysis_result = _result.get('analysis_result', '')
+                        _article.ai_model = _result.get('ai_model', ai_model)
+                        if _result.get('extracted_keywords'):
+                            _article.extracted_keywords = _result['extracted_keywords']
+                        saved_analysis += 1
             except Exception:
                 pass
+        log_info(f"   ✅ 폴백 저장 {saved_analysis}개")
 
-    log_info(f"   ✅ {saved_analysis}개 저장 완료 / 단 배정 변경 {unit_assigned}개")
+    if not analyzed_results:
+        _is_monday_fallback = (datetime.date.today().weekday() == 0)
+        if not _is_monday_fallback:
+            log_error("❌ 분析된 뉴스가 없습니다. 리포트 생성을 건너뜁니다.")
+            return []
+        log_warning("⚠️ 오늘(월요일) 분析된 뉴스 없음 — 주말 누적 기사로만 발송을 시도합니다.")
     
     log_info("\n[작업 6/9] 리포트 생성 및 발송 중...")
 
