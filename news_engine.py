@@ -2413,18 +2413,18 @@ def _phase5_retry_call(model_name: str, retry_prompt: str) -> str:
 def filter_news_by_ai(
     news_items: List[Dict],
     ai_model: str = 'openai',
-    max_results: int = 60,
+    max_results: int = 30,
     unit_keywords: List[str] = None,
     unit_display: str = None,
 ) -> List[Dict]:
     """
-    AI를 사용하여 중요한 뉴스 선별 (중복 제거 강화)
-    
+    AI를 사용하여 중요한 뉴스 선별 (정책 맥락 우선순위 + 중복 제거 강화)
+
     Args:
         news_items: 수집된 뉴스 목록
         ai_model: 사용할 AI 모델 ('openai', 'claude', 'perplexity', 'gemini')
-        max_results: 최대 선별 개수 (기본값: 60)
-    
+        max_results: 최대 선별 개수 (기본값: 30 — 분석 대상 20개 + 실패 대비 예비 10개)
+
     Returns:
         선별된 뉴스 목록 (중복 제거 후 최대 max_results개)
     """
@@ -2616,72 +2616,77 @@ def filter_news_by_ai(
             f"\n핵심 관심 키워드: {', '.join(unit_keywords[:10])}"
         )
 
-    # ✅ 수정: 중복 제거 강화 + 단별 도메인 인식 프롬프트
+    # 정책 맥락 우선순위 + 중복 제거 강화 프롬프트 (구 시스템 선별 판단력 반영)
     prompt = f"""
+[역할]
 당신은 ICT 표준 정책 최고 전문가의 수석 보좌관입니다.{_unit_kw_hint}
-당신의 임무는 아래 뉴스 목록에서 **중복을 철저히 제거**한 뒤, '{_unit_label}' 관점에서 가장 중요한 뉴스 {target_count}개를 선별하는 것입니다.
+당신의 임무는 아래 뉴스 목록에서 내용이 중복되는 기사를 제거한 뒤, '{_unit_label}' 관점에서 가장 중요한 뉴스 {target_count}개를 선별하는 것입니다.
 
 [작업 절차]
-1. **1차 중복 제거 (매우 엄격하게 적용):**
-   - 동일한 사건, 정책, 기술을 다루는 기사들을 하나의 그룹으로 묶습니다.
-   - 예시:
-     * "FCC 위성통신 주파수 승인" 관련 기사 5개 → 대표 1개만 선택
-     * "삼성전자 6G 투자" 관련 기사 3개 → 대표 1개만 선택
-     * "ITU-R WP5D 회의 결과" 관련 기사 4개 → 대표 1개만 선택
-   
-   - 각 그룹에서 **가장 포괄적이고 정보가 풍부한 기사 1개**만 남깁니다.
-   - 판단 기준:
-     * 더 많은 구체적 수치와 날짜 포함
-     * 더 많은 이해관계자 언급
-     * 더 많은 본문/요약 정보와 원문 접근성
-     * 더 권위 있는 출처 (공식 발표 > 언론 보도)
+1. **1단계: 중복 제거 (매우 엄격하게 적용)**
+   동일한 사건·정책·결정을 다루는 기사들을 하나로 묶고, 각 그룹에서 가장 포괄적인 기사 1개만 선택합니다.
+   - "FCC 위성통신 주파수 승인" 관련 기사 5개 → 대표 1개
+   - "삼성전자 6G 투자" 관련 기사 3개 → 대표 1개
+   - "ITU-R WP5D 회의 결과" 관련 기사 4개 → 대표 1개
+   대표 선택 기준: 더 많은 수치·날짜 포함 > 더 많은 이해관계자 언급 > 공식 발표 > 언론 보도
 
-2. **2차 선별 (중복 제거 후):**
-   - 중복이 제거된 목록에서 아래 [선별 최우선 기준]에 따라 최종 {target_count}개를 선별합니다.
+2. **2단계: 정책 맥락 기반 우선순위 선별**
+   중복 제거 후 아래 [선별 우선순위]에 따라 최종 {target_count}개를 선별합니다.
 
-[선별 최우선 기준]
-정책적 중요도를 최우선으로 고려하며, 특히 아래 주제를 다루는 국내외 뉴스에 높은 가중치를 부여합니다.
-- **해외 주요국 정책/규제**: 미국(FCC), 유럽(ETSI) 등 해외 주요국의 ICT 정책, 법안, 규제 변화
-- **국제 표준화 동향**: 3GPP, ITU 등 국제 표준화 기구의 주요 결정 및 논의 사항
-- **국내 정부 계획 및 발표**: 국내 정부 부처가 발표하는 ICT 정책, 법안, 기술 개발 계획
-- **산업계 핵심 동향**: ICT 산업 및 시장 판도에 큰 영향을 미치는 국내외 기업의 기술 개발 및 사업 전략
-- **정책 비판 및 대안**: 현재 정책의 문제점을 지적하거나 새로운 대안을 제시하는 기사
+[선별 우선순위 — 번호가 낮을수록 우선 선택]
 
-[필수 제외 기준]
-아래 유형의 뉴스는 ICT/통신/표준화와 직접 관련이 없으므로 반드시 제외합니다.
-- 지방선거, 선거 운동, 정치인 발언, 정당 관련 뉴스
-- 스포츠, 연예, 방송 프로그램 관련 뉴스
-- 여행, 관광, 맛집, 생활 정보 뉴스
-- 날씨, 재난, 사건·사고(ICT 인프라와 무관한 것)
-- ICT/통신/표준화와 직접 관련 없는 일반 경제·사회 뉴스
-- 기업 채용·인사 공고 (ICT 기술직 채용 포함, 기업의 일반 HR 소식)
-- 주가·실적 뉴스 중 기술/정책 내용이 없는 순수 재무·투자 기사
-- ICT 기술을 활용한 일반 소비자 서비스 홍보 (AI 맛집 추천, 스마트 반려동물 앱 등)
-- 지자체 일반 행정 디지털화 사업 중 국가 표준·ICT 정책과 무관한 단순 전산화 기사
-→ ICT/통신/표준화 기술 및 정책에 직접 관련된 기사만 선택합니다.
+**1순위 (최우선): 해외 주요국 정책·규제 변화**
+  ▶ 미국 FCC·NTIA, 유럽 EC·ETSI, 일본 총무성, 중국 공업정보화부 발표
+  ▶ 주요국 ICT 법안 통과·시행, 주파수 정책 결정, 사업자 인가
+  예시: "FCC, 저궤도 위성 주파수 28GHz 대역 상업 운용 승인"
+
+**2순위: 국제 표준화 동향**
+  ▶ 3GPP, ITU-T/R, IEEE, ETSI, IETF 주요 결정·논의
+  ▶ 표준 릴리즈 채택, 스터디아이템 시작·종료, WG 회의 결과
+  예시: "3GPP Rel-19, AI-RAN 표준화 스코프 확정"
+
+**3순위: 국내 정부 정책·계획 발표**
+  ▶ 과기정통부, 방통위, 국무조정실 공식 발표
+  ▶ 국내 ICT 법안·규제 변화, 국가 R&D 계획 확정
+  예시: "과기정통부, 6G 주파수 연구개발 로드맵 발표"
+
+**4순위: 산업계 핵심 동향**
+  ▶ 삼성·LG·SKT·KT 등 국내 주요 기업 전략 발표
+  ▶ 에릭슨·노키아·화웨이·퀄컴 등 글로벌 기업 기술 발표
+  ▶ 표준 구현 상용화 일정, 대규모 투자·계약
+  예시: "에릭슨, O-RAN 기반 5G SA 상용망 100개국 달성"
+
+**5순위: 정책 분석·비판·대안 제시**
+  ▶ 현행 ICT 정책 문제점 지적, 새로운 정책 방향 제안
+  예시: "국내 6G 주파수 정책, 선진국 대비 2년 지연 우려"
+
+[반드시 제외할 뉴스]
+- 외교·안보·군사 뉴스 (ICT 인프라 직접 연관 없는 것)
+- 선거, 정치인 발언, 정당 관련 뉴스
+- 스포츠, 연예, 방송, 여행, 맛집
+- 주가·실적 중 기술·정책 내용 없는 순수 재무 기사
+- ICT 기술 활용한 일반 소비자 서비스 홍보 (AI 맛집 추천 등)
+- 기업 채용·인사 공고
 
 [중복 판단 예시]
+중복 → 1개만 선택:
+  0: FCC, 위성통신 주파수 28GHz 대역 승인
+  5: FCC의 위성통신 주파수 할당 결정 내용
+  12: 미국 FCC, 위성통신 주파수 정책 변경
+  → 가장 구체적인 기사 1개만 선택
 
-**중복으로 판단해야 할 경우:**
-- 0: FCC, 위성통신 주파수 28GHz 대역 승인 발표
-- 5: FCC의 위성통신 주파수 할당 결정 상세 내용
-- 12: 미국 FCC, 위성통신 주파수 정책 변경
-→ **대표 기사 1개만 선택** (가장 구체적인 기사)
-
-**중복이 아닌 경우:**
-- 3: FCC, 위성통신 주파수 28GHz 승인 (미국 정책)
-- 8: 과기정통부, 6G 주파수 대역 연구 착수 (한국 정책)
-- 15: 3GPP Release 19, 위성통신 표준 논의 (국제 표준)
-→ **모두 별개의 사건이므로 유지**
+중복 아님 → 모두 선택 가능:
+  3: FCC, 위성통신 주파수 28GHz 승인 (미국 정책 → 1순위)
+  8: 과기정통부, 6G 주파수 연구 착수 (국내 정책 → 3순위)
+  15: 3GPP Rel-19 위성통신 표준 논의 (국제 표준 → 2순위)
 
 [뉴스 목록]
 {formatted_news_list}
 
-[요청]
-위 절차와 기준에 따라 **중복을 철저히 제거**한 뒤, 최종적으로 선별된 뉴스의 번호 {target_count}개만 쉼표(,)로 구분하여 응답해 주십시오.
-(설명이나 다른 텍스트는 절대 포함하지 마세요. 번호만 응답해야 합니다.)
-
-**중요:** 동일 사건을 다룬 기사가 여러 개 있으면, 반드시 대표 기사 1개만 선택하세요.
+[응답]
+위 절차와 우선순위에 따라 선별된 뉴스 번호 {target_count}개를 쉼표(,)로 구분하여 응답하세요.
+숫자만 응답하세요. 설명·이유·다른 텍스트는 절대 포함하지 마세요.
+동일 사건 기사가 여러 개면 반드시 대표 1개만 선택하세요.
 """
 
     try:
@@ -2763,18 +2768,60 @@ def filter_news_by_ai(
         if not selected_news:
             raise ValueError("AI가 유효한 인덱스를 반환하지 않았습니다.")
 
+        # =========================================================================
+        # Stage 4: 최종 시그니처 중복 검증 (안전장치)
+        # AI가 간혹 유사 제목을 중복 선택하는 경우 차단
+        # =========================================================================
+        final_news: List[Dict] = []
+        seen_sigs_final: set = set()
+        for item in selected_news:
+            sig = extract_signature(item['title'])
+            if sig not in seen_sigs_final:
+                final_news.append(item)
+                seen_sigs_final.add(sig)
+            else:
+                log_info(f"    → Stage 4 중복 제거: '{item['title'][:45]}...'")
+        if len(final_news) < len(selected_news):
+            log_info(f"  • Stage 4 최종 검증: {len(selected_news)}개 → {len(final_news)}개")
+
+        # 목표 개수 미달 시 representative_news 후보풀에서 자동 보충
+        if len(final_news) < target_count:
+            log_info(
+                f"    (보충) AI 선별 {len(final_news)}개 < 목표 {target_count}개 "
+                f"— 후보풀 {len(representative_news)}개에서 보충"
+            )
+            for item in representative_news:
+                if len(final_news) >= target_count:
+                    break
+                sig = extract_signature(item['title'])
+                if sig not in seen_sigs_final:
+                    final_news.append(item)
+                    seen_sigs_final.add(sig)
+            log_info(f"    → 보충 후: {len(final_news)}개")
+
+        selected_news = final_news
         for _item in selected_news:
             _item['quality_score'] = 1.0
 
-        log_info(f"  ✅ AI 선별: {len(selected_news)}개 (중복 제거 완료)")
+        log_info(f"  ✅ AI 선별 완료: {len(selected_news)}개 (Stage 0→1→2→3→4 파이프라인)")
         return selected_news
 
     except Exception as e:
-        log_warning(f"  ⚠️ AI 뉴스 선별 실패: {e}. 최신 뉴스 {max_results}개로 대체합니다.")
+        log_warning(f"  ⚠️ AI 뉴스 선별 실패: {e}. ICT 필터 후보풀 {max_results}개로 대체합니다.")
         log_error(traceback.format_exc())
-        fallback = news_for_ai[:max_results]
+        # 실패 대응: representative_news에서 시그니처 중복 제거 후 반환
+        fallback: List[Dict] = []
+        seen_sigs_fallback: set = set()
+        for item in representative_news:
+            if len(fallback) >= max_results:
+                break
+            sig = extract_signature(item['title'])
+            if sig not in seen_sigs_fallback:
+                fallback.append(item)
+                seen_sigs_fallback.add(sig)
         for _item in fallback:
             _item['quality_score'] = 1.0
+        log_warning(f"  ⚠️ 폴백 반환: {len(fallback)}개 (중복 제거 후)")
         return fallback
 
 
