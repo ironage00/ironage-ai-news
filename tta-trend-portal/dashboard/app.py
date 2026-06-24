@@ -666,6 +666,35 @@ def render_header(stats: dict, embed_mode: bool):
         st.caption("별도 대시보드 프로그램입니다. 기존 운영 코드는 수정하거나 import하지 않습니다.")
 
 
+@st.cache_data(
+    ttl=60 * 60 * 8,
+    show_spinner="탑 시그널 RAG 요약 생성 중…",
+)
+def build_rag_top_signal(_engine, issue_title: str, _date_key: str) -> str:
+    """Return a 3-sentence GPT-4o brief for the top issue, cached per day."""
+    if not issue_title:
+        return ""
+    try:
+        results, _ = hybrid_search(
+            _engine,
+            issue_title,
+            days=90,
+            unit_id=None,
+            top_k=8,
+            analyzed_only=True,
+        )
+        if results.empty:
+            return ""
+        prompt = (
+            f"다음 ICT 표준화 이슈를 TTA 직원이 바로 활용할 수 있도록 3문장으로 요약해 주세요. "
+            f"첫 문장: 현황과 핵심 사실. 두 번째 문장: 표준화 관련 영향. 세 번째 문장: 권장 조치.\n"
+            f"이슈: {issue_title}"
+        )
+        return build_answer(prompt, results)
+    except Exception:
+        return ""
+
+
 def render_quick_queries():
     st.markdown('<div class="quick-query-panel"><strong>빠른 질문</strong>', unsafe_allow_html=True)
     examples = [
@@ -736,12 +765,18 @@ def render_chip_cloud(chips: pd.DataFrame, label_col: str, score_col: str, fallb
     st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 
-def render_issue_cards(board: pd.DataFrame):
+def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
     if board.empty:
         st.info("표준화 대응 후보를 만들 수 있는 분석 기사가 아직 부족합니다.")
         return
 
     top = board.iloc[0]
+    body = esc(rag_summary, 400) if rag_summary else esc(top.get("권장 조치"), 260)
+    rag_badge = (
+        '<span class="meta-pill" style="background:rgba(34,211,238,.18);color:#a5f3fc;">RAG 요약</span>'
+        if rag_summary
+        else ""
+    )
     st.markdown(
         f"""
         <div class="briefing-card dark" style="margin-bottom:12px;">
@@ -751,8 +786,9 @@ def render_issue_cards(board: pd.DataFrame):
             <span class="meta-pill">영향도 {esc(top.get("영향도"))}/10</span>
             <span class="meta-pill">긴급도 {esc(top.get("긴급도"))}/10</span>
             <span class="meta-pill">{esc(top.get("담당 단"))}</span>
+            {rag_badge}
           </div>
-          <div class="briefing-body">{esc(top.get("권장 조치"), 260)}</div>
+          <div class="briefing-body">{body}</div>
           <a class="briefing-link" href="{esc(top.get("관련 기사"))}" target="_blank">근거 기사 열기</a>
         </div>
         """,
@@ -950,9 +986,10 @@ def render_suggested_questions(keywords: pd.DataFrame, entities: pd.DataFrame):
 
 def render_home(engine, stats: dict):
     raw_df = fetch_articles(engine, days=365, analyzed_only=True, limit=2500)
-    full_df = filter_home_articles(raw_df)
+    # ICT 관련성 필터 — 비ICT 기사 제거 (min_score=3)
+    full_df = filter_home_articles(raw_df, min_score=3)
     if full_df.empty:
-        full_df = raw_df
+        full_df = raw_df  # fallback: 데이터 부족 시 필터 미적용
     window_days, recent_df, baseline_df = choose_home_window(full_df)
     keywords = trending_keywords(recent_df, baseline_df, limit=12)
     entities = new_entities(recent_df, baseline_df, limit=12)
@@ -961,17 +998,29 @@ def render_home(engine, stats: dict):
     reports, report_source = fetch_report_artifacts(engine)
 
     st.markdown("### 인텔리전스 홈")
-    st.caption(f"최근 {window_days}일 기준 실데이터 브리핑입니다. DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}")
+    ict_ratio = f"ICT 필터 후 {len(full_df):,} / 원본 {len(raw_df):,}건"
+    st.caption(
+        f"최근 {window_days}일 기준 실데이터 브리핑 · {ict_ratio} · "
+        f"DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}"
+    )
 
     # ── KPI strip ────────────────────────────────────
     render_kpi_strip(stats, board, keywords, reports)
 
     # ── 핵심 시그널 + 키워드 바 (나란히) ───────────────
     st.markdown('<div class="home-section-title">오늘의 핵심 시그널</div>', unsafe_allow_html=True)
-    st.markdown('<div class="home-section-sub">AI 분석문, 키워드, 최신성, 표준화 관련도를 조합해 직원이 먼저 볼 이슈를 띄웁니다.</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="home-section-sub">RAG 기반 AI 요약 · 영향도·긴급도·ICT 관련성 종합 1순위 이슈</div>',
+        unsafe_allow_html=True,
+    )
+    # RAG 요약 — 하루 단위 캐시 (첫 로드만 GPT 호출)
+    top_issue_title = str(board.iloc[0].get("이슈 후보", "")) if not board.empty else ""
+    rag_date_key = datetime.now().strftime("%Y-%m-%d")
+    rag_summary = build_rag_top_signal(engine, top_issue_title, rag_date_key)
+
     sig_col, kw_col = st.columns([13, 9])
     with sig_col:
-        render_issue_cards(board)
+        render_issue_cards(board, rag_summary=rag_summary)
     with kw_col:
         render_keyword_bars(keywords)
 

@@ -45,6 +45,35 @@ COLUMNS = [
 ]
 BOOL_COLS = {"is_selected", "is_analyzed"}
 
+# 제목에 이 단어가 있으면 ICT 무관 기사로 간주해 sync 제외
+_NON_ICT_BLOCK = [
+    "선거", "대선", "총선", "후보", "여론조사",
+    "부동산", "아파트", "재건축", "분양",
+    "맛집", "연예", "스포츠", "야구", "축구", "골프",
+    "주가", "증시", "공약", "사설", "횡령", "배임",
+    "굿즈", "항암", "신약", "임플란트", "화장품",
+    "농업", "도축", "리테일", "retailer", "daiso",
+]
+
+# 제목에 이 단어가 있으면 ICT 관련이므로 _NON_ICT_BLOCK을 무시하고 통과
+_ICT_OVERRIDE = [
+    "통신", "이동통신", "5G", "6G", "B5G", "AI-RAN", "NTN",
+    "위성", "오픈랜", "O-RAN", "양자", "표준", "표준화",
+    "ITU", "3GPP", "IEEE", "ETSI", "네트워크", "주파수",
+    "반도체", "클라우드", "보안", "사이버", "인공지능", "AI",
+]
+
+
+def _is_ict(title: str, analysis: str | None) -> bool:
+    """Return False for obvious non-ICT articles."""
+    combined = f"{title or ''} {analysis or ''}".lower()
+    for term in _NON_ICT_BLOCK:
+        if term.lower() in combined:
+            if any(t.lower() in combined for t in _ICT_OVERRIDE):
+                return True
+            return False
+    return True
+
 
 def pg_url() -> str:
     url = os.environ.get("DATABASE_URL", "").strip()
@@ -58,19 +87,28 @@ def existing_links(cur) -> set[str]:
     return {row[0] for row in cur.fetchall()}
 
 
-def sync_articles(src: sqlite3.Connection, dst, full: bool = False) -> int:
+def sync_articles(src: sqlite3.Connection, dst, full: bool = False, ict_filter: bool = True) -> int:
+    # analyzed_only: Supabase에는 AI 분석 완료 기사만 올린다 (비분석 기사는 포털에서 미사용)
+    where = "WHERE is_analyzed = 1" if ict_filter else ""
     rows = src.execute(
-        f"SELECT {', '.join(COLUMNS)} FROM news_articles"
+        f"SELECT {', '.join(COLUMNS)} FROM news_articles {where}"
     ).fetchall()
     if not rows:
         print("SQLite에 기사 없음")
         return 0
 
+    if ict_filter:
+        title_idx = COLUMNS.index("title")
+        analysis_idx = COLUMNS.index("analysis_result")
+        before = len(rows)
+        rows = [r for r in rows if _is_ict(r[title_idx], r[analysis_idx])]
+        print(f"ICT 필터: {before}건 → {len(rows)}건 (제외 {before - len(rows)}건)")
+
     if not full:
         with dst.cursor() as cur:
             already = existing_links(cur)
         new_rows = [r for r in rows if r[COLUMNS.index("link")] not in already]
-        print(f"신규: {len(new_rows)}건 / 전체: {len(rows)}건")
+        print(f"신규: {len(new_rows)}건 / 필터 후: {len(rows)}건")
         rows = new_rows
 
     if not rows:
@@ -151,17 +189,25 @@ def sync_embeddings(src: sqlite3.Connection, dst, full: bool = False) -> int:
 def main():
     parser = argparse.ArgumentParser(description="SQLite → Supabase 동기화")
     parser.add_argument("--full", action="store_true", help="전체 재동기화 (기본: 신규만)")
+    parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="ICT 필터 비활성화 — 미분석 기사 포함 전체 sync (비권장)",
+    )
     args = parser.parse_args()
 
     if not SQLITE_PATH.exists():
         sys.exit(f"SQLite 없음: {SQLITE_PATH}")
+
+    ict_filter = not args.no_filter
+    print(f"ICT 필터: {'ON (is_analyzed=1 + 비ICT 제목 제외)' if ict_filter else 'OFF (전체 sync)'}")
 
     src = sqlite3.connect(SQLITE_PATH)
     dst = psycopg2.connect(pg_url())
 
     try:
         print(f"{'전체' if args.full else '증분'} 동기화 시작...")
-        n = sync_articles(src, dst, full=args.full)
+        n = sync_articles(src, dst, full=args.full, ict_filter=ict_filter)
         print(f"기사 {n}건 동기화 완료")
         sync_embeddings(src, dst, full=args.full)
         print("완료")
