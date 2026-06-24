@@ -1,4 +1,4 @@
-"""
+﻿"""
 IRONAGE AI Analytics System v5.0
 뉴스 수집 및 분석 엔진 (오류 수정 버전)
 """
@@ -7128,28 +7128,41 @@ def run_daily_collection(ai_model: str = None):
             return []
         log_warning("⚠️ 오늘(월요일) 분석된 뉴스 없음 — 주말 누적 기사로만 발송을 시도합니다.")
     
-    log_info("\n[작업 5/9] 분석 결과 저장 중...")
+    log_info("\n[작업 5/9] 분析 결과 저장 + 단(unit) 배정 중...")
     saved_analysis = 0
+    unit_assigned = 0
     for result in analyzed_results:
         try:
             with get_db_session() as session:
                 article = session.query(NewsArticle).filter_by(
                     link=result['link']
                 ).first()
-                
+
                 if article:
                     article.is_analyzed = True
                     article.analysis_result = result.get('analysis_result', '')
-                    article.ai_model = result.get('ai_model', ai_model)  # Bug 1: 실제 사용 모델 저장
+                    article.ai_model = result.get('ai_model', ai_model)
                     if result.get('extracted_keywords'):
                         article.extracted_keywords = result['extracted_keywords']
-                    
+                    _saved_art_id = article.id
                     saved_analysis += 1
+                else:
+                    _saved_art_id = None
         except Exception as e:
-            log_warning(f"⚠️ 분석 결과 저장 실패: {result['title'][:30]}...")
-            log_error(traceback.format_exc()) 
-    
-    log_info(f"   ✅ {saved_analysis}개 저장 완료")
+            log_warning(f"⚠️ 분析 결과 저장 실패: {result['title'][:30]}...")
+            log_error(traceback.format_exc())
+            _saved_art_id = None
+
+        # 단 배정: 추출 키워드를 단별 모니터링 키워드와 매칭
+        if _saved_art_id and result.get('extracted_keywords'):
+            try:
+                changed = reclassify_article_unit(_saved_art_id, result['extracted_keywords'])
+                if changed:
+                    unit_assigned += 1
+            except Exception:
+                pass
+
+    log_info(f"   ✅ {saved_analysis}개 저장 완료 / 단 배정 변경 {unit_assigned}개")
     
     log_info("\n[작업 6/9] 리포트 생성 및 발송 중...")
 
