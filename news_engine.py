@@ -7198,7 +7198,7 @@ def run_daily_collection(ai_model: str = None):
                     return art_item["link"], art_item
                 return art_item["link"], None
             except Exception as _ae:
-                log_warning(f"병렬 분析 오류 ({art_item.get(\"title\",\"\")[:30]}): {_ae}")
+                log_warning(f"병렬 분析 오류 ({art_item.get('title','')[:30]}): {_ae}")
                 return art_item["link"], None
 
         _workers = min(5, max(1, len(_analysis_pool_ordered)))
@@ -7214,7 +7214,7 @@ def run_daily_collection(ai_model: str = None):
                             _analysis_cache[_lnk] = _res
                         log_info(
                             f"     [{_done_cnt}/{len(_analysis_pool_ordered)}]"
-                            f" {_res[\"title\"][:40]}..."
+                            f" {_res['title'][:40]}..."
                         )
                     else:
                         log_info(f"     [{_done_cnt}/{len(_analysis_pool_ordered)}] 실패/건너뜀")
