@@ -7088,59 +7088,93 @@ def run_daily_collection(ai_model: str = None):
     )
     log_info(f"   ✅ {saved_count}개 저장 완료")
 
-    log_info(f"\n[작업 3-5/9] 단별 AI 선별 + 심층 분析 + 저장 ({ai_model.upper()})...")
-    log_info(f"   📊 전체 수집: {len(unique_news_items)}개 → 단별 50개 선별 → 20개 분析 목표")
+    # ============================================================
+    # 작업 3-5/9: 전역 중복제거 → 단별 선별(50) → 단별 분析(20)
+    # ============================================================
+    log_info(f"\n[작업 3-5/9] 전역 중복제거 → 단별 AI 선별(50) → 분析(20) ({ai_model.upper()})...")
+    log_info(f"   📊 수집 풀: {len(unique_news_items)}개")
+
+    # ── Step A: 전역 시그니처 중복 제거 ────────────────────────────────
+    _deduped_pool = []
+    _global_sigs: set = set()
+    for _itm in unique_news_items:
+        _sig = extract_signature(_itm['title'])
+        if _sig not in _global_sigs:
+            _deduped_pool.append(_itm)
+            _global_sigs.add(_sig)
+    log_info(f"   🔄 전역 중복제거: {len(unique_news_items)}개 → {len(_deduped_pool)}개")
 
     _all_units = get_all_units()
 
-    _analysis_cache: dict = {}
-    _unit_analyzed: dict = {}
+    # 분析 캐시: 같은 기사가 여러 단에서 선택돼도 GPT-4o 1회만 호출
+    _analysis_cache: dict = {}   # link → result
+    _unit_analyzed: dict = {}    # unit_id → [results]
+    _unit_selected: dict = {}    # unit_id → [selected 50]
     _all_selected_links: set = set()
 
     if _all_units:
+        # ── Step B: 단별 선별 + 분析 ─────────────────────────────────────
         for _unit in _all_units:
             _uid      = _unit['id']
             _udisplay = _unit['display_name']
             _unit_cfg = load_unit_settings(_uid)
             _keywords = _unit_cfg.get('keywords', [])
 
-            log_info(f"\n  🏢 [{_udisplay}] 단별 선별 시작 (키워드 {len(_keywords)}개)")
+            log_info(f"\n  🏢 [{_udisplay}] 처리 시작 (키워드 {len(_keywords)}개)")
 
+            # B-1. AI 선별 — 단별 키워드 + 1~5순위 정책 우선순위 적용
             try:
                 _selected = filter_news_by_ai(
-                    unique_news_items,
+                    _deduped_pool,
                     ai_model=ai_model,
                     max_results=50,
                     unit_keywords=_keywords,
                     unit_display=_udisplay,
                 )
             except Exception as _e:
-                log_warning(f"⚠️ [{_udisplay}] AI 선별 실패: {_e}")
-                _selected = unique_news_items[:25]
+                log_warning(f"⚠️ [{_udisplay}] AI 선별 실패: {_e} — 키워드 매칭 상위 25개로 대체")
+                _selected = _deduped_pool[:25]
 
-            log_info(f"     ✅ AI 선별: {len(_selected)}개")
+            log_info(f"     ✅ AI 선별: {len(_selected)}개 (목표 50)")
+            _unit_selected[_uid] = _selected
             _all_selected_links.update(a['link'] for a in _selected)
 
+            # B-2. 선별 50개 → DB에 is_selected=True + unit_id 태깅
+            _sel_links_batch = [a['link'] for a in _selected]
+            try:
+                with get_db_session() as _s:
+                    for _a in _s.query(NewsArticle).filter(
+                        NewsArticle.link.in_(_sel_links_batch)
+                    ).all():
+                        _a.is_selected = True
+                        if _a.unit_id is None:
+                            _a.unit_id = _uid
+            except Exception as _e:
+                log_warning(f"⚠️ [{_udisplay}] is_selected 태깅 실패: {_e}")
+
+            # B-3. 우선순위 순서(AI 선별 순) 상위 30개 → 20개 분析 목표
+            #      캐시 히트 먼저 채우고, 나머지를 신규 분析
             _pre_cached = []
-            _to_analyze_fresh = []
+            _fresh_queue = []
             for _art in _selected[:30]:
                 if _art['link'] in _analysis_cache:
                     _pre_cached.append(_analysis_cache[_art['link']])
                 else:
-                    _to_analyze_fresh.append(_art)
+                    _fresh_queue.append(_art)
 
-            _need_count = max(0, 20 - len(_pre_cached))
+            _need = max(0, 20 - len(_pre_cached))
             _newly = []
-            if _to_analyze_fresh and _need_count > 0:
-                _sel_links = {n['link'] for n in _selected}
+            if _fresh_queue and _need > 0:
+                # 대체 풀: 선별 31~50위 + 중복제거 풀 미선별분
+                _sel_links_set = {n['link'] for n in _selected}
                 _repl = _selected[30:] + [
-                    x for x in unique_news_items if x['link'] not in _sel_links
+                    x for x in _deduped_pool if x['link'] not in _sel_links_set
                 ]
                 try:
                     _newly = analyze_news_with_replacement(
-                        _to_analyze_fresh[:_need_count + 5],
+                        _fresh_queue[:_need + 5],  # 여유 5개로 실패 대체 흡수
                         _repl,
-                        target_count=_need_count,
+                        target_count=_need,
                         ai_model=ai_model,
                     )
                 except Exception as _e:
@@ -7153,9 +7187,11 @@ def run_daily_collection(ai_model: str = None):
             _unit_analyzed[_uid] = _unit_results
             log_info(
                 f"     ✅ 분析: {len(_unit_results)}개 "
-                f"(캐시 재활용 {len(_pre_cached)}개 / 신규 {len(_newly)}개)"
+                f"(캐시 재활용 {len(_pre_cached)}개 / 신규 {len(_newly)}개) "
+                f"/ 추가수집뉴스: {len(_selected) - len(_unit_results)}개"
             )
 
+        # ── Step C: 결과 저장 + 단 배정 재검토 ──────────────────────────
         log_info(f"\n[작업 5/9] 분析 결과 저장 + 단 배정 중...")
         analyzed_results = []
         _saved_links_global: set = set()
@@ -7198,22 +7234,27 @@ def run_daily_collection(ai_model: str = None):
                     _saved_links_global.add(_result['link'])
 
         log_info(
-            f"   ✅ 저장 {saved_analysis}개 / 리포트용 {len(analyzed_results)}개 "
-            f"(4개 단 합산 중복 제거) / 단 배정 변경 {unit_assigned}개"
+            f"   ✅ 저장 {saved_analysis}건 / 리포트용 {len(analyzed_results)}건 "
+            f"(4단 합산 중복제거) / 단 배정 {unit_assigned}건"
         )
+
+        # 추가수집뉴스 = 단별 선별됐지만 분析 안 된 기사 (우선순위 정렬된 채로)
+        _analyzed_links = {r['link'] for r in analyzed_results}
         news_to_analyze = [
-            a for a in unique_news_items if a['link'] in _all_selected_links
+            a for a in _deduped_pool if a['link'] in _all_selected_links
         ]
 
     else:
+        # ── 폴백: 단 미등록 시 전역 선별 30개 → 20개 분析 ─────────────
         log_info("   (폴백) 단 미등록 — 전역 선별 30개 → 20개 분析")
         news_to_analyze = safe_execute(
-            lambda: filter_news_by_ai(unique_news_items, ai_model=ai_model, max_results=30),
+            lambda: filter_news_by_ai(_deduped_pool, ai_model=ai_model, max_results=30),
             error_msg="AI 선별 실패",
-            default_return=unique_news_items[:20]
+            default_return=_deduped_pool[:20]
         )
         _repl0 = news_to_analyze[20:] + [
-            x for x in unique_news_items if x['link'] not in {n['link'] for n in news_to_analyze}
+            x for x in _deduped_pool
+            if x['link'] not in {n['link'] for n in news_to_analyze}
         ]
         analyzed_results = safe_execute(
             lambda: analyze_news_with_replacement(

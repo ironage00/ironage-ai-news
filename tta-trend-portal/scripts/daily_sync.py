@@ -1,4 +1,4 @@
-"""
+﻿"""
 scripts/daily_sync.py
 SQLite news.db → Supabase 증분 동기화
 
@@ -88,8 +88,10 @@ def existing_links(cur) -> set[str]:
 
 
 def sync_articles(src: sqlite3.Connection, dst, full: bool = False, ict_filter: bool = True) -> int:
-    # analyzed_only: Supabase에는 AI 분석 완료 기사만 올린다 (비분석 기사는 포털에서 미사용)
-    where = "WHERE is_analyzed = 1" if ict_filter else ""
+    # Supabase에는 단별 선별(is_selected=1) 또는 심층분析(is_analyzed=1) 기사를 올린다.
+    # - is_selected=1: 단별 AI 50개 선별 기사 (추가수집뉴스로 포털에서 활용)
+    # - is_analyzed=1: 심층 분析 완료 기사 (20개/단)
+    where = "WHERE (is_analyzed = 1 OR is_selected = 1)" if ict_filter else ""
     rows = src.execute(
         f"SELECT {', '.join(COLUMNS)} FROM news_articles {where}"
     ).fetchall()
