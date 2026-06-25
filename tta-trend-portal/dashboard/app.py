@@ -3,12 +3,23 @@ import os
 from datetime import datetime
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from artifact_utils import fetch_report_artifacts
 from db import fetch_articles, fetch_sources, fetch_stats, get_engine, is_postgres
 from graph_utils import build_edges, graph_summary
-from radar_utils import filter_home_articles, issue_board, new_entities, split_recent_baseline, trending_keywords, unit_issue_summary
+from radar_utils import (
+    company_counts,
+    country_counts,
+    filter_home_articles,
+    issue_board,
+    issue_timeline,
+    new_entities,
+    split_recent_baseline,
+    trending_keywords,
+    unit_issue_summary,
+)
 from search import build_answer, clean_text, hybrid_search
 from workflow_utils import STATUS_OPTIONS, merge_issue_actions, save_issue_actions
 
@@ -765,6 +776,21 @@ def render_chip_cloud(chips: pd.DataFrame, label_col: str, score_col: str, fallb
     st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 
+IMPACT_BADGE = {
+    "Critical": ("🔴", "#f87171", "rgba(248,113,113,.18)"),
+    "High": ("🟠", "#fb923c", "rgba(251,146,60,.18)"),
+    "Medium": ("🟡", "#fbbf24", "rgba(251,191,36,.16)"),
+    "Low": ("🟢", "#34d399", "rgba(52,211,153,.16)"),
+}
+
+
+def impact_badge_html(level: str) -> str:
+    icon, color, bg = IMPACT_BADGE.get(str(level), ("", "", ""))
+    if not icon:
+        return ""
+    return f'<span class="meta-pill" style="background:{bg};color:{color};">{icon} {esc(level)}</span>'
+
+
 def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
     if board.empty:
         st.info("표준화 대응 후보를 만들 수 있는 분석 기사가 아직 부족합니다.")
@@ -777,28 +803,51 @@ def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
         if rag_summary
         else ""
     )
+    top_level = str(top.get("영향등급", "") or "")
+    # 선정 근거 — 직원이 "왜 이게 1순위인가"를 알 수 있도록 명시
+    rationale_bits = []
+    if top_level:
+        rationale_bits.append(f"AI 영향등급 {top_level}")
+    rationale_bits.append(f"영향도 {esc(top.get('영향도'))}·긴급도 {esc(top.get('긴급도'))} 종합 1순위")
+    rationale = " · ".join(rationale_bits)
+    # TTA 대응과제 블록
+    tta_action = str(top.get("TTA 대응과제", "") or "").strip()
+    action_html = (
+        f'<div class="briefing-body" style="margin-top:8px;border-top:1px solid rgba(255,255,255,.12);padding-top:8px;">'
+        f'<strong style="color:#a5f3fc;">TTA 대응과제</strong><br>{esc(tta_action, 300)}</div>'
+        if tta_action
+        else ""
+    )
     st.markdown(
         f"""
         <div class="briefing-card dark" style="margin-bottom:12px;">
-          <div class="briefing-eyebrow">Top Signal</div>
+          <div class="briefing-eyebrow">Top Signal · {esc(rationale)}</div>
           <div class="briefing-title">{esc(top.get("이슈 후보"), 180)}</div>
           <div class="briefing-meta">
+            {impact_badge_html(top_level)}
             <span class="meta-pill">영향도 {esc(top.get("영향도"))}/10</span>
             <span class="meta-pill">긴급도 {esc(top.get("긴급도"))}/10</span>
             <span class="meta-pill">{esc(top.get("담당 단"))}</span>
             {rag_badge}
           </div>
           <div class="briefing-body">{body}</div>
+          {action_html}
           <a class="briefing-link" href="{esc(top.get("관련 기사"))}" target="_blank">근거 기사 열기</a>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    if st.button("이 이슈를 분석실에서 더 보기", key="top_signal_to_qa", use_container_width=True):
+        st.session_state["portal_query"] = str(top.get("이슈 후보", ""))
+        st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
 
     html_parts = ['<div class="mini-grid">']
     for _, row in board.head(4).iterrows():
         unit_raw = str(row.get("담당 단", ""))
         dot_color = UNIT_COLORS.get(unit_raw, "#64748b")
+        level = str(row.get("영향등급", "") or "")
+        icon = IMPACT_BADGE.get(level, ("", "", ""))[0]
+        level_tag = f"{icon} {esc(level)} · " if icon else ""
         html_parts.append(f"""
         <div class="mini-card">
           <div class="unit-card-header" style="margin-bottom:4px;">
@@ -806,7 +855,7 @@ def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
             <div class="mini-label">{esc(unit_raw)}</div>
           </div>
           <div class="mini-value">{esc(row.get("이슈 후보"), 58)}</div>
-          <div class="mini-desc">영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10<br>{esc(row.get("출처"), 35)}</div>
+          <div class="mini-desc">{level_tag}영향도 {esc(row.get("영향도"))}/10 · 긴급도 {esc(row.get("긴급도"))}/10<br>{esc(row.get("출처"), 35)}</div>
         </div>""")
     html_parts.append("</div>")
     st.markdown("".join(html_parts), unsafe_allow_html=True)
@@ -962,6 +1011,114 @@ def render_latest_lists(recent_df: pd.DataFrame, reports: pd.DataFrame):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_report_cards(view: pd.DataFrame):
+    """보고서 산출물을 클릭 가능한 링크 카드로 표시. 링크 복사는 st.code의 기본 복사 버튼 활용."""
+    for idx, row in view.reset_index(drop=True).iterrows():
+        title = clean_text(row.get("title"), 120) or "(제목 없음)"
+        rtype = clean_text(row.get("report_type"), 30)
+        status = clean_text(row.get("status"), 20)
+        count = row.get("source_article_count", 0)
+        period = clean_text(first_present(row.get("period_end"), row.get("generated_at")), 20)
+        doc_url = str(first_present(row.get("google_doc_url"), "")).strip()
+        xls_url = str(first_present(row.get("excel_file_url"), "")).strip()
+
+        with st.container(border=True):
+            st.markdown(f"**{esc(title)}**")
+            meta = " · ".join(p for p in [rtype, f"상태 {status}" if status else "", f"기사 {count}건", period] if p)
+            st.caption(meta)
+            bcols = st.columns([1, 1, 3])
+            if doc_url:
+                bcols[0].link_button("Google Docs 열기", doc_url, use_container_width=True)
+            if xls_url:
+                bcols[1].link_button("Excel 다운로드", xls_url, use_container_width=True)
+            share_url = doc_url or xls_url
+            if share_url:
+                with bcols[2].popover("링크 복사", use_container_width=True):
+                    st.caption("아래 코드블록 우측 복사 아이콘을 누르세요.")
+                    st.code(share_url, language=None)
+            else:
+                bcols[0].caption("등록된 링크 없음")
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_country_counts(_engine, days: int, unit_id):
+    """국가 집계 — cache 래퍼. 순수 로직은 radar_utils.country_counts."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return country_counts(df)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_company_counts(_engine, days: int, unit_id, top_n: int):
+    """기업 집계 — cache 래퍼. 순수 로직은 radar_utils.company_counts."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return company_counts(df, top_n=top_n)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_issue_timeline(_engine, days: int, unit_id, top_n: int):
+    """이슈 타임라인 — cache 래퍼. 순수 로직은 radar_utils.issue_timeline."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return issue_timeline(df, top_n=top_n)
+
+
+STAGE_EMOJI = {"급등": "🔺", "소강": "🔻", "지속": "▪️"}
+
+
+def render_issue_timeline(engine, days: int, unit_id):
+    """기술 키워드 주차별 타임라인 + 급등/소강 단계."""
+    tl = cached_issue_timeline(engine, days, unit_id, 8)
+    if tl.empty:
+        st.info(f"타임라인 데이터 없음 — 최근 {days}일 분석 기사에 key_technologies 필드가 없습니다.")
+        return
+    # 단계 요약 배지
+    latest_stage = tl.groupby("technology")["stage"].last()
+    surging = [t for t, s in latest_stage.items() if s == "급등"]
+    fading = [t for t, s in latest_stage.items() if s == "소강"]
+    sc1, sc2 = st.columns(2)
+    sc1.caption("🔺 급등: " + (", ".join(surging) if surging else "없음"))
+    sc2.caption("🔻 소강: " + (", ".join(fading) if fading else "없음"))
+
+    fig = px.line(
+        tl, x="week", y="count", color="technology", markers=True,
+        labels={"week": "주차", "count": "기사 수", "technology": "기술"},
+    )
+    fig.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10), legend_title_text="기술")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_country_company(engine, days: int, unit_id):
+    """국가 매트릭스 + 기업 추적 뷰. extracted_keywords의 국가/기업 필드 집계."""
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.markdown("#### 국가별 동향")
+        country_df = cached_country_counts(engine, days, unit_id)
+        if country_df.empty:
+            st.info(f"국가 데이터 없음 — 최근 {days}일 분석 기사에 target_countries 필드가 없습니다.")
+        else:
+            st.caption(f"최근 {days}일 · 분석 기사 기준 상위 {min(15, len(country_df))}개국")
+            fig = px.bar(
+                country_df.head(15).iloc[::-1],
+                x="count", y="country", orientation="h",
+                labels={"count": "기사 수", "country": "국가"},
+            )
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+    with cc2:
+        st.markdown("#### 기업 추적")
+        company_df = cached_company_counts(engine, days, unit_id, 15)
+        if company_df.empty:
+            st.info(f"기업 데이터 없음 — 최근 {days}일 분석 기사에 related_companies 필드가 없습니다.")
+        else:
+            st.caption(f"최근 {days}일 · 분석 기사 기준 상위 {min(15, len(company_df))}개 기업")
+            fig = px.bar(
+                company_df.head(15).iloc[::-1],
+                x="count", y="company", orientation="h",
+                labels={"count": "기사 수", "company": "기업"},
+            )
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+
 def render_suggested_questions(keywords: pd.DataFrame, entities: pd.DataFrame):
     base_terms = []
     if not keywords.empty:
@@ -971,17 +1128,28 @@ def render_suggested_questions(keywords: pd.DataFrame, entities: pd.DataFrame):
     if not base_terms:
         base_terms = ["AI-RAN", "NTN", "6G", "양자통신"]
 
-    questions = [
+    # 동적 질문 (키워드/엔티티 기반)
+    dynamic_questions = [
         f"최근 {base_terms[0]} 이슈의 표준화 시사점은?",
         f"{base_terms[min(1, len(base_terms)-1)]} 관련 주요 기업과 국가는?",
         f"{base_terms[min(2, len(base_terms)-1)]} 동향에서 TTA가 우선 검토할 점은?",
         "최근 90일간 긴급도가 높은 표준화 대응 후보를 정리해줘",
     ]
-    cols = st.columns(4)
-    for idx, question in enumerate(questions):
-        if cols[idx].button(question, key=f"home_question_{idx}", use_container_width=True):
-            st.session_state["portal_query"] = question
-            st.toast("질문형 분석실 입력창에 추천 질문을 넣었습니다.")
+    # TTA 특화 고정 질문 (항상 노출)
+    fixed_questions = [
+        "TTA가 선제적으로 검토해야 할 6G·NTN 관련 표준화 이슈는?",
+        "최근 국제 표준화 회의체(3GPP·ITU·IEEE) 동향에서 국내 대응이 필요한 항목은?",
+    ]
+    questions = dynamic_questions + fixed_questions
+
+    # 3열 2행 배치 (6개)
+    for row_start in range(0, len(questions), 3):
+        cols = st.columns(3)
+        for offset, question in enumerate(questions[row_start:row_start + 3]):
+            idx = row_start + offset
+            if cols[offset].button(question, key=f"home_question_{idx}", use_container_width=True):
+                st.session_state["portal_query"] = question
+                st.toast("질문형 분석실 입력창에 추천 질문을 넣었습니다.")
 
 
 def render_home(engine, stats: dict):
@@ -1110,6 +1278,22 @@ def main():
             hide_index=True,
         )
 
+        st.divider()
+        st.markdown("### 국가·기업 동향")
+        nc1, nc2 = st.columns([1, 3])
+        cc_days = nc1.selectbox("집계 기간", [30, 90, 180, 365], index=1, key="cc_days")
+        if nc2.button("데이터 새로고침", key="cc_refresh"):
+            cached_country_counts.clear()
+            cached_company_counts.clear()
+            cached_issue_timeline.clear()
+            st.rerun()
+        render_country_company(engine, cc_days, UNIT_OPTIONS[radar_unit_label])
+
+        st.divider()
+        st.markdown("### 이슈 타임라인")
+        st.caption("기술 키워드의 주차별 등장 추이와 급등/소강 단계 (key_technologies 기준)")
+        render_issue_timeline(engine, cc_days, UNIT_OPTIONS[radar_unit_label])
+
     with tab_board:
         st.subheader("표준화 대응 보드")
         bc1, bc2, bc3 = st.columns(3)
@@ -1174,16 +1358,23 @@ def main():
             r1.metric("등록 산출물", f"{len(reports):,}")
             r2.metric("게시 완료", f"{(reports['status'] == 'published').sum():,}")
             r3.metric("현재 표시", f"{len(view):,}")
-            st.dataframe(
-                view,
-                column_config={
-                    "google_doc_url": st.column_config.LinkColumn("Google Docs"),
-                    "excel_file_url": st.column_config.LinkColumn("Excel"),
-                    "source_article_count": st.column_config.NumberColumn("기사 수"),
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
+
+            if view.empty:
+                st.info("필터 조건에 맞는 산출물이 없습니다.")
+            else:
+                render_report_cards(view)
+
+                with st.expander("표 형태로 보기"):
+                    st.dataframe(
+                        view,
+                        column_config={
+                            "google_doc_url": st.column_config.LinkColumn("Google Docs"),
+                            "excel_file_url": st.column_config.LinkColumn("Excel"),
+                            "source_article_count": st.column_config.NumberColumn("기사 수"),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
     with tab_map:
         st.subheader("이슈 맵")

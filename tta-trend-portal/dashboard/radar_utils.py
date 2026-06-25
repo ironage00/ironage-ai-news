@@ -456,6 +456,117 @@ def filter_home_articles(df: pd.DataFrame, min_score: int = 3) -> pd.DataFrame:
     return focused if not focused.empty else filtered
 
 
+IMPACT_LEVEL_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "": 0}
+
+
+# T0 실데이터(2,550건 90일 샘플) 기반 정규화 — 같은 대상의 표기 분산을 통합한다.
+COUNTRY_NORMALIZE = {
+    "대한민국": "한국", "Korea": "한국", "South Korea": "한국",
+    "United States": "미국", "USA": "미국", "US": "미국",
+    "China": "중국", "中国": "중국",
+    "Japan": "일본",
+    "유럽": "유럽연합", "EU": "유럽연합",
+    "Iran": "이란",
+    "India": "인도",
+    "UK": "영국", "United Kingdom": "영국",
+}
+
+COMPANY_NORMALIZE = {
+    "NVIDIA": "엔비디아", "Nvidia": "엔비디아",
+    "Microsoft": "마이크로소프트",
+    "Anthropic": "앤트로픽",
+    "오픈AI": "OpenAI",
+    "Google": "구글",
+    "Apple": "애플",
+    "Samsung": "삼성전자", "Samsung Electronics": "삼성전자",
+    "현대차": "현대자동차", "현대차그룹": "현대자동차",
+    "Meta": "메타", "Amazon": "아마존",
+}
+
+
+def _entity_counts(df: pd.DataFrame, target_label: str, normalize: dict[str, str]) -> pd.DataFrame:
+    """keyword_items() 재사용 — 특정 구분(국가/기업)만 정규화 후 빈도 집계하는 순수 헬퍼.
+    DataFrame을 직접 받아 테스트 가능 (engine·cache 의존 없음)."""
+    if df.empty:
+        return pd.DataFrame(columns=["name", "count"])
+    counter: Counter[str] = Counter()
+    for _, row in df.iterrows():
+        for name, label in keyword_items(row):  # str→list 가드는 keyword_items 내부 처리
+            if label == target_label:
+                counter[normalize.get(name, name)] += 1
+    if not counter:
+        return pd.DataFrame(columns=["name", "count"])
+    return (
+        pd.DataFrame(counter.items(), columns=["name", "count"])
+        .sort_values("count", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def country_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """국가별 기사 수 (순수 헬퍼). 반환 컬럼: country, count."""
+    return _entity_counts(df, "국가", COUNTRY_NORMALIZE).rename(columns={"name": "country"})
+
+
+def issue_timeline(df: pd.DataFrame, top_n: int = 8, max_tech_per_article: int = 3) -> pd.DataFrame:
+    """기술 키워드(key_technologies)의 주차별 등장 빈도 + 단계 분류 (순수 헬퍼).
+    '이슈 식별자'는 key_technologies 사용 (가장 안정적).
+    반환: technology, week, count + 최신 주차 기준 stage(급등/소강/지속).
+    빈 입력이면 빈 DataFrame."""
+    if df.empty:
+        return pd.DataFrame(columns=["technology", "week", "count", "stage"])
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        date = article_date(row)
+        if date is None:
+            continue
+        week = pd.Timestamp(date).to_period("W").start_time
+        techs = [name for name, label in keyword_items(row) if label == "기술"][:max_tech_per_article]
+        for name in techs:
+            rows.append({"technology": name, "week": week})
+    if not rows:
+        return pd.DataFrame(columns=["technology", "week", "count", "stage"])
+
+    raw = pd.DataFrame(rows)
+    # 상위 기술만 (전체 빈도 기준)
+    top_terms = raw["technology"].value_counts().head(top_n).index.tolist()
+    raw = raw[raw["technology"].isin(top_terms)]
+    weekly = raw.groupby(["technology", "week"]).size().reset_index(name="count")
+
+    # 단계 분류: 기술별 평균 대비 최신 주차 빈도
+    stages: dict[str, str] = {}
+    for tech, grp in weekly.groupby("technology"):
+        grp_sorted = grp.sort_values("week")
+        recent = grp_sorted.iloc[-1]["count"]
+        avg = grp_sorted["count"].mean()
+        if recent > avg * 1.5:
+            stages[tech] = "급등"
+        elif recent < avg * 0.5:
+            stages[tech] = "소강"
+        else:
+            stages[tech] = "지속"
+    weekly["stage"] = weekly["technology"].map(stages)
+    return weekly.sort_values(["technology", "week"]).reset_index(drop=True)
+
+
+def company_counts(df: pd.DataFrame, top_n: int | None = None) -> pd.DataFrame:
+    """기업별 기사 수 (순수 헬퍼). 반환 컬럼: company, count."""
+    result = _entity_counts(df, "기업", COMPANY_NORMALIZE).rename(columns={"name": "company"})
+    return result.head(top_n) if top_n else result
+
+
+def parse_impact(row: pd.Series) -> dict:
+    """extracted_keywords에서 영향도·TTA 대응 필드 추출.
+    AI 프롬프트가 채우는 impact_level / tta_action_item / standardization_gap.
+    필드가 없거나 JSON이 비면 빈 문자열 반환 (침묵 실패 방지용 명시 기본값)."""
+    data = parse_keywords(row.get("extracted_keywords"))
+    return {
+        "impact_level": clean_text(data.get("impact_level", ""), 20),
+        "tta_action_item": clean_text(data.get("tta_action_item", ""), 400),
+        "standardization_gap": clean_text(data.get("standardization_gap", ""), 400),
+    }
+
+
 def issue_scores(row: pd.Series) -> tuple[int, int]:
     text = _text_blob(row)
     impact = 1
@@ -520,6 +631,9 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
             continue
         impact, urgency = issue_scores(row)
         entities = [name for name, _ in keyword_items(row)][:6]
+        impact_data = parse_impact(row)
+        # AI가 부여한 impact_level을 점수에 가산 → Critical/High 기사가 상위 노출 (선택 근거)
+        impact_bonus = IMPACT_LEVEL_ORDER.get(impact_data["impact_level"], 0) * 1.5
         rows.append(
             {
                 "이슈 후보": clean_text(row.get("title"), 180),
@@ -527,17 +641,20 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
                 "검토 상태": "미검토",
                 "영향도": impact,
                 "긴급도": urgency,
+                "영향등급": impact_data["impact_level"],
+                "TTA 대응과제": impact_data["tta_action_item"],
+                "표준화 격차": impact_data["standardization_gap"],
                 "관련 엔티티": ", ".join(entities),
                 "관련 기사": row.get("link", ""),
                 "출처": clean_text(row.get("source"), 80),
                 "권장 조치": recommended_action(row, impact, urgency),
                 "조치 메모": "",
-                "_score": impact * 1.2 + urgency + min(ict_score, 10) * 0.4,
+                "_score": impact * 1.2 + urgency + min(ict_score, 10) * 0.4 + impact_bonus,
             }
         )
     if not rows:
         return pd.DataFrame(
-            columns=["이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모"]
+            columns=["이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "영향등급", "TTA 대응과제", "표준화 격차", "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모"]
         )
     board = pd.DataFrame(rows)
     board = board.drop_duplicates(subset=["이슈 후보"])
