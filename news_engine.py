@@ -2126,21 +2126,17 @@ def get_news_data(rss_urls=None, naver_queries=None):
     log_info(f"    • 시간 초과로 제외: {stats['google_alerts']['filtered_out']}개 ⏰")
     
     # ===== Naver 뉴스 처리 =====
-    # GitHub Actions(해외 서버)에서는 openapi.naver.com 차단됨 → 건너뜀
-    _in_github_actions = os.environ.get('GITHUB_ACTIONS', '').lower() == 'true'
-    if _in_github_actions:
-        log_info("\n⏭️  Naver News 건너뜀 (GitHub Actions 환경 — 해외 IP 차단)")
+    log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
+    if naver_queries is not None:
+        _active_queries = list(dict.fromkeys(naver_queries))  # 중복 제거, 순서 유지
+        log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
     else:
-        log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
-    if not _in_github_actions:
-        if naver_queries is not None:
-            _active_queries = list(dict.fromkeys(naver_queries))  # 중복 제거, 순서 유지
-            log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
-        else:
-            _active_queries = get_all_active_keywords()
-            log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (단별 DB 설정)")
+        _active_queries = get_all_active_keywords()
+        log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (단별 DB 설정)")
 
-    for i, query in enumerate(_active_queries if not _in_github_actions else [], 1):
+    _naver_consecutive_failures = 0  # 연속 타임아웃 카운터
+
+    for i, query in enumerate(_active_queries, 1):
         if not query.strip():
             continue
 
@@ -2154,8 +2150,9 @@ def get_news_data(rss_urls=None, naver_queries=None):
             }
             params = {"query": query, "display": 30, "sort": "date"}
             
-            response = requests.get(naver_url, headers=headers, params=params, timeout=15)
+            response = requests.get(naver_url, headers=headers, params=params, timeout=7)
             response.raise_for_status()
+            _naver_consecutive_failures = 0  # 성공 시 초기화
             data = response.json()
             
             items = data.get("items", [])
@@ -2247,7 +2244,11 @@ def get_news_data(rss_urls=None, naver_queries=None):
                     continue
                     
         except Exception as e:
+            _naver_consecutive_failures += 1
             log_info(f"  ❌ 네이버 뉴스 API 실패: {str(e)[:100]}")
+            if _naver_consecutive_failures >= 5:
+                log_warning(f"  ⏭️  연속 {_naver_consecutive_failures}회 실패 — Naver 수집 조기 종료 (네트워크 불안정)")
+                break
             continue
 
     log_info(f"\n📊 Naver News 통계:")
