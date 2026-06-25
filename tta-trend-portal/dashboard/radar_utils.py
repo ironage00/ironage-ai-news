@@ -508,6 +508,140 @@ def country_counts(df: pd.DataFrame) -> pd.DataFrame:
     return _entity_counts(df, "국가", COUNTRY_NORMALIZE).rename(columns={"name": "country"})
 
 
+# 기술영역 정의 — key_technologies 자유 키워드를 표준 영역으로 버케팅 (동의어 포함)
+TECH_AREAS: dict[str, list[str]] = {
+    "6G": ["6g", "imt-2030"],
+    "5G": ["5g"],
+    "AI": ["ai", "인공지능", "llm", "생성형", "머신러닝", "딥러닝"],
+    "위성통신": ["위성", "ntn", "스타링크", "starlink", "저궤도", "leo"],
+    "사이버보안": ["보안", "사이버", "security", "암호", "해킹"],
+    "반도체": ["반도체", "칩", "semiconductor", "gan", "파운드리"],
+    "양자": ["양자", "quantum"],
+    "데이터센터": ["데이터센터", "데이터 센터", "datacenter", "data center"],
+    "자율주행": ["자율주행", "sdv", "커넥티드카", "자율주행차"],
+    "네트워크": ["o-ran", "ran", "네트워크 슬라이싱", "코어망", "전송망"],
+}
+
+
+def article_tech_areas(row: pd.Series, tech_areas: dict[str, list[str]] | None = None) -> set[str]:
+    """기사 1건이 어떤 기술영역을 다루는지 (key_technologies 키워드 → 영역 버킷)."""
+    tech_areas = tech_areas or TECH_AREAS
+    techs = [name.lower() for name, label in keyword_items(row) if label == "기술"]
+    areas: set[str] = set()
+    for area, kws in tech_areas.items():
+        if any(any(kw in t for kw in kws) for t in techs):
+            areas.add(area)
+    return areas
+
+
+def entity_tech_matrix(
+    df: pd.DataFrame,
+    entity_label: str,
+    normalize: dict[str, str],
+    tech_areas: dict[str, list[str]] | None = None,
+    top_entities: int = 10,
+) -> pd.DataFrame:
+    """엔티티(국가/기업) × 기술영역 교차표. 셀 = 해당 영역을 다룬 기사 수.
+    행=엔티티(총합 내림차순 상위 N), 열=기술영역. 빈 입력이면 빈 DataFrame."""
+    tech_areas = tech_areas or TECH_AREAS
+    if df.empty:
+        return pd.DataFrame()
+    pairs: list[tuple[str, str]] = []
+    for _, row in df.iterrows():
+        items = keyword_items(row)
+        ents = {normalize.get(n, n) for n, l in items if l == entity_label}
+        if not ents:
+            continue
+        areas = article_tech_areas(row, tech_areas)
+        for e in ents:
+            for a in areas:
+                pairs.append((e, a))
+    if not pairs:
+        return pd.DataFrame()
+    m = pd.DataFrame(pairs, columns=["entity", "area"])
+    pivot = m.groupby(["entity", "area"]).size().unstack(fill_value=0)
+    pivot = pivot.reindex(columns=list(tech_areas.keys()), fill_value=0)
+    pivot["__total"] = pivot.sum(axis=1)
+    pivot = pivot.sort_values("__total", ascending=False).head(top_entities).drop(columns="__total")
+    return pivot
+
+
+def entity_detail(
+    df: pd.DataFrame,
+    entity_label: str,
+    entity_name: str,
+    normalize: dict[str, str],
+    tech_areas: dict[str, list[str]] | None = None,
+) -> dict:
+    """특정 국가/기업의 상세: 기사 수, 집중 기술영역 top3, 관련 엔티티, 대표 기사 링크."""
+    tech_areas = tech_areas or TECH_AREAS
+    area_counter: Counter[str] = Counter()
+    related_company: Counter[str] = Counter()
+    related_country: Counter[str] = Counter()
+    articles: list[dict] = []
+    for _, row in df.iterrows():
+        items = keyword_items(row)
+        ents = {normalize.get(n, n) for n, l in items if l == entity_label}
+        if entity_name not in ents:
+            continue
+        for a in article_tech_areas(row, tech_areas):
+            area_counter[a] += 1
+        for n, l in items:
+            if l == "기업":
+                related_company[COMPANY_NORMALIZE.get(n, n)] += 1
+            elif l == "국가":
+                cc = COUNTRY_NORMALIZE.get(n, n)
+                if cc != entity_name:
+                    related_country[cc] += 1
+        articles.append({
+            "title": clean_text(row.get("title"), 120),
+            "link": row.get("link", ""),
+            "source": clean_text(row.get("source"), 40),
+            "date": article_date(row),
+        })
+    return {
+        "entity": entity_name,
+        "article_count": len(articles),
+        "top_areas": [a for a, _ in area_counter.most_common(4)],
+        "top_companies": [c for c, _ in related_company.most_common(5)],
+        "top_countries": [c for c, _ in related_country.most_common(5)],
+        "articles": sorted(articles, key=lambda x: (x["date"] is None, x["date"]), reverse=True)[:8],
+    }
+
+
+def entity_trend(
+    recent_df: pd.DataFrame,
+    baseline_df: pd.DataFrame,
+    entity_label: str,
+    normalize: dict[str, str],
+    limit: int = 5,
+) -> pd.DataFrame:
+    """급부상 엔티티 — 최근 기간 기사 수와 기준기간 대비 증가. 반환: name, recent, baseline, growth."""
+    def counts(df: pd.DataFrame) -> Counter:
+        c: Counter[str] = Counter()
+        if df.empty:
+            return c
+        for _, row in df.iterrows():
+            for n, l in keyword_items(row):
+                if l == entity_label:
+                    c[normalize.get(n, n)] += 1
+        return c
+
+    rc, bc = counts(recent_df), counts(baseline_df)
+    rows = [
+        {"name": name, "recent": cnt, "baseline": bc.get(name, 0), "growth": cnt - bc.get(name, 0)}
+        for name, cnt in rc.items()
+    ]
+    if not rows:
+        return pd.DataFrame(columns=["name", "recent", "baseline", "growth"])
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["growth", "recent"], ascending=False)
+        .head(limit)
+        .reset_index(drop=True)
+    )
+
+
 def cluster_counts(df: pd.DataFrame, top_n: int | None = None) -> pd.DataFrame:
     """K-means 클러스터(cluster_label)별 기사 수 (순수 헬퍼).
     cluster_articles.py 배치가 채운 cluster_id/cluster_label 사용.

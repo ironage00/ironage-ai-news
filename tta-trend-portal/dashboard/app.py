@@ -10,9 +10,14 @@ from artifact_utils import fetch_report_artifacts
 from db import fetch_articles, fetch_sources, fetch_stats, get_engine, is_postgres
 from graph_utils import build_edges, graph_summary
 from radar_utils import (
+    COMPANY_NORMALIZE,
+    COUNTRY_NORMALIZE,
     cluster_counts,
     company_counts,
     country_counts,
+    entity_detail,
+    entity_tech_matrix,
+    entity_trend,
     filter_home_articles,
     issue_board,
     issue_timeline,
@@ -1109,6 +1114,94 @@ def render_issue_timeline(engine, days: int, unit_id):
     st.plotly_chart(fig, use_container_width=True)
 
 
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_tech_matrix(_engine, days: int, unit_id, entity_label: str, top_entities: int):
+    """국가/기업 × 기술영역 매트릭스 — cache 래퍼."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    normalize = COUNTRY_NORMALIZE if entity_label == "국가" else COMPANY_NORMALIZE
+    return entity_tech_matrix(df, entity_label, normalize, top_entities=top_entities)
+
+
+def _matrix_heatmap(matrix: pd.DataFrame, title: str):
+    """매트릭스 DataFrame → Plotly 히트맵 (셀에 숫자 표시)."""
+    if matrix.empty:
+        st.info(f"{title}: 데이터 없음")
+        return
+    fig = px.imshow(
+        matrix.values,
+        x=list(matrix.columns),
+        y=list(matrix.index),
+        color_continuous_scale="Blues",
+        aspect="auto",
+        text_auto=True,
+    )
+    fig.update_layout(height=40 * len(matrix) + 120, margin=dict(l=10, r=10, t=30, b=10),
+                      coloraxis_showscale=False, title=title)
+    fig.update_xaxes(side="top")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _tta_implication(detail: dict, entity_label: str) -> str:
+    """엔티티 상세에서 TTA 시사점을 데이터 기반으로 생성 (편집성 단정 배제)."""
+    areas = detail.get("top_areas", [])
+    if not areas:
+        return "관련 기술영역 신호가 아직 약함 — 모니터링 유지."
+    area_txt = " · ".join(areas[:3])
+    subject = "표준화 동향" if entity_label == "국가" else "기술·표준 활동"
+    return f"{area_txt} 영역에서 활발 ({detail['article_count']}건). 관련 {subject} 추적 권장."
+
+
+def render_entity_drilldown(engine, days: int, unit_id, entity_label: str, options: list[str]):
+    """국가/기업 선택 → 상세 카드 (집중영역·관련 엔티티·TTA 시사점·관련 기사)."""
+    if not options:
+        return
+    key = f"drill_{entity_label}"
+    picked = st.selectbox(f"{entity_label} 선택", options, key=key)
+    df = fetch_articles(engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    normalize = COUNTRY_NORMALIZE if entity_label == "국가" else COMPANY_NORMALIZE
+    detail = entity_detail(df, entity_label, picked, normalize)
+    if detail["article_count"] == 0:
+        st.info(f"{picked} 관련 기사가 최근 {days}일 내 없습니다.")
+        return
+    with st.container(border=True):
+        st.markdown(f"#### {esc(picked)}  ·  {detail['article_count']}건")
+        c1, c2 = st.columns(2)
+        c1.caption("집중 기술영역: " + (", ".join(detail["top_areas"]) or "-"))
+        rel = detail["top_companies"] if entity_label == "국가" else detail["top_countries"]
+        rel_label = "관련 기업" if entity_label == "국가" else "관련 국가"
+        c2.caption(f"{rel_label}: " + (", ".join(rel[:5]) or "-"))
+        st.markdown(f"**TTA 시사점** — {esc(_tta_implication(detail, entity_label))}")
+        st.markdown("**관련 기사**")
+        for a in detail["articles"]:
+            st.markdown(f"- [{esc(a['title'], 90)}]({a['link']}) · {esc(a['source'], 30)}")
+
+
+def render_standardization_matrix(engine, days: int, unit_id):
+    """국가·기업 표준화 포지션 매트릭스 (히트맵 + 드릴다운 + 급부상 TOP5)."""
+    # 급부상 기업 TOP5 (최근 7일 vs 이전)
+    trend_df = fetch_articles(engine, days=max(days, 30), unit_id=unit_id, analyzed_only=True, limit=3000)
+    rec, base = split_recent_baseline(trend_df, 7)
+    surge = entity_trend(rec, base, "기업", COMPANY_NORMALIZE, limit=5)
+    if not surge.empty:
+        st.markdown("**🚀 급부상 기업 TOP 5** (최근 7일 vs 이전)")
+        cols = st.columns(len(surge))
+        for i, (_, r) in enumerate(surge.iterrows()):
+            delta = f"+{int(r['growth'])}" if r["growth"] > 0 else "0"
+            cols[i].metric(str(r["name"])[:12], f"{int(r['recent'])}건", delta)
+
+    st.markdown("##### 국가 × 기술영역")
+    cm = cached_tech_matrix(engine, days, unit_id, "국가", 8)
+    _matrix_heatmap(cm, "")
+    if not cm.empty:
+        render_entity_drilldown(engine, days, unit_id, "국가", list(cm.index))
+
+    st.markdown("##### 기업 × 기술영역")
+    km = cached_tech_matrix(engine, days, unit_id, "기업", 8)
+    _matrix_heatmap(km, "")
+    if not km.empty:
+        render_entity_drilldown(engine, days, unit_id, "기업", list(km.index))
+
+
 def render_country_company(engine, days: int, unit_id):
     """국가 매트릭스 + 기업 추적 뷰. extracted_keywords의 국가/기업 필드 집계."""
     cc1, cc2 = st.columns(2)
@@ -1218,6 +1311,14 @@ def render_home(engine, stats: dict):
     # ── 단별 브리핑 ───────────────────────────────────
     st.markdown('<div class="home-section-title">단별 브리핑</div>', unsafe_allow_html=True)
     render_unit_briefs(unit_summary)
+
+    # ── 국가·기업 표준화 포지션 매트릭스 ───────────────
+    st.markdown('<div class="home-section-title">국가·기업 표준화 포지션 매트릭스</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="home-section-sub">최근 90일 · 국가/기업이 어느 기술영역에서 활동하는지 · 빈칸 = TTA 기여 기회</div>',
+        unsafe_allow_html=True,
+    )
+    render_standardization_matrix(engine, 90, None)
 
     # ── 즉시 검토 필요 배너 ───────────────────────────
     render_urgent_section(board)

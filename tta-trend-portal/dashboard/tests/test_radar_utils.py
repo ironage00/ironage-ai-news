@@ -20,9 +20,13 @@ from radar_utils import (  # noqa: E402
     COMPANY_NORMALIZE,
     COUNTRY_NORMALIZE,
     IMPACT_LEVEL_ORDER,
+    article_tech_areas,
     cluster_counts,
     company_counts,
     country_counts,
+    entity_detail,
+    entity_tech_matrix,
+    entity_trend,
     issue_timeline,
     parse_impact,
 )
@@ -257,6 +261,84 @@ class TestClusterCounts:
     def test_top_n(self):
         df = pd.DataFrame([{"cluster_label": f"c{i}"} for i in range(5)])
         assert len(cluster_counts(df, top_n=3)) == 3
+
+
+# ─────────────────────────── 기술영역 매트릭스 ───────────────────────────
+
+class TestTechAreas:
+    def test_article_tech_areas_synonyms(self):
+        # 6G·IMT-2030 → 6G, 보안 → 사이버보안, SDV → 자율주행
+        row = pd.Series(_article({"key_technologies": ["IMT-2030", "보안", "SDV"]}))
+        areas = article_tech_areas(row)
+        assert "6G" in areas
+        assert "사이버보안" in areas
+        assert "자율주행" in areas
+
+    def test_article_tech_areas_dict_format(self):
+        row = pd.Series(_article({"key_technologies": [{"term": "6G", "category": "기술"}]}))
+        assert "6G" in article_tech_areas(row)
+
+    def test_article_tech_areas_empty(self):
+        row = pd.Series(_article({"target_countries": ["한국"]}))
+        assert article_tech_areas(row) == set()
+
+
+class TestEntityTechMatrix:
+    def test_empty(self):
+        assert entity_tech_matrix(pd.DataFrame(), "국가", COUNTRY_NORMALIZE).empty
+
+    def test_country_tech_crosstab(self):
+        df = _df([
+            _article({"target_countries": ["한국"], "key_technologies": ["6G", "AI"]}),
+            _article({"target_countries": ["한국"], "key_technologies": ["AI"]}),
+            _article({"target_countries": ["미국"], "key_technologies": ["위성"]}),
+        ])
+        m = entity_tech_matrix(df, "국가", COUNTRY_NORMALIZE)
+        assert m.loc["한국", "AI"] == 2
+        assert m.loc["한국", "6G"] == 1
+        assert m.loc["미국", "위성통신"] == 1
+
+    def test_top_entities_limit(self):
+        df = _df([
+            _article({"target_countries": [c], "key_technologies": ["AI"]})
+            for c in ["한국", "미국", "중국", "일본", "영국"]
+        ])
+        m = entity_tech_matrix(df, "국가", COUNTRY_NORMALIZE, top_entities=2)
+        assert len(m) == 2
+
+
+class TestEntityDetail:
+    def test_basic(self):
+        df = _df([
+            _article({"target_countries": ["미국"], "key_technologies": ["AI"], "related_companies": ["엔비디아"]},
+                     title="미국 AI"),
+            _article({"target_countries": ["미국"], "key_technologies": ["위성"]}, title="미국 위성"),
+        ])
+        d = entity_detail(df, "국가", "미국", COUNTRY_NORMALIZE)
+        assert d["article_count"] == 2
+        assert "AI" in d["top_areas"]
+        assert "엔비디아" in d["top_companies"]
+
+    def test_no_match(self):
+        df = _df([_article({"target_countries": ["한국"]})])
+        d = entity_detail(df, "국가", "미국", COUNTRY_NORMALIZE)
+        assert d["article_count"] == 0
+        assert d["top_areas"] == []
+
+
+class TestEntityTrend:
+    def test_growth(self):
+        recent = _df([_article({"related_companies": ["엔비디아"]}) for _ in range(3)])
+        baseline = _df([_article({"related_companies": ["엔비디아"]})])
+        tr = entity_trend(recent, baseline, "기업", COMPANY_NORMALIZE)
+        row = tr[tr["name"] == "엔비디아"].iloc[0]
+        assert row["recent"] == 3
+        assert row["baseline"] == 1
+        assert row["growth"] == 2
+
+    def test_empty_recent(self):
+        tr = entity_trend(pd.DataFrame(), pd.DataFrame(), "기업", COMPANY_NORMALIZE)
+        assert tr.empty
 
 
 # ─────────────────────────── 상수 무결성 ───────────────────────────
