@@ -2126,15 +2126,21 @@ def get_news_data(rss_urls=None, naver_queries=None):
     log_info(f"    • 시간 초과로 제외: {stats['google_alerts']['filtered_out']}개 ⏰")
     
     # ===== Naver 뉴스 처리 =====
-    log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
-    if naver_queries is not None:
-        _active_queries = list(dict.fromkeys(naver_queries))  # 중복 제거, 순서 유지
-        log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
+    # GitHub Actions(해외 서버)에서는 openapi.naver.com 차단됨 → 건너뜀
+    _in_github_actions = os.environ.get('GITHUB_ACTIONS', '').lower() == 'true'
+    if _in_github_actions:
+        log_info("\n⏭️  Naver News 건너뜀 (GitHub Actions 환경 — 해외 IP 차단)")
     else:
-        _active_queries = get_all_active_keywords()
-        log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (단별 DB 설정)")
+        log_info(f"\n🔍 Naver News에서 최근 {NEWS_TIME_WINDOW_HOURS}시간 이내 뉴스를 수집합니다...")
+    if not _in_github_actions:
+        if naver_queries is not None:
+            _active_queries = list(dict.fromkeys(naver_queries))  # 중복 제거, 순서 유지
+            log_info(f"  📋 단별 검색어: {len(_active_queries)}개")
+        else:
+            _active_queries = get_all_active_keywords()
+            log_info(f"  📋 활성 검색어: {len(_active_queries)}개 (단별 DB 설정)")
 
-    for i, query in enumerate(_active_queries, 1):
+    for i, query in enumerate(_active_queries if not _in_github_actions else [], 1):
         if not query.strip():
             continue
 
