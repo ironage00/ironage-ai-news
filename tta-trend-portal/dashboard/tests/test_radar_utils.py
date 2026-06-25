@@ -20,6 +20,7 @@ from radar_utils import (  # noqa: E402
     COMPANY_NORMALIZE,
     COUNTRY_NORMALIZE,
     IMPACT_LEVEL_ORDER,
+    cluster_counts,
     company_counts,
     country_counts,
     issue_timeline,
@@ -222,6 +223,40 @@ class TestIssueTimeline:
         df = _df([_article({"key_technologies": ["A", "B", "C", "D", "E"]}, published="2026-06-01")])
         result = issue_timeline(df, top_n=10, max_tech_per_article=2)
         assert result["count"].sum() == 2
+
+
+# ─────────────────────────── cluster_counts ───────────────────────────
+
+class TestClusterCounts:
+    def test_empty_df(self):
+        result = cluster_counts(pd.DataFrame())
+        assert result.empty
+        assert list(result.columns) == ["cluster", "count"]
+
+    def test_missing_column(self):
+        df = pd.DataFrame([{"title": "a"}])  # cluster_label 컬럼 없음
+        assert cluster_counts(df).empty
+
+    def test_all_null_labels(self):
+        df = pd.DataFrame([{"cluster_label": None}, {"cluster_label": ""}])
+        assert cluster_counts(df).empty
+
+    def test_basic_distribution(self):
+        df = pd.DataFrame([
+            {"cluster_label": "6G · IMT-2030"},
+            {"cluster_label": "6G · IMT-2030"},
+            {"cluster_label": "위성통신 · 스타링크"},
+            {"cluster_label": None},  # 무시
+        ])
+        result = cluster_counts(df)
+        counts = dict(zip(result["cluster"], result["count"]))
+        assert counts["6G · IMT-2030"] == 2
+        assert counts["위성통신 · 스타링크"] == 1
+        assert result.iloc[0]["cluster"] == "6G · IMT-2030"  # 내림차순
+
+    def test_top_n(self):
+        df = pd.DataFrame([{"cluster_label": f"c{i}"} for i in range(5)])
+        assert len(cluster_counts(df, top_n=3)) == 3
 
 
 # ─────────────────────────── 상수 무결성 ───────────────────────────

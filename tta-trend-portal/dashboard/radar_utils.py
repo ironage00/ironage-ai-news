@@ -508,6 +508,24 @@ def country_counts(df: pd.DataFrame) -> pd.DataFrame:
     return _entity_counts(df, "국가", COUNTRY_NORMALIZE).rename(columns={"name": "country"})
 
 
+def cluster_counts(df: pd.DataFrame, top_n: int | None = None) -> pd.DataFrame:
+    """K-means 클러스터(cluster_label)별 기사 수 (순수 헬퍼).
+    cluster_articles.py 배치가 채운 cluster_id/cluster_label 사용.
+    컬럼이 없거나 비면 빈 DataFrame. 반환: cluster, count."""
+    if df.empty or "cluster_label" not in df.columns:
+        return pd.DataFrame(columns=["cluster", "count"])
+    labeled = df[df["cluster_label"].notna() & (df["cluster_label"].astype(str).str.strip() != "")]
+    if labeled.empty:
+        return pd.DataFrame(columns=["cluster", "count"])
+    result = (
+        labeled["cluster_label"].astype(str)
+        .value_counts()
+        .reset_index()
+    )
+    result.columns = ["cluster", "count"]
+    return result.head(top_n) if top_n else result
+
+
 def issue_timeline(df: pd.DataFrame, top_n: int = 8, max_tech_per_article: int = 3) -> pd.DataFrame:
     """기술 키워드(key_technologies)의 주차별 등장 빈도 + 단계 분류 (순수 헬퍼).
     '이슈 식별자'는 key_technologies 사용 (가장 안정적).

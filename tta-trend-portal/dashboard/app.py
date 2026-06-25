@@ -10,6 +10,7 @@ from artifact_utils import fetch_report_artifacts
 from db import fetch_articles, fetch_sources, fetch_stats, get_engine, is_postgres
 from graph_utils import build_edges, graph_summary
 from radar_utils import (
+    cluster_counts,
     company_counts,
     country_counts,
     filter_home_articles,
@@ -1061,6 +1062,28 @@ def cached_issue_timeline(_engine, days: int, unit_id, top_n: int):
     return issue_timeline(df, top_n=top_n)
 
 
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_cluster_counts(_engine, days: int, unit_id):
+    """클러스터 분포 — cache 래퍼. 순수 로직은 radar_utils.cluster_counts."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return cluster_counts(df)
+
+
+def render_clusters(engine, days: int, unit_id):
+    """K-means 기사 클러스터 분포. cluster_articles.py 배치가 채운 cluster_label 집계."""
+    cl = cached_cluster_counts(engine, days, unit_id)
+    if cl.empty:
+        st.info(
+            f"클러스터 데이터 없음 — 최근 {days}일 기사에 cluster_label이 없습니다. "
+            "배치(scripts/cluster_articles.py)가 아직 실행되지 않았을 수 있습니다."
+        )
+        return
+    st.caption(f"최근 {days}일 · 임베딩 기반 K-means 군집 {len(cl)}개")
+    fig = px.treemap(cl, path=["cluster"], values="count")
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+
 STAGE_EMOJI = {"급등": "🔺", "소강": "🔻", "지속": "▪️"}
 
 
@@ -1286,6 +1309,7 @@ def main():
             cached_country_counts.clear()
             cached_company_counts.clear()
             cached_issue_timeline.clear()
+            cached_cluster_counts.clear()
             st.rerun()
         render_country_company(engine, cc_days, UNIT_OPTIONS[radar_unit_label])
 
@@ -1293,6 +1317,11 @@ def main():
         st.markdown("### 이슈 타임라인")
         st.caption("기술 키워드의 주차별 등장 추이와 급등/소강 단계 (key_technologies 기준)")
         render_issue_timeline(engine, cc_days, UNIT_OPTIONS[radar_unit_label])
+
+        st.divider()
+        st.markdown("### 기사 클러스터")
+        st.caption("임베딩 기반 K-means 군집 분포 (cluster_articles.py 배치 결과)")
+        render_clusters(engine, cc_days, UNIT_OPTIONS[radar_unit_label])
 
     with tab_board:
         st.subheader("표준화 대응 보드")
