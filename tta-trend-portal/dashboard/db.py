@@ -23,6 +23,8 @@ NEWS_COLUMNS = [
     "extracted_keywords",
     "unit_id",
     "unit_ids",
+    "cluster_id",
+    "cluster_label",
 ]
 
 

@@ -398,7 +398,7 @@ CURRENT (2026-06-25)              THIS PLAN                    12개월 이상
 - [x] **T9 (P2, 2시간/CC:20분)** — radar_utils: issue_timeline() (2단계 급등/소강)
 - [x] **T10 (P2, 1시간/CC:10분)** — app.py: 타임라인 Plotly line chart 렌더링
 - [x] **T5b (P1, 30분/CC:5분)** — 집계 함수를 순수 헬퍼(DataFrame 입력)와 cache 래퍼로 분리
-- [ ] **T11 (P3, 4시간/CC:30분)** — K-means batch: 마이그레이션 먼저 → cluster_articles.py → daily-collection.yml 단계 추가
+- [x] **T11 (P3, 4시간/CC:30분)** — K-means batch: 마이그레이션 먼저 → cluster_articles.py → daily-collection.yml 단계 추가
 - [x] **T12 (P2, 30분/CC:5분)** — 각 신규 뷰에 @st.cache_data(ttl=7200) + 새로고침 버튼
 - [x] **T13 (P1, 3시간/CC:20분)** — tests/test_radar_utils.py: 신규 함수 전체 커버리지(happy+엣지) + pytest 추가
 
