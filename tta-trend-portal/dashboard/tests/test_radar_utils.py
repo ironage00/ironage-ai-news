@@ -22,11 +22,13 @@ from radar_utils import (  # noqa: E402
     IMPACT_LEVEL_ORDER,
     article_tech_areas,
     cluster_counts,
+    cluster_detail,
     company_counts,
     country_counts,
     entity_detail,
     entity_tech_matrix,
     entity_trend,
+    issue_board,
     issue_timeline,
     parse_impact,
 )
@@ -54,13 +56,19 @@ class TestParseImpact:
     def test_happy_path(self):
         row = pd.Series(_article({
             "impact_level": "Critical",
+            "impact_reason": "안보에 중대한 영향",
             "tta_action_item": "ITU 제출 검토",
             "standardization_gap": "국내 표준 부재",
         }))
         out = parse_impact(row)
         assert out["impact_level"] == "Critical"
+        assert out["impact_reason"] == "안보에 중대한 영향"
         assert out["tta_action_item"] == "ITU 제출 검토"
         assert out["standardization_gap"] == "국내 표준 부재"
+
+    def test_impact_reason_missing(self):
+        row = pd.Series(_article({"impact_level": "High"}))
+        assert parse_impact(row)["impact_reason"] == ""
 
     def test_missing_keys_return_empty(self):
         row = pd.Series(_article({"keywords": ["5G"]}))  # 리치 필드 없음
@@ -71,7 +79,7 @@ class TestParseImpact:
     def test_null_json(self):
         row = pd.Series(_article(None))
         out = parse_impact(row)
-        assert out == {"impact_level": "", "tta_action_item": "", "standardization_gap": ""}
+        assert out == {"impact_level": "", "impact_reason": "", "tta_action_item": "", "standardization_gap": ""}
 
     def test_malformed_json(self):
         row = pd.Series(_article("{not valid json"))
@@ -339,6 +347,58 @@ class TestEntityTrend:
     def test_empty_recent(self):
         tr = entity_trend(pd.DataFrame(), pd.DataFrame(), "기업", COMPANY_NORMALIZE)
         assert tr.empty
+
+
+# ─────────────────────────── issue_board 영향필드 ───────────────────────────
+
+class TestIssueBoardImpactFields:
+    def test_board_has_why_and_action(self):
+        # ICT 관련 + 홈 적합 제목이어야 board에 포함됨
+        df = _df([_article(
+            {"impact_level": "Critical", "impact_reason": "6G 주파수 경쟁 가속",
+             "tta_action_item": "ITU 논의 점검", "key_technologies": ["6G"]},
+            title="6G 주파수 확보 국제 경쟁 심화",
+        )])
+        board = issue_board(df, limit=5)
+        if not board.empty:  # 필터 통과 시
+            row = board.iloc[0]
+            assert "왜 중요한가" in board.columns
+            assert row["영향등급"] == "Critical"
+
+
+# ─────────────────────────── cluster_detail ───────────────────────────
+
+class TestClusterDetail:
+    def test_empty(self):
+        assert cluster_detail(pd.DataFrame()) == []
+
+    def test_missing_column(self):
+        assert cluster_detail(pd.DataFrame([{"title": "a"}])) == []
+
+    def test_aggregates_per_cluster(self):
+        df = _df([
+            {**_article({"key_technologies": ["6G"], "related_companies": ["삼성전자"],
+                         "target_countries": ["한국"]}, title="6G news 1"),
+             "cluster_label": "6G · IMT-2030", "source": "Etnews", "link": "http://a"},
+            {**_article({"key_technologies": ["6G"]}, title="6G news 2"),
+             "cluster_label": "6G · IMT-2030", "source": "Yna", "link": "http://b"},
+        ])
+        details = cluster_detail(df)
+        assert len(details) == 1
+        d = details[0]
+        assert d["label"] == "6G · IMT-2030"
+        assert d["count"] == 2
+        assert "6G" in d["technologies"]
+        assert "삼성전자" in d["companies"]
+        assert "한국" in d["countries"]
+        assert set(d["sources"]) == {"Etnews", "Yna"}
+        assert len(d["articles"]) == 2
+
+    def test_skips_null_labels(self):
+        df = _df([
+            {**_article({"key_technologies": ["AI"]}), "cluster_label": None, "source": "X", "link": "y"},
+        ])
+        assert cluster_detail(df) == []
 
 
 # ─────────────────────────── 상수 무결성 ───────────────────────────

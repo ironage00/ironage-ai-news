@@ -660,6 +660,60 @@ def cluster_counts(df: pd.DataFrame, top_n: int | None = None) -> pd.DataFrame:
     return result.head(top_n) if top_n else result
 
 
+def cluster_detail(df: pd.DataFrame, top_n_clusters: int = 8) -> list[dict]:
+    """각 클러스터(cluster_label)별 상세 — 근거 기사 묶음 카드용 (순수 헬퍼).
+    반환 리스트 항목: label, count, sources, technologies, companies, countries,
+    standards, articles. cluster_label 컬럼 없으면 빈 리스트."""
+    if df.empty or "cluster_label" not in df.columns:
+        return []
+    labeled = df[df["cluster_label"].notna() & (df["cluster_label"].astype(str).str.strip() != "")]
+    if labeled.empty:
+        return []
+    order = labeled["cluster_label"].astype(str).value_counts().head(top_n_clusters).index.tolist()
+    details: list[dict] = []
+    for label in order:
+        grp = labeled[labeled["cluster_label"].astype(str) == label]
+        sources: Counter[str] = Counter()
+        techs: Counter[str] = Counter()
+        companies: Counter[str] = Counter()
+        countries: Counter[str] = Counter()
+        standards: Counter[str] = Counter()
+        articles: list[dict] = []
+        for _, row in grp.iterrows():
+            src = clean_text(row.get("source"), 40)
+            if src:
+                sources[src] += 1
+            for name, lab in keyword_items(row):
+                if lab == "기술":
+                    techs[name] += 1
+                elif lab == "기업":
+                    companies[COMPANY_NORMALIZE.get(name, name)] += 1
+                elif lab == "국가":
+                    countries[COUNTRY_NORMALIZE.get(name, name)] += 1
+                elif lab == "표준":
+                    standards[name] += 1
+            gap = parse_impact(row).get("standardization_gap", "")
+            if gap and "미확인" not in gap:
+                standards[gap[:60]] += 1
+            articles.append({
+                "title": clean_text(row.get("title"), 120),
+                "link": row.get("link", ""),
+                "source": src,
+                "date": article_date(row),
+            })
+        details.append({
+            "label": label,
+            "count": len(grp),
+            "sources": [s for s, _ in sources.most_common(3)],
+            "technologies": [t for t, _ in techs.most_common(5)],
+            "companies": [c for c, _ in companies.most_common(4)],
+            "countries": [c for c, _ in countries.most_common(4)],
+            "standards": [s for s, _ in standards.most_common(2)],
+            "articles": sorted(articles, key=lambda x: (x["date"] is None, x["date"]), reverse=True)[:6],
+        })
+    return details
+
+
 def issue_timeline(df: pd.DataFrame, top_n: int = 8, max_tech_per_article: int = 3) -> pd.DataFrame:
     """기술 키워드(key_technologies)의 주차별 등장 빈도 + 단계 분류 (순수 헬퍼).
     '이슈 식별자'는 key_technologies 사용 (가장 안정적).
@@ -714,6 +768,7 @@ def parse_impact(row: pd.Series) -> dict:
     data = parse_keywords(row.get("extracted_keywords"))
     return {
         "impact_level": clean_text(data.get("impact_level", ""), 20),
+        "impact_reason": clean_text(data.get("impact_reason", ""), 400),
         "tta_action_item": clean_text(data.get("tta_action_item", ""), 400),
         "standardization_gap": clean_text(data.get("standardization_gap", ""), 400),
     }
@@ -794,6 +849,7 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
                 "영향도": impact,
                 "긴급도": urgency,
                 "영향등급": impact_data["impact_level"],
+                "왜 중요한가": impact_data["impact_reason"],
                 "TTA 대응과제": impact_data["tta_action_item"],
                 "표준화 격차": impact_data["standardization_gap"],
                 "관련 엔티티": ", ".join(entities),
@@ -806,7 +862,7 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
         )
     if not rows:
         return pd.DataFrame(
-            columns=["이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "영향등급", "TTA 대응과제", "표준화 격차", "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모"]
+            columns=["이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "영향등급", "왜 중요한가", "TTA 대응과제", "표준화 격차", "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모"]
         )
     board = pd.DataFrame(rows)
     board = board.drop_duplicates(subset=["이슈 후보"])

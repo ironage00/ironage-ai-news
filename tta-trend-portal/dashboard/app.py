@@ -13,6 +13,7 @@ from radar_utils import (
     COMPANY_NORMALIZE,
     COUNTRY_NORMALIZE,
     cluster_counts,
+    cluster_detail,
     company_counts,
     country_counts,
     entity_detail,
@@ -797,6 +798,38 @@ def impact_badge_html(level: str) -> str:
     return f'<span class="meta-pill" style="background:{bg};color:{color};">{icon} {esc(level)}</span>'
 
 
+def render_executive_brief_top(board: pd.DataFrame):
+    """오늘 반드시 봐야 할 3개 이슈 — 홈 최상단 카드.
+    제목·영향등급·왜 중요한가·관련 기술/표준·TTA 대응·분석실 버튼."""
+    if board.empty:
+        st.info("오늘의 핵심 이슈를 만들 분석 기사가 아직 부족합니다.")
+        return
+    top3 = board.head(3)
+    cols = st.columns(3)
+    for i, (_, row) in enumerate(top3.iterrows()):
+        level = str(row.get("영향등급", "") or "")
+        why = str(row.get("왜 중요한가", "") or "")
+        tta = str(row.get("TTA 대응과제", "") or "")
+        ents = str(row.get("관련 엔티티", "") or "")
+        with cols[i]:
+            with st.container(border=True):
+                st.markdown(impact_badge_html(level) + f"  <span class='meta-pill'>긴급도 {esc(row.get('긴급도'))}/10</span>",
+                            unsafe_allow_html=True)
+                st.markdown(f"**{esc(row.get('이슈 후보'), 90)}**")
+                if why:
+                    st.caption("왜 중요한가: " + esc(why, 160))
+                if ents:
+                    st.caption("관련 기술/표준: " + esc(ents, 80))
+                if tta:
+                    st.markdown(f"<div style='font-size:0.82rem;color:#0369a1;'>TTA 대응: {esc(tta, 130)}</div>",
+                                unsafe_allow_html=True)
+                bc1, bc2 = st.columns(2)
+                bc1.link_button("자세히 보기", str(row.get("관련 기사", "") or "#"), use_container_width=True)
+                if bc2.button("분석실로", key=f"exec_brief_qa_{i}", use_container_width=True):
+                    st.session_state["portal_query"] = str(row.get("이슈 후보", ""))
+                    st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
+
+
 def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
     if board.empty:
         st.info("표준화 대응 후보를 만들 수 있는 분석 기사가 아직 부족합니다.")
@@ -1074,8 +1107,15 @@ def cached_cluster_counts(_engine, days: int, unit_id):
     return cluster_counts(df)
 
 
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_cluster_detail(_engine, days: int, unit_id, top_n: int):
+    """클러스터 상세 카드 — cache 래퍼. 순수 로직은 radar_utils.cluster_detail."""
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return cluster_detail(df, top_n_clusters=top_n)
+
+
 def render_clusters(engine, days: int, unit_id):
-    """K-means 기사 클러스터 분포. cluster_articles.py 배치가 채운 cluster_label 집계."""
+    """근거 기사 클러스터 — 토픽 맵(treemap) + 클러스터별 rich 카드."""
     cl = cached_cluster_counts(engine, days, unit_id)
     if cl.empty:
         st.info(
@@ -1083,10 +1123,31 @@ def render_clusters(engine, days: int, unit_id):
             "배치(scripts/cluster_articles.py)가 아직 실행되지 않았을 수 있습니다."
         )
         return
-    st.caption(f"최근 {days}일 · 임베딩 기반 K-means 군집 {len(cl)}개")
+    st.caption(f"최근 {days}일 · 임베딩 기반 K-means 군집 {len(cl)}개 · 토픽 맵")
     fig = px.treemap(cl, path=["cluster"], values="count")
-    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10))
+    fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
+
+    # 클러스터별 근거 묶음 카드
+    details = cached_cluster_detail(engine, days, unit_id, 8)
+    for d in details:
+        with st.expander(f"📁 {d['label']}  ·  {d['count']}건", expanded=False):
+            meta = st.columns(2)
+            with meta[0]:
+                if d["technologies"]:
+                    st.caption("핵심 키워드: " + ", ".join(d["technologies"]))
+                if d["companies"]:
+                    st.caption("주요 기업: " + ", ".join(d["companies"]))
+                if d["countries"]:
+                    st.caption("주요 국가: " + ", ".join(d["countries"]))
+            with meta[1]:
+                if d["sources"]:
+                    st.caption("주요 출처: " + ", ".join(d["sources"]))
+                if d["standards"]:
+                    st.caption("표준화 포인트: " + " / ".join(d["standards"]))
+            st.markdown("**대표 기사**")
+            for a in d["articles"]:
+                st.markdown(f"- [{esc(a['title'], 90)}]({a['link']}) · {esc(a['source'], 30)}")
 
 
 STAGE_EMOJI = {"급등": "🔺", "소강": "🔻", "지속": "▪️"}
@@ -1287,6 +1348,14 @@ def render_home(engine, stats: dict):
         f"최근 {window_days}일 기준 실데이터 브리핑 · {ict_ratio} · "
         f"DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}"
     )
+
+    # ── 오늘의 Executive Brief — 반드시 봐야 할 3개 (최상단) ──
+    st.markdown('<div class="home-section-title">오늘의 Executive Brief</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="home-section-sub">오늘 반드시 봐야 할 3개 이슈 · 영향등급·왜 중요한가·TTA 대응</div>',
+        unsafe_allow_html=True,
+    )
+    render_executive_brief_top(board)
 
     # ── KPI strip ────────────────────────────────────
     render_kpi_strip(stats, board, keywords, reports)
