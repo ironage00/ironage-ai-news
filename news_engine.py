@@ -6519,13 +6519,19 @@ def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
 def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     """3단계 최적화 파이프라인 (Level 3).
 
-    Phase 1: 통합 수집 1회 -- 4단 RSS+키워드 병합 -> 전역 풀
-    Phase 2: 룰 기반 단별 분류 -- AI 호출 없음
-    Phase 3: Unique 기사 병렬 심층 분析 -- ThreadPoolExecutor(workers=5)
-    Phase 4: 단별 리포트/이메일 -- 순차 (socket 안전)
+    Phase 1  : 통합 수집 1회 -- 4단 RSS+키워드 병합 -> 전역 풀
+    Phase 2  : 룰 기반 단별 분류 -- AI 호출 없음
+    Phase 2.5: 타이틀 유사도 클러스터링 -- 명백한 중복 사전 제거
+    Phase 2.6: AI 기반 단별 선별 -- filter_news_by_ai() (정책 맥락 우선순위)
+               → is_selected=True / quality_score=1.0 DB 반영
+    Phase 3  : Unique 기사 병렬 심층 분析 -- ThreadPoolExecutor(workers=5)
+    Phase 3.5: 타 단 컴팩트 브리프 사전 생성
+    Phase 3.6: 키워드 기반 의미적 중복 클러스터링
+    Phase 4  : 단별 리포트/이메일 -- 순차 (socket 안전)
 
-    절감 목표:
-        수집 API 75% 감소  필터AI 100% 제거  분析 약 25% 감소  총 시간 약 60% 단축
+    ⚠️  filter_news_by_ai() 프롬프트를 개선하면 Phase 2.6에서 자동 반영됨.
+        이 함수가 프로덕션 daily 경로의 유일한 진입점이므로 구 함수(run_daily_collection)를
+        수정해도 여기에는 반영되지 않음 — 항상 이 함수를 기준으로 작업할 것.
     """
     if ai_model is None:
         ai_model = CONFIG.get('ai_model', 'openai')
@@ -6624,6 +6630,44 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         _p_after = len(unit_pools[_uid2])
         if _p_before > _p_after:
             log_info(f"   {unit_cfgs[_uid2]['display']}: {_p_before}→{_p_after}개 (타이틀 중복 {_p_before - _p_after}건 클러스터링)")
+
+    # Phase 2.6: AI 기반 단별 선별 (구 시스템 반영 — 정책 맥락 우선순위)
+    # filter_news_by_ai()가 개선되더라도 이 호출 지점이 프로덕션 경로에 있으므로 자동 반영됨.
+    log_info("[Phase 2.6] AI 기반 단별 선별 (정책 맥락 우선순위 + 중복 제거)")
+    for _uid26 in list(unit_pools.keys()):
+        _pool26 = unit_pools[_uid26]
+        _disp26 = unit_cfgs[_uid26]['display']
+        _kws26  = unit_cfgs[_uid26]['keywords']
+        if not _pool26:
+            continue
+        try:
+            _selected26 = filter_news_by_ai(
+                _pool26,
+                ai_model=ai_model,
+                max_results=30,
+                unit_keywords=_kws26,
+                unit_display=_disp26,
+            )
+            if _selected26:
+                log_info(f"   {_disp26}: AI 선별 {len(_pool26)}→{len(_selected26)}개")
+                unit_pools[_uid26] = _selected26
+                # is_selected=True / quality_score=1.0 DB 반영
+                _sel_links26 = {it['link'] for it in _selected26}
+                try:
+                    with get_db_session() as _s26:
+                        _s26.query(NewsArticle).filter(
+                            NewsArticle.link.in_(_sel_links26)
+                        ).update(
+                            {'is_selected': True, 'quality_score': 1.0},
+                            synchronize_session=False,
+                        )
+                        _s26.commit()
+                except Exception as _dbe26:
+                    log_warning(f"   [{_disp26}] is_selected DB 업데이트 실패: {_dbe26}")
+            else:
+                log_warning(f"   {_disp26}: AI 선별 결과 없음 — 원본 풀 유지")
+        except Exception as _e26:
+            log_warning(f"   {_disp26}: AI 선별 실패 ({_e26}) — 원본 풀 유지")
 
     # Phase 3: Unique 기사 병렬 심층 분析
     _TOP = 50
