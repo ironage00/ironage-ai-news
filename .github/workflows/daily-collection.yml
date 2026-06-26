@@ -55,6 +55,14 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
 
+      # T11: 임베딩 기반 K-means 클러스터 갱신 (Supabase에 cluster_id/cluster_label 기록)
+      # 수집·임베딩 이후 실행. 실패해도 수집 결과에는 영향 없도록 continue-on-error.
+      - name: Update article clusters
+        continue-on-error: true
+        run: python tta-trend-portal/scripts/cluster_articles.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
       - name: Save DB to cache
         if: always()
         uses: actions/cache/save@v4

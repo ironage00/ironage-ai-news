@@ -42,5 +42,8 @@ plotly>=5.18.0
 networkx>=3.0
 pyvis>=0.3.2
 
+# 기사 클러스터링 (T11 — K-means 배치, scripts/cluster_articles.py)
+scikit-learn>=1.3,<2
+
 # 기타
 Pillow>=10.0.0
