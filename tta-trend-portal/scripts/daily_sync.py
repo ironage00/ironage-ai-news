@@ -20,13 +20,13 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import execute_values
 
-SQLITE_PATH = Path(__file__).resolve().parents[3] / "data" / "news.db"
+SQLITE_PATH = Path(__file__).resolve().parents[2] / "data" / "news.db"
 BATCH_SIZE = 500
 
 
 def _load_env():
     """상위 디렉토리의 .env 파일에서 환경변수 로드"""
-    env_path = Path(__file__).resolve().parents[3] / ".env"
+    env_path = Path(__file__).resolve().parents[2] / ".env"
     if env_path.exists():
         with open(env_path) as f:
             for line in f:
