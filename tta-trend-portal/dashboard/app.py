@@ -1018,6 +1018,13 @@ def render_home(engine, stats: dict):
     )
     render_executive_brief_top(board)
 
+    st.markdown('<div class="home-section-title">국가·기업 표준화 포지션 매트릭스</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="home-section-sub">최근 90일 · 국가/기업이 어느 기술영역에서 활동하는지 · 빈칸 = TTA 기여 기회</div>',
+        unsafe_allow_html=True,
+    )
+    render_standardization_matrix(engine, 90, None)
+
 
 def main():
     embed_mode = is_embed_mode()
