@@ -769,6 +769,37 @@ def choose_home_window(df: pd.DataFrame) -> tuple[int, pd.DataFrame, pd.DataFram
     return 365, recent, baseline
 
 
+def select_daily_pool(df: pd.DataFrame, min_articles: int = 8) -> pd.DataFrame:
+    """오늘(가장 최근 수집일) 분석 기사 풀을 우선 반환.
+    9시 파이프라인이 그날치를 분석해 넣으면 Executive Brief가 그 풀에서 갱신된다.
+    그날치가 min_articles 미만이면 전체(df)를 그대로 반환해 폴백한다."""
+    if df.empty or "collected_at" not in df.columns:
+        return df
+    dated = df.copy()
+    dated["_collected_d"] = pd.to_datetime(dated["collected_at"], errors="coerce")
+    if not dated["_collected_d"].notna().any():
+        return df
+    latest_day = dated["_collected_d"].max().normalize()
+    today_pool = dated[dated["_collected_d"] >= latest_day]
+    if len(today_pool) >= min_articles:
+        return today_pool.drop(columns=["_collected_d"])
+    return df
+
+
+def daily_pool_label(df: pd.DataFrame) -> str:
+    """Brief가 어느 날짜 기사에서 나왔는지 라벨 (부제 표기용).
+    단일 수집일이면 그 날짜, 여러 날이 섞였으면(폴백) '최근'으로 정직하게 표기."""
+    if df.empty or "collected_at" not in df.columns:
+        return "최근"
+    d = pd.to_datetime(df["collected_at"], errors="coerce").dropna()
+    if d.empty:
+        return "최근"
+    days = d.dt.normalize().unique()
+    if len(days) == 1:
+        return f"{d.max():%Y-%m-%d}"
+    return "최근"
+
+
 def render_chip_cloud(chips: pd.DataFrame, label_col: str, score_col: str, fallback: str):
     if chips.empty:
         st.info(fallback)
@@ -798,36 +829,65 @@ def impact_badge_html(level: str) -> str:
     return f'<span class="meta-pill" style="background:{bg};color:{color};">{icon} {esc(level)}</span>'
 
 
-def render_executive_brief_top(board: pd.DataFrame):
-    """오늘 반드시 봐야 할 3개 이슈 — 홈 최상단 카드.
-    제목·영향등급·왜 중요한가·관련 기술/표준·TTA 대응·분석실 버튼."""
+def _entity_ribbon_html(row: pd.Series) -> str:
+    """국가·기업·기술·표준 회의체를 한눈에 보이는 4분류 칩 리본.
+    표준 회의체가 비면 'TTA 기여 기회'로 신호화 (포지션 매트릭스 철학과 일치)."""
+    mapping = [("🌐", "국가"), ("🏢", "기업"), ("⚙️", "기술"), ("📐", "표준회의체")]
+    lines = []
+    for icon, col in mapping:
+        val = str(row.get(col, "") or "").strip()
+        if val:
+            lines.append(f"<span style='color:#64748b;'>{icon}</span> {esc(val, 46)}")
+        elif col == "표준회의체":
+            lines.append(f"<span style='color:#64748b;'>{icon}</span> <span style='color:#94a3b8;font-style:italic;'>표준 연계 미식별 · 기여 기회</span>")
+    return "<div style='font-size:0.78rem;line-height:1.55;margin-top:6px;'>" + "<br>".join(lines) + "</div>"
+
+
+def _render_brief_card(row: pd.Series, idx: int):
+    """Executive Brief 카드 1장 — 영향등급·긴급도·종합점수·왜중요·TTA대응·엔티티리본."""
+    level = str(row.get("영향등급", "") or "")
+    why = str(row.get("왜 중요한가", "") or "")
+    tta = str(row.get("TTA 대응과제", "") or "")
+    score = row.get("종합점수")
+    score_pill = f"  <span class='meta-pill'>종합 {esc(score)}</span>" if pd.notna(score) else ""
+    st.markdown(
+        impact_badge_html(level)
+        + f"  <span class='meta-pill'>긴급도 {esc(row.get('긴급도'))}/10</span>"
+        + f"  <span class='meta-pill'>표준화 {esc(row.get('표준화 연계성'))}/10</span>"
+        + score_pill,
+        unsafe_allow_html=True,
+    )
+    st.markdown(f"**{esc(row.get('이슈 후보'), 90)}**")
+    if why:
+        st.caption("왜 중요한가: " + esc(why, 150))
+    st.markdown(_entity_ribbon_html(row), unsafe_allow_html=True)
+    if tta:
+        st.markdown(
+            f"<div style='font-size:0.82rem;color:#0369a1;margin-top:6px;'>TTA 대응: {esc(tta, 120)}</div>",
+            unsafe_allow_html=True,
+        )
+    bc1, bc2 = st.columns(2)
+    bc1.link_button("자세히 보기", str(row.get("관련 기사", "") or "#"), use_container_width=True)
+    if bc2.button("분석실로", key=f"exec_brief_qa_{idx}", use_container_width=True):
+        st.session_state["portal_query"] = str(row.get("이슈 후보", ""))
+        st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
+
+
+def render_executive_brief_top(board: pd.DataFrame, count: int = 6):
+    """오늘 반드시 봐야 할 핵심 이슈 — 홈 최상단 카드 (2×3, 6장).
+    매일 분석된 뉴스에서 5축 점수 + 다양성(MMR)으로 선정된 board를 받는다."""
     if board.empty:
         st.info("오늘의 핵심 이슈를 만들 분석 기사가 아직 부족합니다.")
         return
-    top3 = board.head(3)
-    cols = st.columns(3)
-    for i, (_, row) in enumerate(top3.iterrows()):
-        level = str(row.get("영향등급", "") or "")
-        why = str(row.get("왜 중요한가", "") or "")
-        tta = str(row.get("TTA 대응과제", "") or "")
-        ents = str(row.get("관련 엔티티", "") or "")
-        with cols[i]:
-            with st.container(border=True):
-                st.markdown(impact_badge_html(level) + f"  <span class='meta-pill'>긴급도 {esc(row.get('긴급도'))}/10</span>",
-                            unsafe_allow_html=True)
-                st.markdown(f"**{esc(row.get('이슈 후보'), 90)}**")
-                if why:
-                    st.caption("왜 중요한가: " + esc(why, 160))
-                if ents:
-                    st.caption("관련 기술/표준: " + esc(ents, 80))
-                if tta:
-                    st.markdown(f"<div style='font-size:0.82rem;color:#0369a1;'>TTA 대응: {esc(tta, 130)}</div>",
-                                unsafe_allow_html=True)
-                bc1, bc2 = st.columns(2)
-                bc1.link_button("자세히 보기", str(row.get("관련 기사", "") or "#"), use_container_width=True)
-                if bc2.button("분석실로", key=f"exec_brief_qa_{i}", use_container_width=True):
-                    st.session_state["portal_query"] = str(row.get("이슈 후보", ""))
-                    st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
+    top = board.head(count)
+    records = list(top.iterrows())
+    for chunk_start in range(0, len(records), 3):
+        cols = st.columns(3)
+        for offset, (_, row) in enumerate(records[chunk_start:chunk_start + 3]):
+            idx = chunk_start + offset
+            with cols[offset]:
+                with st.container(border=True):
+                    _render_brief_card(row, idx)
 
 
 def render_issue_cards(board: pd.DataFrame, rag_summary: str = ""):
@@ -1338,7 +1398,16 @@ def render_home(engine, stats: dict):
     window_days, recent_df, baseline_df = choose_home_window(full_df)
     keywords = trending_keywords(recent_df, baseline_df, limit=12)
     entities = new_entities(recent_df, baseline_df, limit=12)
-    board = issue_board(recent_df if not recent_df.empty else full_df, limit=8, unit_names=UNIT_NAMES)
+    # Executive Brief 6장 — 오늘(가장 최근 수집일) 분석 뉴스에서 우선 선정.
+    # 9시 파이프라인이 그날치 기사를 분석하면 그 풀에서 5축+다양성으로 6건이 갱신된다.
+    daily_pool = select_daily_pool(full_df, min_articles=8)
+    board = issue_board(daily_pool, limit=6, unit_names=UNIT_NAMES, diversify=True)
+    if len(board) < 6:  # 오늘 분석분이 적으면 최근 윈도로 보강
+        board = issue_board(
+            recent_df if not recent_df.empty else full_df,
+            limit=6, unit_names=UNIT_NAMES, diversify=True,
+        )
+    brief_day = daily_pool_label(daily_pool)
     unit_summary = unit_issue_summary(recent_df if not recent_df.empty else full_df, UNIT_NAMES, limit_per_unit=2)
     reports, report_source = fetch_report_artifacts(engine)
 
@@ -1349,13 +1418,14 @@ def render_home(engine, stats: dict):
         f"DB: {'PostgreSQL/Supabase' if is_postgres(engine) else 'SQLite'}"
     )
 
-    # ── 오늘의 Executive Brief — 반드시 봐야 할 3개 (최상단) ──
+    # ── 오늘의 Executive Brief — 반드시 봐야 할 6개 (최상단) ──
     st.markdown('<div class="home-section-title">오늘의 Executive Brief</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="home-section-sub">오늘 반드시 봐야 할 3개 이슈 · 영향등급·왜 중요한가·TTA 대응</div>',
+        f'<div class="home-section-sub">{esc(brief_day)} 분석 뉴스에서 선정한 6개 이슈 · '
+        f'영향도·긴급도·ICT·표준화·최신성 5축 + 다양성 · 국가/기업/기술/표준 한눈에</div>',
         unsafe_allow_html=True,
     )
-    render_executive_brief_top(board)
+    render_executive_brief_top(board, count=6)
 
     # ── KPI strip ────────────────────────────────────
     render_kpi_strip(stats, board, keywords, reports)
@@ -1406,6 +1476,24 @@ def render_home(engine, stats: dict):
     render_suggested_questions(keywords, entities)
 
 
+def refresh_caches_if_data_changed(stats: dict):
+    """9시 파이프라인이 새 기사를 분석하면 집계 캐시를 비워 Executive Brief·레이더가 갱신되게 한다.
+    신호 = 분석완료 기사 수 + 날짜. 둘 중 하나라도 바뀌면 2시간 TTL을 기다리지 않고 즉시 무효화."""
+    signature = f"{stats.get('analyzed', 0)}|{datetime.now():%Y-%m-%d}"
+    if st.session_state.get("_data_signature") == signature:
+        return
+    for cached_fn in (
+        cached_country_counts, cached_company_counts, cached_issue_timeline,
+        cached_cluster_counts, cached_cluster_detail, cached_tech_matrix,
+        build_rag_top_signal,
+    ):
+        try:
+            cached_fn.clear()
+        except Exception:
+            pass
+    st.session_state["_data_signature"] = signature
+
+
 def main():
     embed_mode = is_embed_mode()
     apply_portal_style(embed_mode)
@@ -1415,6 +1503,7 @@ def main():
 
     engine = cached_engine()
     stats = fetch_stats(engine)
+    refresh_caches_if_data_changed(stats)
     sources = fetch_sources(engine)
     render_header(stats, embed_mode)
 
@@ -1510,6 +1599,13 @@ def main():
         if board.empty:
             st.info("대응 후보가 없습니다. 기간을 넓히거나 단 필터를 해제해 보세요.")
         else:
+            # 에디터는 안정된 컬럼 집합만 노출 (리본용 분류 컬럼은 숨김, 표준화 연계성은 표시)
+            admin_cols = [
+                "이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "표준화 연계성",
+                "종합점수", "영향등급", "왜 중요한가", "TTA 대응과제",
+                "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모",
+            ]
+            board = board[[c for c in admin_cols if c in board.columns]]
             editable_board, action_source = merge_issue_actions(board, engine)
             st.caption(f"대응 상태 출처: {action_source}")
             edited_board = st.data_editor(
@@ -1518,15 +1614,17 @@ def main():
                     "관련 기사": st.column_config.LinkColumn("관련 기사"),
                     "영향도": st.column_config.ProgressColumn("영향도", min_value=0, max_value=10),
                     "긴급도": st.column_config.ProgressColumn("긴급도", min_value=0, max_value=10),
+                    "표준화 연계성": st.column_config.ProgressColumn("표준화 연계성", min_value=0, max_value=10),
+                    "종합점수": st.column_config.NumberColumn("종합점수", format="%.2f"),
                     "검토 상태": st.column_config.SelectboxColumn("검토 상태", options=STATUS_OPTIONS),
                     "조치 메모": st.column_config.TextColumn("조치 메모"),
                 },
-                disabled=["이슈 후보", "영향도", "긴급도", "관련 엔티티", "관련 기사", "출처", "권장 조치", "updated_at"],
+                disabled=["이슈 후보", "영향도", "긴급도", "표준화 연계성", "종합점수", "관련 엔티티", "관련 기사", "출처", "권장 조치", "updated_at"],
                 use_container_width=True,
                 hide_index=True,
                 key="issue_board_editor",
             )
-            st.caption("영향도/긴급도는 기사 분석문, 표준화 키워드, 최신성, 품질점수 기반의 1차 휴리스틱입니다.")
+            st.caption("영향도·긴급도·ICT·표준화·최신성 5축 가중합(종합점수) 기반 1차 휴리스틱입니다. 표준화 연계성은 TTA 미션 가중이 높습니다.")
             if st.button("검토 상태 저장"):
                 target, detail = save_issue_actions(
                     engine,
