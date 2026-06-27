@@ -798,6 +798,182 @@ def issue_scores(row: pd.Series) -> tuple[int, int]:
     return min(impact, 10), min(urgency, 10)
 
 
+# ─────────────────────── 5축 선정 기준 (Executive Brief) ───────────────────────
+# 각 축을 0~10으로 독립 정규화한 뒤 가중합으로 종합점수 산출.
+# TTA 미션을 반영해 표준화 연계성에 높은 가중을 둔다. config.json 으로 외부 조정 가능.
+SCORE_WEIGHTS = {
+    "impact": 0.30,           # 영향도
+    "urgency": 0.20,          # 긴급도
+    "ict": 0.15,              # ICT 관련성
+    "standardization": 0.25,  # 표준화 연계성
+    "recency": 0.10,          # 최신성
+}
+
+# AI가 부여한 영향등급 → 0~10 앵커 (term 카운트 포화 문제 해소)
+IMPACT_LEVEL_SCORE = {"Critical": 10.0, "High": 7.5, "Medium": 5.0, "Low": 2.5, "": 0.0}
+
+# 국제·국내 표준화 회의체 (본문 직접 언급 탐지용)
+STANDARD_BODIES = [
+    "3GPP", "ITU", "ITU-R", "ITU-T", "IEEE", "ETSI", "MPEG", "oneM2M",
+    "IETF", "ISO", "IEC", "ATIS", "CCSA", "ARIB", "TSDSI", "TTA",
+]
+
+# 긴급도 가산 신호 (정책·규제·제재 등 시급한 행동을 요하는 어휘)
+ESCALATION_TERMS = ["규제", "제재", "승인", "정책", "긴급", "리콜", "중단", "금지", "위반"]
+
+
+def axis_impact(row: pd.Series) -> float:
+    """영향도 0~10 — AI 영향등급을 앵커로, 등급 미부여 시 term 휴리스틱 폴백 + 엔티티 폭 보정."""
+    data = parse_impact(row)
+    base = IMPACT_LEVEL_SCORE.get(data["impact_level"], 0.0)
+    if base == 0.0:
+        text = _text_blob(row)
+        hits = min(_term_hits(text, IMPACT_TERMS), 5)
+        try:
+            quality = min(int(float(row.get("quality_score") or 0) // 2), 3)
+        except Exception:
+            quality = 0
+        base = min((hits + quality) / 8 * 10, 10.0)
+    breadth = len([1 for _, label in keyword_items(row) if label in ("국가", "기업")])
+    return round(min(base + min(breadth, 4) * 0.3, 10.0), 2)
+
+
+def axis_urgency(row: pd.Series) -> float:
+    """긴급도 0~10 — 행동 시급성(URGENCY_TERMS) + 정책/규제 가산. 최신성과 분리."""
+    text = _text_blob(row)
+    base = min(_term_hits(text, URGENCY_TERMS), 5) / 5 * 8
+    escalation = min(_term_hits(text, ESCALATION_TERMS), 2) * 1.0
+    return round(min(base + escalation, 10.0), 2)
+
+
+def axis_ict(row: pd.Series) -> float:
+    """ICT 관련성 0~10 — 기존 ict_relevance_score 정규화 (50점 → 만점)."""
+    raw = ict_relevance_score(row)
+    return round(max(min(raw, 50), 0) / 50 * 10, 2)
+
+
+def axis_standardization(row: pd.Series) -> float:
+    """표준화 연계성 0~10 — 독립 축. 표준 엔티티·국제 회의체 언급·표준화 격차 명시 여부."""
+    data = parse_impact(row)
+    text = _text_blob(row)
+    std_entities = [name for name, label in keyword_items(row) if label == "표준"]
+    score = min(len(std_entities), 3) * 2.0                              # 0~6
+    score += min(_term_hits(text, STANDARD_BODIES), 3) * 1.0            # 0~3
+    if data["standardization_gap"].strip():
+        score += 2.0
+    score += min(_term_hits(text, ["표준화", "기고", "워킹그룹", "표준 총회", "국제표준"]), 2) * 0.5
+    return round(min(score, 10.0), 2)
+
+
+def axis_recency(row: pd.Series) -> float:
+    """최신성 0~10 — 기사 나이 지수 감쇠 (반감기 14일). 긴급도와 분리."""
+    published = article_date(row)
+    if published is None:
+        return 0.0
+    age_days = max((pd.Timestamp(datetime.now()) - published).days, 0)
+    return round(10.0 * (0.5 ** (age_days / 14)), 2)
+
+
+def issue_axis_scores(row: pd.Series) -> dict[str, float]:
+    """5축 점수 묶음 (0~10)."""
+    return {
+        "영향도": axis_impact(row),
+        "긴급도": axis_urgency(row),
+        "ICT 관련성": axis_ict(row),
+        "표준화 연계성": axis_standardization(row),
+        "최신성": axis_recency(row),
+    }
+
+
+def weighted_issue_score(axes: dict[str, float], weights: dict[str, float] | None = None) -> float:
+    """5축 가중합 → 종합점수."""
+    w = weights or SCORE_WEIGHTS
+    return round(
+        axes["영향도"] * w["impact"]
+        + axes["긴급도"] * w["urgency"]
+        + axes["ICT 관련성"] * w["ict"]
+        + axes["표준화 연계성"] * w["standardization"]
+        + axes["최신성"] * w["recency"],
+        3,
+    )
+
+
+def categorized_entities(row: pd.Series, top: int = 3) -> dict[str, list[str]]:
+    """기사 엔티티를 국가/기업/기술/표준 4분류로 (각 상위 top개). 카드 리본·다양성용."""
+    out: dict[str, list[str]] = {"국가": [], "기업": [], "기술": [], "표준": []}
+    for name, label in keyword_items(row):
+        if label in out and name not in out[label]:
+            out[label].append(name)
+    return {k: v[:top] for k, v in out.items()}
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a and not b:
+        return 0.0
+    union = a | b
+    return len(a & b) / len(union) if union else 0.0
+
+
+def _record_entity_set(record: dict) -> set[str]:
+    """board 레코드의 기술/기업/국가 문자열을 하나의 집합으로 (다양성 유사도용)."""
+    parts: set[str] = set()
+    for col in ("기술", "기업", "국가"):
+        for token in str(record.get(col, "") or "").split(","):
+            token = token.strip()
+            if token:
+                parts.add(token)
+    return parts
+
+
+def _diversity_select(
+    board: pd.DataFrame,
+    limit: int,
+    lambda_: float = 0.7,
+    max_per_area: int = 2,
+) -> pd.DataFrame:
+    """MMR 그리디 재순위화 — 점수와 다양성을 함께 본다.
+    val = λ·정규화점수 − (1−λ)·기선정집합과의 최대유사도.
+    기술영역(_areas)은 6장 중 최대 max_per_area장으로 하드 제한(후보 부족 시 완화)."""
+    if board.empty or len(board) <= 1:
+        return board.head(limit)
+    cand = board.to_dict("records")
+    scores = [float(c.get("_score", 0.0)) for c in cand]
+    smin, smax = min(scores), max(scores)
+    span = (smax - smin) or 1.0
+    for c in cand:
+        c["_norm"] = (float(c.get("_score", 0.0)) - smin) / span
+
+    selected: list[dict] = []
+    area_count: Counter[str] = Counter()
+    while cand and len(selected) < limit:
+        best, best_val = None, None
+        for c in cand:
+            areas = c.get("_areas") or set()
+            if areas and any(area_count[a] >= max_per_area for a in areas):
+                continue
+            sim = 0.0
+            if selected:
+                c_areas = c.get("_areas") or set()
+                c_ents = _record_entity_set(c)
+                sims = []
+                for s in selected:
+                    area_sim = _jaccard(c_areas, s.get("_areas") or set())
+                    ent_sim = _jaccard(c_ents, _record_entity_set(s))
+                    unit_sim = 1.0 if c.get("담당 단") == s.get("담당 단") else 0.0
+                    sims.append(0.55 * area_sim + 0.30 * ent_sim + 0.15 * unit_sim)
+                sim = max(sims)
+            val = lambda_ * c["_norm"] - (1 - lambda_) * sim
+            if best_val is None or val > best_val:
+                best_val, best = val, c
+        if best is None:  # 모든 후보가 영역 제한에 걸림 → 제한 완화, 최고점 선택
+            best = max(cand, key=lambda c: c["_norm"])
+        selected.append(best)
+        for a in (best.get("_areas") or set()):
+            area_count[a] += 1
+        cand.remove(best)
+    return pd.DataFrame(selected)
+
+
 def recommended_action(row: pd.Series, impact: int, urgency: int) -> str:
     text = _text_blob(row)
     if impact >= 8 and urgency >= 7:
@@ -827,7 +1003,25 @@ def article_unit_label(row: pd.Series, unit_names: dict[int, str] | None = None)
     return "공통"
 
 
-def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | None = None) -> pd.DataFrame:
+BOARD_COLUMNS = [
+    "이슈 후보", "담당 단", "검토 상태",
+    "영향도", "긴급도", "ICT 관련성", "표준화 연계성", "최신성", "종합점수",
+    "영향등급", "왜 중요한가", "TTA 대응과제", "표준화 격차",
+    "관련 엔티티", "국가", "기업", "기술", "표준회의체",
+    "관련 기사", "출처", "권장 조치", "조치 메모",
+]
+
+
+def issue_board(
+    df: pd.DataFrame,
+    limit: int = 30,
+    unit_names: dict[int, str] | None = None,
+    diversify: bool = False,
+    weights: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """표준화 대응 후보 보드.
+    5축(영향도·긴급도·ICT·표준화·최신성) 가중합으로 정렬.
+    diversify=True 면 MMR 재순위화로 기술영역/엔티티 편중을 줄인다 (Executive Brief용)."""
     rows = []
     for _, row in df.iterrows():
         title = clean_text(row.get("title"), 300)
@@ -836,37 +1030,49 @@ def issue_board(df: pd.DataFrame, limit: int = 30, unit_names: dict[int, str] | 
         ict_score = ict_relevance_score(row)
         if ict_score < 3:
             continue
-        impact, urgency = issue_scores(row)
+        axes = issue_axis_scores(row)
+        score = weighted_issue_score(axes, weights)
         entities = [name for name, _ in keyword_items(row)][:6]
+        cats = categorized_entities(row)
         impact_data = parse_impact(row)
-        # AI가 부여한 impact_level을 점수에 가산 → Critical/High 기사가 상위 노출 (선택 근거)
-        impact_bonus = IMPACT_LEVEL_ORDER.get(impact_data["impact_level"], 0) * 1.5
         rows.append(
             {
                 "이슈 후보": clean_text(row.get("title"), 180),
                 "담당 단": article_unit_label(row, unit_names),
                 "검토 상태": "미검토",
-                "영향도": impact,
-                "긴급도": urgency,
+                "영향도": axes["영향도"],
+                "긴급도": axes["긴급도"],
+                "ICT 관련성": axes["ICT 관련성"],
+                "표준화 연계성": axes["표준화 연계성"],
+                "최신성": axes["최신성"],
+                "종합점수": score,
                 "영향등급": impact_data["impact_level"],
                 "왜 중요한가": impact_data["impact_reason"],
                 "TTA 대응과제": impact_data["tta_action_item"],
                 "표준화 격차": impact_data["standardization_gap"],
                 "관련 엔티티": ", ".join(entities),
+                "국가": ", ".join(cats["국가"]),
+                "기업": ", ".join(cats["기업"]),
+                "기술": ", ".join(cats["기술"]),
+                "표준회의체": ", ".join(cats["표준"]),
                 "관련 기사": row.get("link", ""),
                 "출처": clean_text(row.get("source"), 80),
-                "권장 조치": recommended_action(row, impact, urgency),
+                "권장 조치": recommended_action(row, int(axes["영향도"]), int(axes["긴급도"])),
                 "조치 메모": "",
-                "_score": impact * 1.2 + urgency + min(ict_score, 10) * 0.4 + impact_bonus,
+                "_score": score,
+                "_areas": article_tech_areas(row),
             }
         )
     if not rows:
-        return pd.DataFrame(
-            columns=["이슈 후보", "담당 단", "검토 상태", "영향도", "긴급도", "영향등급", "왜 중요한가", "TTA 대응과제", "표준화 격차", "관련 엔티티", "관련 기사", "출처", "권장 조치", "조치 메모"]
-        )
-    board = pd.DataFrame(rows)
-    board = board.drop_duplicates(subset=["이슈 후보"])
-    return board.sort_values(["_score", "긴급도", "영향도"], ascending=False).drop(columns=["_score"]).head(limit)
+        return pd.DataFrame(columns=BOARD_COLUMNS)
+    board = pd.DataFrame(rows).drop_duplicates(subset=["이슈 후보"])
+    board = board.sort_values(["_score", "긴급도", "영향도"], ascending=False)
+    if diversify:
+        board = _diversity_select(board, limit)
+    else:
+        board = board.head(limit)
+    internal_cols = [c for c in board.columns if str(c).startswith("_")]
+    return board.drop(columns=internal_cols, errors="ignore").reset_index(drop=True)
 
 
 def unit_issue_summary(df: pd.DataFrame, unit_names: dict[int, str], limit_per_unit: int = 3) -> pd.DataFrame:
