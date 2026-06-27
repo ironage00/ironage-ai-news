@@ -753,6 +753,156 @@ def render_executive_brief_top(board: pd.DataFrame):
                         st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
 
 
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_country_counts(_engine, days: int, unit_id):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return country_counts(df)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_company_counts(_engine, days: int, unit_id, top_n: int):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return company_counts(df, top_n=top_n)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_issue_timeline(_engine, days: int, unit_id, top_n: int):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return issue_timeline(df, top_n=top_n)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_cluster_counts(_engine, days: int, unit_id):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return cluster_counts(df)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_cluster_detail(_engine, days: int, unit_id, top_n: int = 8):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    return cluster_detail(df, top_n_clusters=top_n)
+
+
+def render_clusters(engine, days: int, unit_id):
+    cl = cached_cluster_counts(engine, days, unit_id)
+    if cl.empty:
+        st.info(
+            f"클러스터 데이터 없음 — 최근 {days}일 기사에 cluster_label이 없습니다. "
+            "배치(scripts/cluster_articles.py)가 아직 실행되지 않았을 수 있습니다."
+        )
+        return
+    st.caption(f"최근 {days}일 · 임베딩 기반 K-means 군집 {len(cl)}개 · 토픽 맵")
+    fig = px.treemap(cl, path=["cluster"], values="count")
+    fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+    details = cached_cluster_detail(engine, days, unit_id, 8)
+    for detail in details:
+        with st.expander(f"📁 {detail['label']}  ·  {detail['count']}건", expanded=False):
+            meta = st.columns(2)
+            with meta[0]:
+                if detail["technologies"]:
+                    st.caption("핵심 키워드: " + ", ".join(detail["technologies"]))
+                if detail["companies"]:
+                    st.caption("주요 기업: " + ", ".join(detail["companies"]))
+                if detail["countries"]:
+                    st.caption("주요 국가: " + ", ".join(detail["countries"]))
+            with meta[1]:
+                if detail["sources"]:
+                    st.caption("주요 출처: " + ", ".join(detail["sources"]))
+                if detail["standards"]:
+                    st.caption("표준화 포인트: " + " / ".join(detail["standards"]))
+            st.markdown("**대표 기사**")
+            for article in detail["articles"]:
+                st.markdown(f"- [{esc(article['title'], 90)}]({article['link']}) · {esc(article['source'], 30)}")
+
+
+def render_issue_timeline(engine, days: int, unit_id):
+    tl = cached_issue_timeline(engine, days, unit_id, 8)
+    if tl.empty:
+        st.info(f"타임라인 데이터 없음 — 최근 {days}일 분석 기사에 key_technologies 필드가 없습니다.")
+        return
+
+    latest_stage = tl.groupby("technology")["stage"].last()
+    surging = [tech for tech, stage in latest_stage.items() if stage == "급등"]
+    fading = [tech for tech, stage in latest_stage.items() if stage == "소강"]
+    sc1, sc2 = st.columns(2)
+    sc1.caption("🔺 급등: " + (", ".join(surging) if surging else "없음"))
+    sc2.caption("🔻 소강: " + (", ".join(fading) if fading else "없음"))
+
+    fig = px.line(
+        tl,
+        x="week",
+        y="count",
+        color="technology",
+        markers=True,
+        labels={"week": "주차", "count": "기사 수", "technology": "기술"},
+    )
+    fig.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10), legend_title_text="기술")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def cached_tech_matrix(_engine, days: int, unit_id, entity_label: str, top_entities: int):
+    df = fetch_articles(_engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    normalize = COUNTRY_NORMALIZE if entity_label == "국가" else COMPANY_NORMALIZE
+    return entity_tech_matrix(df, entity_label, normalize, top_entities=top_entities)
+
+
+def _matrix_heatmap(matrix: pd.DataFrame, title: str):
+    if matrix.empty:
+        st.info(f"{title}: 데이터 없음")
+        return
+    fig = px.imshow(
+        matrix.values,
+        x=list(matrix.columns),
+        y=list(matrix.index),
+        color_continuous_scale="Blues",
+        aspect="auto",
+        text_auto=True,
+    )
+    fig.update_layout(
+        height=40 * len(matrix) + 120,
+        margin=dict(l=10, r=10, t=30, b=10),
+        coloraxis_showscale=False,
+        title=title,
+    )
+    fig.update_xaxes(side="top")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _tta_implication(detail: dict, entity_label: str) -> str:
+    areas = detail.get("top_areas", [])
+    if not areas:
+        return "관련 기술영역 신호가 아직 약함 — 모니터링 유지."
+    area_txt = " · ".join(areas[:3])
+    subject = "표준화 동향" if entity_label == "국가" else "기술·표준 활동"
+    return f"{area_txt} 영역에서 활발 ({detail['article_count']}건). 관련 {subject} 추적 권장."
+
+
+def render_entity_drilldown(engine, days: int, unit_id, entity_label: str, options: list[str]):
+    if not options:
+        return
+    picked = st.selectbox(f"{entity_label} 선택", options, key=f"drill_{entity_label}")
+    df = fetch_articles(engine, days=days, unit_id=unit_id, analyzed_only=True, limit=3000)
+    normalize = COUNTRY_NORMALIZE if entity_label == "국가" else COMPANY_NORMALIZE
+    detail = entity_detail(df, entity_label, picked, normalize)
+    if detail["article_count"] == 0:
+        st.info(f"{picked} 관련 기사가 최근 {days}일 내 없습니다.")
+        return
+    with st.container(border=True):
+        st.markdown(f"#### {esc(picked)}  ·  {detail['article_count']}건")
+        c1, c2 = st.columns(2)
+        c1.caption("집중 기술영역: " + (", ".join(detail["top_areas"]) or "-"))
+        rel = detail["top_companies"] if entity_label == "국가" else detail["top_countries"]
+        rel_label = "관련 기업" if entity_label == "국가" else "관련 국가"
+        c2.caption(f"{rel_label}: " + (", ".join(rel[:5]) or "-"))
+        st.markdown(f"**TTA 시사점** — {esc(_tta_implication(detail, entity_label))}")
+        st.markdown("**관련 기사**")
+        for article in detail["articles"]:
+            st.markdown(f"- [{esc(article['title'], 90)}]({article['link']}) · {esc(article['source'], 30)}")
+
+
 def render_standardization_matrix(engine, days: int, unit_id):
     """국가·기업 표준화 포지션 매트릭스 (히트맵 + 드릴다운 + 급부상 TOP5)."""
     # 급부상 기업 TOP5 (최근 7일 vs 이전)
