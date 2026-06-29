@@ -49,6 +49,13 @@ UNIT_OPTIONS = {
 
 UNIT_NAMES = {value: label for label, value in UNIT_OPTIONS.items() if value is not None}
 DISPLAY_TZ = "Asia/Seoul"
+EXECUTIVE_BRIEF_WEIGHTS = {
+    "impact": 0.28,
+    "urgency": 0.22,
+    "ict": 0.15,
+    "standardization": 0.20,
+    "recency": 0.15,
+}
 
 UNIT_COLORS = {
     "표준기획단": "#0284c7",
@@ -336,6 +343,64 @@ def apply_portal_style(embed_mode: bool):
             text-decoration: none;
         }}
         .briefing-card.dark .briefing-link {{ color: #bae6fd; }}
+        .freshness-strip {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 9px;
+            margin: 8px 0 14px 0;
+        }}
+        .freshness-tile {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            border: 1px solid #dbe3ee;
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 11px 13px;
+        }}
+        .freshness-tile.hot {{
+            border-color: #38bdf8;
+            background: linear-gradient(135deg, #ecfeff 0%, #f8fafc 100%);
+        }}
+        .freshness-label {{
+            font-size: 10.5px;
+            font-weight: 950;
+            color: #64748b;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }}
+        .freshness-value {{
+            margin-top: 4px;
+            color: #0f172a;
+            font-size: 1rem;
+            font-weight: 950;
+            line-height: 1.2;
+        }}
+        .freshness-note {{
+            margin-top: 3px;
+            color: #64748b;
+            font-size: 11px;
+            line-height: 1.35;
+        }}
+        .rank-badge {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            background: #0f172a;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 950;
+            margin-right: 6px;
+        }}
+        .fresh-pill {{
+            border-radius: 999px;
+            padding: 5px 9px;
+            background: #dcfce7;
+            color: #166534;
+            font-size: 11px;
+            font-weight: 900;
+        }}
         .mini-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -449,6 +514,7 @@ def apply_portal_style(embed_mode: bool):
             .hero-stat-grid,
             .workflow-steps,
             .signal-grid,
+            .freshness-strip,
             .home-two-col {{
                 grid-template-columns: 1fr;
             }}
@@ -764,6 +830,28 @@ def kst_datetime_series(values) -> pd.Series:
     return pd.to_datetime(values, errors="coerce", utc=True).dt.tz_convert(DISPLAY_TZ)
 
 
+def kst_datetime_value(value):
+    if value is None or pd.isna(value):
+        return pd.NaT
+    return kst_datetime_series(pd.Series([value])).iloc[0]
+
+
+def kst_label(value, with_time: bool = True) -> str:
+    dt = kst_datetime_value(value)
+    if pd.isna(dt):
+        return ""
+    return dt.strftime("%Y-%m-%d %H:%M KST" if with_time else "%Y-%m-%d")
+
+
+def latest_kst_label(df: pd.DataFrame, column: str = "collected_at") -> str:
+    if df.empty or column not in df.columns:
+        return "확인 불가"
+    d = kst_datetime_series(df[column]).dropna()
+    if d.empty:
+        return "확인 불가"
+    return d.max().strftime("%Y-%m-%d %H:%M KST")
+
+
 def choose_home_window(df: pd.DataFrame) -> tuple[int, pd.DataFrame, pd.DataFrame]:
     if df.empty:
         return 30, df, df
@@ -837,6 +925,44 @@ def impact_badge_html(level: str) -> str:
     return f'<span class="meta-pill" style="background:{bg};color:{color};">{icon} {esc(level)}</span>'
 
 
+def render_freshness_strip(
+    raw_df: pd.DataFrame,
+    full_df: pd.DataFrame,
+    daily_pool: pd.DataFrame,
+    board: pd.DataFrame,
+    brief_day: str,
+    board_source: str,
+):
+    latest_label = latest_kst_label(raw_df)
+    filtered_label = latest_kst_label(full_df)
+    pool_note = "오늘 풀 직접 선정" if board_source == "daily_pool" else "최근 윈도로 보강"
+    html = f"""
+    <div class="freshness-strip">
+      <div class="freshness-tile hot">
+        <div class="freshness-label">Last collected</div>
+        <div class="freshness-value">{esc(latest_label)}</div>
+        <div class="freshness-note">Supabase 최신 수집 시각</div>
+      </div>
+      <div class="freshness-tile">
+        <div class="freshness-label">Brief day</div>
+        <div class="freshness-value">{esc(brief_day)}</div>
+        <div class="freshness-note">한국시간 기준 업무일</div>
+      </div>
+      <div class="freshness-tile">
+        <div class="freshness-label">Today pool</div>
+        <div class="freshness-value">{len(daily_pool):,}건</div>
+        <div class="freshness-note">ICT 필터 통과 최신 분석 기사</div>
+      </div>
+      <div class="freshness-tile">
+        <div class="freshness-label">Selected</div>
+        <div class="freshness-value">{len(board.head(6))} / {len(full_df):,}</div>
+        <div class="freshness-note">{esc(pool_note)} · 필터 최신 {esc(filtered_label)}</div>
+      </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def _entity_ribbon_html(row: pd.Series) -> str:
     """국가·기업·기술·표준 회의체를 한눈에 보이는 4분류 칩 리본.
     표준 회의체가 비면 'TTA 기여 기회'로 신호화 (포지션 매트릭스 철학과 일치)."""
@@ -857,15 +983,29 @@ def _render_brief_card(row: pd.Series, idx: int):
     why = str(row.get("왜 중요한가", "") or "")
     tta = str(row.get("TTA 대응과제", "") or "")
     score = row.get("종합점수")
+    source = str(row.get("출처", "") or "")
+    collected = kst_label(row.get("수집일"), with_time=True)
+    published = kst_label(row.get("게시일"), with_time=False)
     score_pill = f"  <span class='meta-pill'>종합 {esc(score)}</span>" if pd.notna(score) else ""
     st.markdown(
-        impact_badge_html(level)
+        f"<span class='rank-badge'>{idx + 1}</span>"
+        + "<span class='fresh-pill'>오늘 신규</span>  "
+        + impact_badge_html(level)
         + f"  <span class='meta-pill'>긴급도 {esc(row.get('긴급도'))}/10</span>"
         + f"  <span class='meta-pill'>표준화 {esc(row.get('표준화 연계성'))}/10</span>"
         + score_pill,
         unsafe_allow_html=True,
     )
     st.markdown(f"**{esc(row.get('이슈 후보'), 90)}**")
+    st.caption(
+        " · ".join(
+            part for part in [
+                f"출처 {source}" if source else "",
+                f"수집 {collected}" if collected else "",
+                f"게시 {published}" if published else "",
+            ] if part
+        )
+    )
     if why:
         st.caption("왜 중요한가: " + esc(why, 150))
     st.markdown(_entity_ribbon_html(row), unsafe_allow_html=True)
@@ -1409,12 +1549,23 @@ def render_home(engine, stats: dict):
     # Executive Brief 6장 — 오늘(가장 최근 수집일) 분석 뉴스에서 우선 선정.
     # 9시 파이프라인이 그날치 기사를 분석하면 그 풀에서 5축+다양성으로 6건이 갱신된다.
     daily_pool = select_daily_pool(full_df, min_articles=8)
-    board = issue_board(daily_pool, limit=6, unit_names=UNIT_NAMES, diversify=True)
+    board = issue_board(
+        daily_pool,
+        limit=6,
+        unit_names=UNIT_NAMES,
+        diversify=True,
+        weights=EXECUTIVE_BRIEF_WEIGHTS,
+    )
+    board_source = "daily_pool"
     if len(board) < 6:  # 오늘 분석분이 적으면 최근 윈도로 보강
         board = issue_board(
             recent_df if not recent_df.empty else full_df,
-            limit=6, unit_names=UNIT_NAMES, diversify=True,
+            limit=6,
+            unit_names=UNIT_NAMES,
+            diversify=True,
+            weights=EXECUTIVE_BRIEF_WEIGHTS,
         )
+        board_source = "fallback"
     brief_day = daily_pool_label(daily_pool)
     unit_summary = unit_issue_summary(recent_df if not recent_df.empty else full_df, UNIT_NAMES, limit_per_unit=2)
     reports, report_source = fetch_report_artifacts(engine)
@@ -1430,9 +1581,10 @@ def render_home(engine, stats: dict):
     st.markdown('<div class="home-section-title">오늘의 Executive Brief</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="home-section-sub">{esc(brief_day)} 분석 뉴스에서 선정한 6개 이슈 · '
-        f'영향도·긴급도·ICT·표준화·최신성 5축 + 다양성 · 국가/기업/기술/표준 한눈에</div>',
+        f'영향도·긴급도·표준화·최신성 5축 + 다양성 · 최신성 가중 보강</div>',
         unsafe_allow_html=True,
     )
+    render_freshness_strip(raw_df, full_df, daily_pool, board, brief_day, board_source)
     render_executive_brief_top(board, count=6)
 
     # ── KPI strip ────────────────────────────────────
