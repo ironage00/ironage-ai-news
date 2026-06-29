@@ -48,6 +48,7 @@ UNIT_OPTIONS = {
 }
 
 UNIT_NAMES = {value: label for label, value in UNIT_OPTIONS.items() if value is not None}
+DISPLAY_TZ = "Asia/Seoul"
 
 UNIT_COLORS = {
     "표준기획단": "#0284c7",
@@ -756,6 +757,13 @@ def date_label(value) -> str:
         return str(value)[:10]
 
 
+def kst_datetime_series(values) -> pd.Series:
+    """Dashboard dates are shown by Korean business day.
+    Supabase rows collected by GitHub Actions are UTC-naive in practice, so
+    normalize with utc=True before converting to KST."""
+    return pd.to_datetime(values, errors="coerce", utc=True).dt.tz_convert(DISPLAY_TZ)
+
+
 def choose_home_window(df: pd.DataFrame) -> tuple[int, pd.DataFrame, pd.DataFrame]:
     if df.empty:
         return 30, df, df
@@ -776,7 +784,7 @@ def select_daily_pool(df: pd.DataFrame, min_articles: int = 8) -> pd.DataFrame:
     if df.empty or "collected_at" not in df.columns:
         return df
     dated = df.copy()
-    dated["_collected_d"] = pd.to_datetime(dated["collected_at"], errors="coerce")
+    dated["_collected_d"] = kst_datetime_series(dated["collected_at"])
     if not dated["_collected_d"].notna().any():
         return df
     latest_day = dated["_collected_d"].max().normalize()
@@ -791,7 +799,7 @@ def daily_pool_label(df: pd.DataFrame) -> str:
     단일 수집일이면 그 날짜, 여러 날이 섞였으면(폴백) '최근'으로 정직하게 표기."""
     if df.empty or "collected_at" not in df.columns:
         return "최근"
-    d = pd.to_datetime(df["collected_at"], errors="coerce").dropna()
+    d = kst_datetime_series(df["collected_at"]).dropna()
     if d.empty:
         return "최근"
     days = d.dt.normalize().unique()
