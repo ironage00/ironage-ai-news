@@ -42,18 +42,18 @@ st.set_page_config(
 UNIT_OPTIONS = {
     "전체": None,
     "표준기획단": 1,
-    "표준진흥단": 2,
-    "AI융합단": 3,
-    "전파네트워크단": 4,
+    "표준혁신단": 2,
+    "AI융합표준단": 3,
+    "전파네트워크표준단": 4,
 }
 
 UNIT_NAMES = {value: label for label, value in UNIT_OPTIONS.items() if value is not None}
 
 UNIT_COLORS = {
     "표준기획단": "#0284c7",
-    "표준진흥단": "#059669",
-    "AI융합단": "#7c3aed",
-    "전파네트워크단": "#b45309",
+    "표준혁신단": "#059669",
+    "AI융합표준단": "#7c3aed",
+    "전파네트워크표준단": "#b45309",
 }
 
 
