@@ -11,6 +11,11 @@ on:
         options:
           - 'true'
           - 'false'
+      recipient_override:
+        description: 'If set, send ALL unit emails ONLY to this address (comma-separated). Ignores per-unit DB recipients.'
+        required: false
+        default: ''
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -52,6 +57,7 @@ jobs:
           GMAIL_SENDER:           ${{ secrets.GMAIL_SENDER }}
           GMAIL_PASSWORD:         ${{ secrets.GMAIL_PASSWORD }}
           DISABLE_EMAIL:          ${{ github.event.inputs.send_email == 'false' && '1' || '0' }}
+          EMAIL_OVERRIDE_TO:      ${{ github.event.inputs.recipient_override }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
 

@@ -5480,6 +5480,12 @@ def send_gmail_report(
     """
 
     actual_receivers = list(receivers) if receivers else list(RECEIVER_EMAIL)
+    # 수신자 강제 오버라이드 (테스트/단독 발송용): 설정 시 단별 DB 수신자를 무시하고
+    # 지정 주소로만 발송한다. 모든 발송이 이 함수를 거치므로 여기서 한 번에 보장된다.
+    _override_to = os.environ.get('EMAIL_OVERRIDE_TO', '').strip()
+    if _override_to:
+        actual_receivers = [a.strip() for a in _override_to.split(',') if a.strip()]
+        log_warning(f"  ⚠️ EMAIL_OVERRIDE_TO 설정 — 지정 수신자에게만 발송: {', '.join(actual_receivers)}")
     if os.environ.get('DISABLE_EMAIL', '').strip().lower() in ('1', 'true', 'yes', 'on'):
         log_warning(f"  ⚠️ DISABLE_EMAIL 설정으로 이메일 발송 건너뜀. 대상 {len(actual_receivers)}명")
         return
