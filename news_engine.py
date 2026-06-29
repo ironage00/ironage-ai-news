@@ -6522,8 +6522,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     Phase 1  : 통합 수집 1회 -- 4단 RSS+키워드 병합 -> 전역 풀
     Phase 2  : 룰 기반 단별 분류 -- AI 호출 없음
     Phase 2.5: 타이틀 유사도 클러스터링 -- 명백한 중복 사전 제거
-    Phase 2.6: 전역 AI 선별 -- filter_news_by_ai() 1회로 전체 풀에서 베스트 N개 선별
-               (구 시스템 main6.93t.py 방식 복원: 단별로 쪼개지 않고 전역 선별 후 단 배정)
+    Phase 2.6: AI 기반 단별 선별 -- filter_news_by_ai() (정책 맥락 우선순위)
                → is_selected=True / quality_score=1.0 DB 반영
     Phase 3  : Unique 기사 병렬 심층 분析 -- ThreadPoolExecutor(workers=5)
     Phase 3.5: 타 단 컴팩트 브리프 사전 생성
@@ -6632,81 +6631,53 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         if _p_before > _p_after:
             log_info(f"   {unit_cfgs[_uid2]['display']}: {_p_before}→{_p_after}개 (타이틀 중복 {_p_before - _p_after}건 클러스터링)")
 
-    # Phase 2.6: 전역 AI 선별 (구 시스템 main6.93t.py 방식 복원)
-    # ──────────────────────────────────────────────────────────────────────────
-    # 구 시스템은 전체 수집 뉴스에서 '가장 중요한 N개'를 전역(global) 선별했다.
-    # 단별로 쪼개 선별하면 단별 풀이 좁아 AI가 과도하게 압축(예: 258→9)되어
-    # 구 시스템의 "전체에서 베스트를 뽑는" 판단이 사라진다.
-    # → 전역으로 1회 선별한 뒤, 결과를 Phase 2 분류 태그 기준으로 단에 배정한다.
-    #    (단별 리포트 구조는 유지하면서 선별 판단만 전역으로 복원)
-    # filter_news_by_ai() 호출 지점이 프로덕션 경로에 있으므로 프롬프트 개선도 자동 반영됨.
-    log_info("[Phase 2.6] 전역 AI 선별 (구 시스템 방식 — 전체 풀에서 베스트 선별 후 단 배정)")
-    _global_seen: dict = {}
-    for _uidg in unit_pools:
-        for _itg in unit_pools[_uidg]:
-            _global_seen.setdefault(_itg['link'], _itg)
-    _global_candidates = list(_global_seen.values())
-
-    _GLOBAL_TARGET = int(CONFIG.get('daily_global_select_count', 50))
-    _global_selected: list = []
-    if _global_candidates:
+    # Phase 2.6: AI 기반 단별 선별 (구 시스템 반영 — 정책 맥락 우선순위)
+    # filter_news_by_ai()가 개선되더라도 이 호출 지점이 프로덕션 경로에 있으므로 자동 반영됨.
+    log_info("[Phase 2.6] AI 기반 단별 선별 (정책 맥락 우선순위 + 중복 제거)")
+    for _uid26 in list(unit_pools.keys()):
+        _pool26 = unit_pools[_uid26]
+        _disp26 = unit_cfgs[_uid26]['display']
+        _kws26  = unit_cfgs[_uid26]['keywords']
+        if not _pool26:
+            continue
         try:
-            _global_selected = filter_news_by_ai(
-                _global_candidates,
+            _selected26 = filter_news_by_ai(
+                _pool26,
                 ai_model=ai_model,
-                max_results=_GLOBAL_TARGET,
-                unit_keywords=None,   # 전역 선별: 관대한 ICT 필터(구 시스템 동일), 단별 이중게이트 미적용
-                unit_display=None,    # 'TTA 표준화본부' 전체 관점
+                max_results=30,
+                unit_keywords=_kws26,
+                unit_display=_disp26,
             )
-        except Exception as _ge:
-            log_warning(f"   전역 AI 선별 실패 ({_ge}) — 단별 원본 풀 유지(폴백)")
-            _global_selected = []
+            if _selected26:
+                log_info(f"   {_disp26}: AI 선별 {len(_pool26)}→{len(_selected26)}개")
+                unit_pools[_uid26] = _selected26
+                # is_selected=True / quality_score=1.0 DB 반영
+                _sel_links26 = {it['link'] for it in _selected26}
+                try:
+                    with get_db_session() as _s26:
+                        _s26.query(NewsArticle).filter(
+                            NewsArticle.link.in_(_sel_links26)
+                        ).update(
+                            {'is_selected': True, 'quality_score': 1.0},
+                            synchronize_session=False,
+                        )
+                        _s26.commit()
+                except Exception as _dbe26:
+                    log_warning(f"   [{_disp26}] is_selected DB 업데이트 실패: {_dbe26}")
+            else:
+                log_warning(f"   {_disp26}: AI 선별 결과 없음 — 원본 풀 유지")
+        except Exception as _e26:
+            log_warning(f"   {_disp26}: AI 선별 실패 ({_e26}) — 원본 풀 유지")
 
-    if _global_selected:
-        log_info(f"   전역 선별: {len(_global_candidates)}→{len(_global_selected)}개 (목표 {_GLOBAL_TARGET})")
-        # is_selected=True / quality_score=1.0 DB 반영
-        _sel_links_g = {it['link'] for it in _global_selected}
-        try:
-            with get_db_session() as _sg:
-                _sg.query(NewsArticle).filter(
-                    NewsArticle.link.in_(_sel_links_g)
-                ).update(
-                    {'is_selected': True, 'quality_score': 1.0},
-                    synchronize_session=False,
-                )
-                _sg.commit()
-        except Exception as _dbeg:
-            log_warning(f"   전역 선별 is_selected DB 업데이트 실패: {_dbeg}")
-
-        # 전역 선별 결과를 단별로 배정 (Phase 2 분류 태그 기준) — 단별 리포트 커버리지 유지
-        _new_pools: dict = {uid: [] for uid in unit_pools}
-        for _its in _global_selected:
-            _tags = _its.get('_unit_tags') or {}
-            _assigned = [uid for uid in _new_pools if uid in _tags]
-            if not _assigned and _its.get('_primary_unit_id') in _new_pools:
-                _assigned = [_its['_primary_unit_id']]
-            for uid in _assigned:
-                _new_pools[uid].append(_its)
-        # 빈 단 방지: 전역 선별에 해당 단 기사가 없으면 기존 풀 상위로 최소 보강
-        for uid in unit_pools:
-            if not _new_pools[uid]:
-                _new_pools[uid] = unit_pools[uid][:5]
-                if _new_pools[uid]:
-                    log_info(f"   {unit_cfgs[uid]['display']}: 전역 선별분 없음 — 원본 풀 상위 {len(_new_pools[uid])}개로 보강")
-        unit_pools = _new_pools
-    else:
-        log_warning("   전역 선별 결과 없음 — 단별 원본 풀 유지(폴백)")
-
-    # Phase 3: Unique 기사 병렬 심층 분析 — 전역 선별 집합을 우선 분석
-    _needed: dict = {}
-    for _its in _global_selected:
-        _needed.setdefault(_its['link'], _its)
+    # Phase 3: Unique 기사 병렬 심층 분析
     _TOP = 50
-    for uid, pool in unit_pools.items():  # 빈 단 보강분 등 누락 방지 (link 합집합)
+    _needed: dict = {}
+    for uid, pool in unit_pools.items():
         for it in pool[:_TOP]:
-            _needed.setdefault(it['link'], it)
+            if it['link'] not in _needed:
+                _needed[it['link']] = it
     unique_candidates = list(_needed.values())
-    log_info(f"[Phase 3] Unique 기사 {len(unique_candidates)}개 병렬 분析 시작 (전역 선별 {len(_global_selected)}개 기반)")
+    log_info(f"[Phase 3] Unique 기사 {len(unique_candidates)}개 병렬 분析 시작")
 
     def _analyze_one(orig_item: dict):
         item = dict(orig_item)
