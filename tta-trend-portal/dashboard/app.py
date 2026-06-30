@@ -401,6 +401,41 @@ def apply_portal_style(embed_mode: bool):
             font-size: 11px;
             font-weight: 900;
         }}
+        /* ── Executive Brief card (redesign) ──────── */
+        .eb-card {{
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-left: 3px solid #cbd5e1;
+            border-radius: 0 14px 14px 0;
+            padding: 16px 16px 14px;
+            height: 100%;
+        }}
+        .eb-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 10px; }}
+        .eb-head-left {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+        .eb-rank {{ font-size: 11px; font-weight: 950; color: #94a3b8; }}
+        .eb-impact {{ display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 900; padding: 3px 9px; border-radius: 999px; }}
+        .eb-fresh {{ display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 800; color: #64748b; }}
+        .eb-fresh-dot {{ width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }}
+        .eb-score {{ text-align: right; line-height: 1; flex-shrink: 0; }}
+        .eb-score-num {{ font-size: 23px; font-weight: 950; color: #0f172a; }}
+        .eb-score-cap {{ font-size: 9px; font-weight: 800; letter-spacing: .06em; color: #94a3b8; margin-top: 2px; }}
+        .eb-title {{ font-size: 15px; font-weight: 900; color: #0f172a; line-height: 1.4; margin-bottom: 11px; }}
+        .eb-bars {{ display: flex; gap: 14px; margin-bottom: 12px; }}
+        .eb-bar {{ flex: 1; }}
+        .eb-bar-top {{ display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 3px; }}
+        .eb-bar-top b {{ color: #475569; font-weight: 900; }}
+        .eb-bar-bg {{ height: 3px; background: #f1f5f9; border-radius: 2px; }}
+        .eb-bar-fill {{ height: 3px; border-radius: 2px; }}
+        .eb-why {{ font-size: 12px; color: #475569; line-height: 1.55; margin-bottom: 12px; padding-left: 10px; border-left: 2px solid #e2e8f0; }}
+        .eb-chips {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }}
+        .eb-chip {{ display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #475569; background: #f8fafc; padding: 3px 8px; border-radius: 6px; }}
+        .eb-chip .eb-ico {{ color: #94a3b8; }}
+        .eb-chip.std {{ color: #0369a1; background: #eff6ff; }}
+        .eb-tta {{ font-size: 11.5px; color: #0369a1; line-height: 1.5; margin-bottom: 11px; }}
+        .eb-foot {{ display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid #f1f5f9; }}
+        .eb-foot-meta {{ flex: 1; font-size: 10.5px; color: #94a3b8; line-height: 1.4; }}
+        .eb-foot-link {{ font-size: 11px; font-weight: 900; color: #0369a1; text-decoration: none; white-space: nowrap; }}
         .mini-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -963,60 +998,99 @@ def render_freshness_strip(
     st.markdown(html, unsafe_allow_html=True)
 
 
-def _entity_ribbon_html(row: pd.Series) -> str:
-    """국가·기업·기술·표준 회의체를 한눈에 보이는 4분류 칩 리본.
-    표준 회의체가 비면 'TTA 기여 기회'로 신호화 (포지션 매트릭스 철학과 일치)."""
-    mapping = [("🌐", "국가"), ("🏢", "기업"), ("⚙️", "기술"), ("📐", "표준회의체")]
-    lines = []
-    for icon, col in mapping:
-        val = str(row.get(col, "") or "").strip()
-        if val:
-            lines.append(f"<span style='color:#64748b;'>{icon}</span> {esc(val, 46)}")
-        elif col == "표준회의체":
-            lines.append(f"<span style='color:#64748b;'>{icon}</span> <span style='color:#94a3b8;font-style:italic;'>표준 연계 미식별 · 기여 기회</span>")
-    return "<div style='font-size:0.78rem;line-height:1.55;margin-top:6px;'>" + "<br>".join(lines) + "</div>"
+def _impact_color(level: str) -> str:
+    """영향등급의 강조색 (없으면 중립 회색)."""
+    return IMPACT_BADGE.get(str(level), ("", "#94a3b8", ""))[1] or "#94a3b8"
+
+
+def _clamp_0to10(value) -> float:
+    """0~10 점수를 막대 길이용 실수로 안전 변환."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(10.0, v))
 
 
 def _render_brief_card(row: pd.Series, idx: int):
-    """Executive Brief 카드 1장 — 영향등급·긴급도·종합점수·왜중요·TTA대응·엔티티리본."""
+    """Executive Brief 카드 1장 (리디자인).
+    위계 헤더(랭크·영향등급·종합점수) + 영향 컬러 보더 + 긴급도/표준화 미니바
+    + 가로 엔티티 칩 + 인용형 왜중요 + 풋터 메타·링크."""
     level = str(row.get("영향등급", "") or "")
     why = str(row.get("왜 중요한가", "") or "")
     tta = str(row.get("TTA 대응과제", "") or "")
     score = row.get("종합점수")
     source = str(row.get("출처", "") or "")
     collected = kst_label(row.get("수집일"), with_time=True)
-    published = kst_label(row.get("게시일"), with_time=False)
-    score_pill = f"  <span class='meta-pill'>종합 {esc(score)}</span>" if pd.notna(score) else ""
+    link = str(row.get("관련 기사", "") or "#")
+
+    accent = _impact_color(level)
+    icon, _, badge_bg = IMPACT_BADGE.get(level, ("", "", ""))
+    badge_bg = badge_bg or "rgba(148,163,184,.15)"
+    urg = _clamp_0to10(row.get("긴급도"))
+    std = _clamp_0to10(row.get("표준화 연계성"))
+
+    impact_html = (
+        f"<span class='eb-impact' style='background:{badge_bg};color:{accent};'>{icon} {esc(level)}</span>"
+        if icon else ""
+    )
+    score_html = (
+        f"<div class='eb-score'><div class='eb-score-num'>{esc(score)}</div>"
+        f"<div class='eb-score-cap'>종합점수</div></div>"
+        if pd.notna(score) else ""
+    )
+
+    chip_map = [("🌐", "국가"), ("🏢", "기업"), ("⚙️", "기술"), ("📐", "표준회의체")]
+    chips = []
+    for emoji, col in chip_map:
+        val = str(row.get(col, "") or "").strip()
+        if val:
+            cls = "eb-chip std" if col == "표준회의체" else "eb-chip"
+            chips.append(f"<span class='{cls}'><span class='eb-ico'>{emoji}</span> {esc(val, 40)}</span>")
+        elif col == "표준회의체":
+            chips.append("<span class='eb-chip std'><span class='eb-ico'>📐</span> TTA 기여 기회</span>")
+    chips_html = "".join(chips)
+
+    why_html = f"<div class='eb-why'>{esc(why, 150)}</div>" if why else ""
+    tta_html = f"<div class='eb-tta'>TTA 대응 · {esc(tta, 120)}</div>" if tta else ""
+    meta_html = " · ".join(
+        part for part in [f"📰 {esc(source)}" if source else "", esc(collected) if collected else ""] if part
+    )
+
     st.markdown(
-        f"<span class='rank-badge'>{idx + 1}</span>"
-        + "<span class='fresh-pill'>오늘 신규</span>  "
-        + impact_badge_html(level)
-        + f"  <span class='meta-pill'>긴급도 {esc(row.get('긴급도'))}/10</span>"
-        + f"  <span class='meta-pill'>표준화 {esc(row.get('표준화 연계성'))}/10</span>"
-        + score_pill,
+        f"""
+        <div class="eb-card" style="border-left-color:{accent};">
+          <div class="eb-head">
+            <div class="eb-head-left">
+              <span class="eb-rank">{idx + 1:02d}</span>
+              {impact_html}
+              <span class="eb-fresh"><span class="eb-fresh-dot"></span>오늘 신규</span>
+            </div>
+            {score_html}
+          </div>
+          <div class="eb-title">{esc(row.get('이슈 후보'), 90)}</div>
+          <div class="eb-bars">
+            <div class="eb-bar">
+              <div class="eb-bar-top"><span>긴급도</span><b>{urg:.0f}</b></div>
+              <div class="eb-bar-bg"><div class="eb-bar-fill" style="width:{urg * 10:.0f}%;background:{accent};"></div></div>
+            </div>
+            <div class="eb-bar">
+              <div class="eb-bar-top"><span>표준화 연계</span><b>{std:.0f}</b></div>
+              <div class="eb-bar-bg"><div class="eb-bar-fill" style="width:{std * 10:.0f}%;background:#0284c7;"></div></div>
+            </div>
+          </div>
+          {why_html}
+          <div class="eb-chips">{chips_html}</div>
+          {tta_html}
+          <div class="eb-foot">
+            <span class="eb-foot-meta">{meta_html}</span>
+            <a class="eb-foot-link" href="{esc(link)}" target="_blank">자세히 보기 →</a>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    st.markdown(f"**{esc(row.get('이슈 후보'), 90)}**")
-    st.caption(
-        " · ".join(
-            part for part in [
-                f"출처 {source}" if source else "",
-                f"수집 {collected}" if collected else "",
-                f"게시 {published}" if published else "",
-            ] if part
-        )
-    )
-    if why:
-        st.caption("왜 중요한가: " + esc(why, 150))
-    st.markdown(_entity_ribbon_html(row), unsafe_allow_html=True)
-    if tta:
-        st.markdown(
-            f"<div style='font-size:0.82rem;color:#0369a1;margin-top:6px;'>TTA 대응: {esc(tta, 120)}</div>",
-            unsafe_allow_html=True,
-        )
-    bc1, bc2 = st.columns(2)
-    bc1.link_button("자세히 보기", str(row.get("관련 기사", "") or "#"), use_container_width=True)
-    if bc2.button("분석실로", key=f"exec_brief_qa_{idx}", use_container_width=True):
+    if st.button("분석실로 보내기", key=f"exec_brief_qa_{idx}", use_container_width=True):
         st.session_state["portal_query"] = str(row.get("이슈 후보", ""))
         st.toast("질문형 분석실 입력창에 준비했습니다. QA 탭으로 이동하세요.")
 
@@ -1034,7 +1108,7 @@ def render_executive_brief_top(board: pd.DataFrame, count: int = 6):
         for offset, (_, row) in enumerate(records[chunk_start:chunk_start + 3]):
             idx = chunk_start + offset
             with cols[offset]:
-                with st.container(border=True):
+                with st.container():
                     _render_brief_card(row, idx)
 
 
