@@ -95,6 +95,9 @@ CLAUDE_MODEL_DEFAULT = "claude-sonnet-4-6"
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 
+# 단별 일일 뉴스레터 목표 기사 수 (Step Summary·scripts/eval_selection.py에서 공용)
+NEWSLETTER_TARGET = 20
+
 # Google Drive 보고서 저장 폴더 ID (공유 드라이브 > 99_일일동향 폴더)
 # https://drive.google.com/drive/folders/15YV7XuiWW2DJiY_ur_ZweHphSvciRjzT
 # ※ 이 폴더 ID 자체가 "99_일일동향"이므로 하위 폴더 생성 없이 직접 저장
@@ -1082,6 +1085,10 @@ def _clean_text_hint(value) -> str:
 
 def _collect_stage_filter_reason(item: Dict) -> Optional[str]:
     """수집 직후 적용하는 보수적 비ICT 필터.
+
+    ※ scripts/eval_selection.py가 이 함수를 import해 DB 내 비ICT 유입률을
+    측정한다. 시그니처({'title': ...} dict 입력, 사유 문자열/None 반환)를
+    바꿀 때는 해당 스크립트도 함께 수정할 것.
 
     제목·요약만 사용해 명백한 스포츠/건강/문화/교육/부동산성 기사를 제외한다.
     'AI'처럼 넓은 단어는 ICT 문맥 마커와 함께 있을 때만 통과시키며,
@@ -6558,6 +6565,9 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             unit_pools[uid] = pool + extra[:20]
         log_info(f"   {unit_cfgs[uid]['display']}: {len(unit_pools[uid])}개")
 
+    # Step Summary용 Phase 2 직후 단별 풀 크기 스냅샷
+    _stats_pool_phase2 = {uid: len(pool) for uid, pool in unit_pools.items()}
+
     _by_punit: dict = defaultdict(list)
     for item in global_pool:
         _by_punit[item['_primary_unit_id']].append(item)
@@ -6771,6 +6781,45 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     log_info("=" * 60)
     log_info(f"[Level 3] 통합 일일 파이프라인 완료 — 임베딩 {_emb_count}건 추가")
     log_info("=" * 60)
+
+    # ── GitHub Actions Step Summary (설정 시에만) ──────────────────────────
+    # 파이프라인 각 단계 건수를 Actions 요약 화면에 기록 — 과압축·미달 이상을
+    # 다음 실행에서 바로 발견하기 위한 관측 장치 (Phase A3).
+    try:
+        _summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+        if _summary_path:
+            _md = [
+                "## 🗞️ Daily 파이프라인 요약",
+                "",
+                f"- 통합 수집 (Phase 1, 중복 제거 후): **{len(global_pool)}개**",
+                f"- 병렬 분석 후보 (Phase 3): {len(unique_candidates)}개 → 성공 **{len(analysis_cache)}개** "
+                f"(실패·제외 {len(unique_candidates) - len(analysis_cache)}개 — 본문 부족/품질 미달 포함)",
+                f"- RAG 임베딩 신규: {_emb_count}건",
+                "",
+                f"| 단 | Phase 2 분류 풀 | 중복 제거 후 | 뉴스레터 게재 (목표 {NEWSLETTER_TARGET}) |",
+                "|----|----|----|----|",
+            ]
+            for _uid_s, _cfg_s in unit_cfgs.items():
+                _disp_s = _cfg_s['display']
+                _final_n = summary.get(_disp_s, {}).get('analyzed', 0)
+                _mark = "" if _final_n >= NEWSLETTER_TARGET else " ⚠️" if _final_n > 0 else " ❌"
+                _md.append(
+                    f"| {_disp_s} | {_stats_pool_phase2.get(_uid_s, 0)} "
+                    f"| {len(unit_pools.get(_uid_s, []))} "
+                    f"| {_final_n}{_mark} |"
+                )
+            _errs = [
+                f"- [{_d}] {'; '.join(_r['errors'])}"
+                for _d, _r in summary.items() if _r.get('errors')
+            ]
+            if _errs:
+                _md += ["", "### ⚠️ 오류", ""] + _errs
+            with open(_summary_path, 'a', encoding='utf-8') as _sf:
+                _sf.write("\n".join(_md) + "\n\n")
+            log_info("   📊 GitHub Step Summary 기록 완료")
+    except Exception as _sum_err:
+        log_warning(f"   ⚠️ Step Summary 기록 실패 (파이프라인에 영향 없음): {_sum_err}")
+
     return summary
 
 
