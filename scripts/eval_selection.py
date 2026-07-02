@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from news_engine import (  # noqa: E402
     NEWSLETTER_TARGET,          # 단별 뉴스레터 목표 기사 수 (news_engine과 단일 정의 공유)
     NewsArticle,
+    SelectionLog,
     get_db_session,
     get_all_units,
     _collect_stage_filter_reason,
@@ -140,6 +141,33 @@ def collect_metrics(days: int) -> dict:
         if reason_strict:
             junk_strict_total += 1
 
+    # Phase 2.6 선별 로그 (섀도/활성) — {(단, KST날짜): 선별 수} + 사유 샘플
+    shadow_daily: Counter = Counter()
+    shadow_mode = None
+    shadow_reasons: list = []
+    try:
+        with get_db_session() as session:
+            log_rows = (
+                session.query(SelectionLog.run_ts, SelectionLog.mode,
+                              SelectionLog.unit_ids_str, SelectionLog.reason,
+                              SelectionLog.selected, SelectionLog.score)
+                .filter(SelectionLog.run_ts >= cutoff.replace(tzinfo=None))
+                .all()
+            )
+        for lr in log_rows:
+            if not lr.selected:
+                continue
+            shadow_mode = lr.mode
+            date = _kst_date(lr.run_ts)
+            uids = [int(p) for p in (lr.unit_ids_str or '').split(',') if p.strip().isdigit()]
+            for uid in (uids or [0]):
+                unit = unit_names.get(uid, '(미배정)' if uid == 0 else f'단#{uid}')
+                shadow_daily[(unit, date)] += 1
+            if lr.reason and lr.score and lr.score >= 4 and len(shadow_reasons) < 3:
+                shadow_reasons.append(f"(score {lr.score}) {_sanitize_md_cell(lr.reason, 80)}")
+    except Exception:
+        pass  # selection_log 테이블이 없거나 조회 실패 — 섹션 생략
+
     junk_total = sum(junk_reasons.values())
     return {
         'days': days,
@@ -155,6 +183,9 @@ def collect_metrics(days: int) -> dict:
         'unit_daily_analyzed': unit_daily_analyzed,
         'unit_names': sorted(set(unit_names.values())),
         'units_lookup_failed': not unit_names,
+        'shadow_daily': shadow_daily,
+        'shadow_mode': shadow_mode,
+        'shadow_reasons': shadow_reasons,
     }
 
 
@@ -205,6 +236,27 @@ def render_markdown(m: dict) -> str:
         lines.append("")
         lines.append(f"(⚠️ = {NEWSLETTER_TARGET}개 미달, ❌ = 0개)")
         lines.append("")
+
+    # Phase 2.6 선별 시뮬레이션 (섀도 로그가 있을 때만)
+    shadow = m.get('shadow_daily') or {}
+    if shadow:
+        mode_label = '섀도 (뉴스레터 미반영)' if m.get('shadow_mode') == 'shadow' else '활성'
+        s_dates = sorted({d for (_, d) in shadow}, reverse=True)
+        s_units = sorted(set(m['unit_names']) | {u for (u, _) in shadow})
+        lines.append(f"### AI 선별 시뮬레이션 — Phase 2.6, {mode_label}")
+        lines.append("")
+        lines.append("선별이 뉴스레터에 적용됐다면 단별로 남았을 기사 수 (위 실제 표와 비교):")
+        lines.append("")
+        lines.append("| 날짜(KST) | " + " | ".join(s_units) + " |")
+        lines.append("|" + "---|" * (len(s_units) + 1))
+        for d in s_dates:
+            lines.append(f"| {d} | " + " | ".join(str(shadow.get((u, d), 0)) for u in s_units) + " |")
+        lines.append("")
+        if m.get('shadow_reasons'):
+            lines.append("고득점 선별 사유 샘플:")
+            for r in m['shadow_reasons']:
+                lines.append(f"- {r}")
+            lines.append("")
 
     return "\n".join(lines)
 
