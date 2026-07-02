@@ -41,6 +41,7 @@ from news_engine import (  # noqa: E402
     get_db_session,
     get_all_units,
     _collect_stage_filter_reason,
+    _decode_unit_ids,
 )
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
@@ -143,7 +144,7 @@ def collect_metrics(days: int) -> dict:
 
     # Phase 2.6 선별 로그 (섀도/활성) — {(단, KST날짜): 선별 수} + 사유 샘플
     shadow_daily: Counter = Counter()
-    shadow_mode = None
+    shadow_modes: set = set()
     shadow_reasons: list = []
     try:
         with get_db_session() as session:
@@ -157,9 +158,9 @@ def collect_metrics(days: int) -> dict:
         for lr in log_rows:
             if not lr.selected:
                 continue
-            shadow_mode = lr.mode
+            shadow_modes.add(lr.mode)
             date = _kst_date(lr.run_ts)
-            uids = [int(p) for p in (lr.unit_ids_str or '').split(',') if p.strip().isdigit()]
+            uids = _decode_unit_ids(lr.unit_ids_str)
             for uid in (uids or [0]):
                 unit = unit_names.get(uid, '(미배정)' if uid == 0 else f'단#{uid}')
                 shadow_daily[(unit, date)] += 1
@@ -184,7 +185,7 @@ def collect_metrics(days: int) -> dict:
         'unit_names': sorted(set(unit_names.values())),
         'units_lookup_failed': not unit_names,
         'shadow_daily': shadow_daily,
-        'shadow_mode': shadow_mode,
+        'shadow_modes': shadow_modes,
         'shadow_reasons': shadow_reasons,
     }
 
@@ -240,7 +241,13 @@ def render_markdown(m: dict) -> str:
     # Phase 2.6 선별 시뮬레이션 (섀도 로그가 있을 때만)
     shadow = m.get('shadow_daily') or {}
     if shadow:
-        mode_label = '섀도 (뉴스레터 미반영)' if m.get('shadow_mode') == 'shadow' else '활성'
+        modes = m.get('shadow_modes') or set()
+        if modes == {'shadow'}:
+            mode_label = '섀도 (뉴스레터 미반영)'
+        elif modes == {'active'}:
+            mode_label = '활성'
+        else:
+            mode_label = '섀도+활성 혼합 기간'
         s_dates = sorted({d for (_, d) in shadow}, reverse=True)
         s_units = sorted(set(m['unit_names']) | {u for (u, _) in shadow})
         lines.append(f"### AI 선별 시뮬레이션 — Phase 2.6, {mode_label}")
