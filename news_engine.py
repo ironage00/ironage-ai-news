@@ -6898,12 +6898,14 @@ def _upsert_analyzed_article(item: Dict, unit_id, is_selected: bool, ai_model: s
 
     - exact-link 중복: link 기준 존재 확인 후 upsert. Phase 3 후보는 사전에 exact
       link로 dedup되고 link 컬럼에 unique 제약이 있어, 같은 실행 내 동일 link가
-      두 스레드에서 동시에 삽입되는 race는 발생하지 않는다.
+      두 스레드에서 동시에 삽입되는 race는 발생하지 않는다(정확성 보장의 핵심).
     - 교차 단 제목 유사도 중복(같은 사건, 다른 링크): 중복 삽입 대신 기존 id 반환.
-      ⚠️ 알려진 수용된 한계 — ThreadPoolExecutor(5 워커)에서 recent_titles 스냅샷은
-      루프 시작 시점 기준이라, 같은 실행 중 방금 삽입된 유사 제목 기사는 검출하지
-      못할 수 있다(TOCTOU). 결과는 드문 교차 단 중복 row 1~2건이며 데이터 손상·크래시가
-      아닌 표시상 중복이므로, 락으로 '고치지' 말 것.
+      ⚠️ 수용된 한계 — recent_titles 스냅샷은 Phase 3 루프 시작 시점(=오늘 분석 전)
+      기준이므로 주로 '지난 2일 저장분'과의 중복만 잡는다. 같은 실행에서 분석되는
+      교차 단 유사 기사끼리는 서로 스냅샷에 없어 둘 다 저장될 수 있다. 이는 표시상
+      중복 row일 뿐 데이터 손상·크래시가 아니고, 뉴스레터는 DB가 아니라 메모리
+      analysis_cache로 구성되므로 발송 결과에는 영향이 없다. 락/실시간 재조회로
+      '고치지' 말 것(비용 대비 이득 없음).
 
     Args:
         recent_titles: [(title, id)] 사전 계산 스냅샷. None이면 함수가 직접 조회
@@ -6917,6 +6919,7 @@ def _upsert_analyzed_article(item: Dict, unit_id, is_selected: bool, ai_model: s
     content = item.get('content', '')
     analysis = item.get('analysis_result', '')
 
+    own_write_id = None  # 이 기사 자신의 row를 삽입/갱신한 경우만 설정(교차 단 스킵 제외)
     with get_db_session() as session:
         existing = session.query(NewsArticle).filter_by(link=link).first()
         if existing:
@@ -6930,47 +6933,58 @@ def _upsert_analyzed_article(item: Dict, unit_id, is_selected: bool, ai_model: s
             if content and len(content) > len(existing.content or ''):
                 existing.content = content[:2000]
             session.commit()
-            return existing.id
+            own_write_id = existing.id
+        else:
+            # 교차 단 제목 유사도 중복 체크 (같은 사건이 다른 링크로 중복 저장 방지).
+            # 스냅샷 미제공 시에만 직접 조회(단위 테스트 경로) — cutoff는 collected_at
+            # (naive UTC 저장)과 맞추기 위해 naive UTC로 계산.
+            if recent_titles is None:
+                recent_titles = _recent_title_snapshot(days=2)
+            similar_id = next(
+                (rid for (rtitle, rid) in recent_titles if rtitle and is_similar_news(title, rtitle)),
+                None,
+            )
+            if similar_id is not None:
+                # 이 기사 자신의 row가 아니므로 reclassify 대상이 아니다 —
+                # 남의 row(similar_id)에 이 기사 키워드로 단을 바꾸면 안 됨.
+                return similar_id
 
-        # 교차 단 제목 유사도 중복 체크 (같은 사건이 다른 링크로 중복 저장 방지).
-        # 스냅샷 미제공 시에만 직접 조회(단위 테스트 경로) — cutoff는 collected_at
-        # (naive UTC 저장)과 맞추기 위해 naive UTC로 계산.
-        if recent_titles is None:
-            recent_titles = _recent_title_snapshot(days=2)
-        similar_id = next(
-            (rid for (rtitle, rid) in recent_titles if rtitle and is_similar_news(title, rtitle)),
-            None,
-        )
-        if similar_id is not None:
-            return similar_id
+            pub_date = None
+            published = item.get('published')
+            try:
+                if isinstance(published, str):
+                    pub_date = date_parser.parse(published)
+                elif isinstance(published, datetime.datetime):
+                    pub_date = published
+            except Exception:
+                pass
 
-        pub_date = None
-        published = item.get('published')
+            article = NewsArticle(
+                title=title,
+                link=link,
+                source=item.get('source', '출처 불명'),
+                published=pub_date,
+                content=content[:2000] if content else '',
+                quality_score=1.0 if is_selected else 0.0,
+                unit_id=unit_id,
+                is_selected=is_selected,
+                is_analyzed=True,
+                analysis_result=analysis,
+                ai_model=ai_model,
+                extracted_keywords=item.get('extracted_keywords'),
+            )
+            session.add(article)
+            session.commit()
+            own_write_id = article.id
+
+    # 분析 추출 키워드로 단 배정 재검토 — own-write(자기 row)에만 적용.
+    # 세션 밖에서 호출(reclassify_article_unit이 자체 세션을 열고, 위 commit을 봐야 함).
+    if own_write_id and item.get('extracted_keywords'):
         try:
-            if isinstance(published, str):
-                pub_date = date_parser.parse(published)
-            elif isinstance(published, datetime.datetime):
-                pub_date = published
+            reclassify_article_unit(own_write_id, item['extracted_keywords'])
         except Exception:
             pass
-
-        article = NewsArticle(
-            title=title,
-            link=link,
-            source=item.get('source', '출처 불명'),
-            published=pub_date,
-            content=content[:2000] if content else '',
-            quality_score=1.0 if is_selected else 0.0,
-            unit_id=unit_id,
-            is_selected=is_selected,
-            is_analyzed=True,
-            analysis_result=analysis,
-            ai_model=ai_model,
-            extracted_keywords=item.get('extracted_keywords'),
-        )
-        session.add(article)
-        session.commit()
-        return article.id
+    return own_write_id
 
 
 def cleanup_stale_unselected_articles(days: int = 30) -> int:
@@ -7259,20 +7273,15 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if not is_valid_analysis(analysis):
                 return None
             item['analysis_result'] = analysis
-            # Phase C1: 여기서만 DB에 삽입/갱신 — 분석까지 성공한 기사만 저장 대상
-            _art_id = _upsert_analyzed_article(
+            # Phase C1: 여기서만 DB에 삽입/갱신 — 분석까지 성공한 기사만 저장 대상.
+            # 단 배정 재검토(reclassify)는 _upsert 내부에서 own-write에만 수행한다.
+            _upsert_analyzed_article(
                 item,
                 unit_id=_link_unit.get(item['link']),
                 is_selected=item['link'] in _selected_links,
                 ai_model=item.get('ai_model', ai_model),
                 recent_titles=_recent_snapshot,
             )
-            # 분析 추출 키워드로 단 배정 재검토
-            if _art_id and item.get('extracted_keywords'):
-                try:
-                    reclassify_article_unit(_art_id, item['extracted_keywords'])
-                except Exception:
-                    pass
             return item
         except Exception as _e:
             log_warning(f"분析 실패: {item.get('title','')[:40]} -- {_e}")
