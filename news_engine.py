@@ -39,6 +39,14 @@ import feedparser
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
+# 본문 추출: trafilatura 우선, 미설치 시 BeautifulSoup 휴리스틱으로 폴백
+try:
+    import trafilatura
+    _HAS_TRAFILATURA = True
+except ImportError:
+    trafilatura = None
+    _HAS_TRAFILATURA = False
+
 # 이메일
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -1915,58 +1923,165 @@ def get_final_url_and_source(url: str, max_retries: int = 2) -> tuple:
     except Exception:
         return url, "출처 불명", False
 
-def get_article_content(url: str, max_length: int = 3000) -> str:
-    """주어진 URL에서 뉴스 기사 본문을 추출"""
+# 본문 추출 품질 게이트 임계값 (한 곳에서 관리)
+_MIN_BODY_LEN = 200        # 최소 본문 길이
+_MIN_SENTENCE_LEN = 20     # 문장으로 인정할 최소 길이
+_MIN_SENTENCE_COUNT = 3    # 최소 문장 수
+_MAX_FETCH_BYTES = 5 * 1024 * 1024   # 응답 본문 상한 5MB (거대·악성 페이지 파싱 폭주 차단)
+
+# 추출 실패 센티넬 — 기사 본문에 자연히 나타나지 않는 접두사.
+# 과거 '실패' 같은 흔한 단어를 substring 검사해 정상 기사('발사 실패' 등)를
+# 잘못 버리던 문제를 제거한다. 실패 메시지는 항상 이 접두사로 시작하고,
+# 판정은 _is_extraction_failed()로 일원화한다.
+_EXTRACT_FAIL_SENTINEL = "[[EXTRACT_FAIL]]"
+
+
+def _fail(msg: str) -> str:
+    """추출 실패 메시지에 센티넬 접두사 부착."""
+    return f"{_EXTRACT_FAIL_SENTINEL} {msg}"
+
+
+def _is_extraction_failed(content: str) -> bool:
+    """본문 추출 실패 여부 — 센티넬 접두사 또는 과도하게 짧은 내용으로 판정.
+
+    get_article_content 결과를 소비하는 모든 지점의 단일 판정 함수.
+    """
+    return (not content) or content.startswith(_EXTRACT_FAIL_SENTINEL) or len(content) < 100
+
+
+def _choose_extraction(traf_text: str, bs4_text: str, min_len: int = _MIN_BODY_LEN) -> str:
+    """두 추출 결과 중 채택할 본문 선택 (순수 함수).
+
+    trafilatura(정밀 추출)가 충분한 길이면 우선 채택 — 단순 'longer wins'는
+    bs4의 전체 페이지 덤프(내비·광고 보일러플레이트)를 선호해 LLM에 노이즈를
+    주입할 수 있으므로, trafilatura가 게이트를 통과할 때는 그 정밀 결과를 쓴다.
+    trafilatura가 부족할 때만 bs4로 복구한다.
+    """
+    traf_text = traf_text or ''
+    bs4_text = bs4_text or ''
+    if len(traf_text) >= min_len:
+        return traf_text
+    # trafilatura 부족 → 둘 중 정보량이 많은 쪽으로 복구
+    return traf_text if len(traf_text) >= len(bs4_text) else bs4_text
+
+
+def _extract_with_trafilatura(html) -> Optional[str]:
+    """trafilatura로 본문 추출. 실패 시 None (호출부에서 BS4로 폴백).
+
+    html은 str 또는 bytes 허용 — bytes를 주면 trafilatura가 자체 인코딩을
+    감지하므로 EUC-KR/CP949 한국 사이트 mojibake를 줄인다.
+    """
+    if not _HAS_TRAFILATURA or not html:
+        return None
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        return trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=False,
+            no_fallback=False,
+            favor_precision=True,
+        )
+    except Exception:
+        return None
+
+
+def _extract_with_bs4(html) -> str:
+    """기존 BeautifulSoup 휴리스틱 추출 (trafilatura 폴백용).
+
+    html은 str 또는 bytes 허용 — bytes면 lxml이 meta 태그로 인코딩을 감지한다.
+    """
+    soup = BeautifulSoup(html, 'lxml')
+    for element in soup(["script", "style", "header", "footer", "nav", "aside"]):
+        element.decompose()
+
+    article_body = soup.find('article') or \
+                   soup.find('div', id=re.compile(r'content|article|main', re.I)) or \
+                   soup.find('main')
+
+    if article_body:
+        text = article_body.get_text(separator='\n', strip=True)
+    else:
+        paragraphs = soup.find_all('p')
+        text = '\n'.join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50)
+        if not text:
+            text = soup.body.get_text(separator='\n', strip=True) if soup.body else ""
+    return text
+
+
+def _finalize_article_text(text: str, max_length: int) -> str:
+    """추출 원문 → 정제 + 품질 게이트 적용 (순수 함수, 추출기 공통).
+
+    실패 시 _fail()로 센티넬 접두사가 붙은 문자열을 반환한다. 소비 지점은
+    _is_extraction_failed()로 판정하므로, 정상 본문에 '실패' 등 흔한 단어가
+    들어 있어도 오탐하지 않는다.
+    """
+    if not text:
+        return _fail("기사 본문을 추출하지 못했습니다.")
+
+    lines = (line.strip() for line in text.splitlines())
+    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+    cleaned_text = '\n'.join(chunk for chunk in chunks if chunk)
+
+    if not cleaned_text:
+        return _fail("기사 본문을 추출하지 못했습니다.")
+
+    cleaned_text = cleaned_text[:max_length]
+
+    if len(cleaned_text) < _MIN_BODY_LEN:
+        return _fail("본문이 너무 짧아 분석할 수 없습니다.")
+
+    sentences = [s.strip() for s in cleaned_text.split('.') if len(s.strip()) > _MIN_SENTENCE_LEN]
+    if len(sentences) < _MIN_SENTENCE_COUNT:
+        return _fail("본문 품질이 낮아 분석할 수 없습니다.")
+
+    return cleaned_text
+
+
+def get_article_content(url: str, max_length: int = 3000) -> str:
+    """주어진 URL에서 뉴스 기사 본문을 추출.
+
+    trafilatura(정밀 추출)를 우선 시도하고, None이거나 품질 게이트를 통과하지
+    못하면 기존 BeautifulSoup 휴리스틱으로 폴백한다. 두 결과 중 더 긴(정보량이
+    많은) 쪽을 채택해 사이트별 추출 실패로 인한 분석 누락을 줄인다.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    def _fetch_capped(verify: bool) -> bytes:
+        """스트리밍으로 최대 _MAX_FETCH_BYTES까지만 읽어 반환 (파싱 폭주 차단)."""
+        with requests.get(url, headers=headers, timeout=10, verify=verify, stream=True) as resp:
+            resp.raise_for_status()
+            total = 0
+            parts = []
+            for chunk in resp.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                parts.append(chunk)
+                total += len(chunk)
+                if total >= _MAX_FETCH_BYTES:
+                    break
+            return b''.join(parts)
+
+    try:
         try:
-            # FIX: SSL 검증 기본 활성화(verify=True). SSLError 발생 시에만 verify=False로 fallback
-            response = requests.get(url, headers=headers, timeout=10, verify=True)
+            # SSL 검증 기본 활성화(verify=True). SSLError 시에만 verify=False로 fallback
+            raw = _fetch_capped(verify=True)
         except requests.exceptions.SSLError:
-            response = requests.get(url, headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
+            raw = _fetch_capped(verify=False)
 
-        soup = BeautifulSoup(response.text, 'lxml')
+        # bytes를 그대로 넘겨 각 추출기가 인코딩을 자체 감지하게 함 (mojibake 감소).
+        # trafilatura(정밀) 우선, 부족하면 BeautifulSoup으로 복구.
+        traf_text = _extract_with_trafilatura(raw) or ''
+        bs4_text = _extract_with_bs4(raw) or ''
+        best = _choose_extraction(traf_text, bs4_text)
 
-        for element in soup(["script", "style", "header", "footer", "nav", "aside"]):
-            element.decompose()
-
-        article_body = soup.find('article') or \
-                       soup.find('div', id=re.compile(r'content|article|main', re.I)) or \
-                       soup.find('main')
-        
-        if article_body:
-            text = article_body.get_text(separator='\n', strip=True)
-        else:
-            paragraphs = soup.find_all('p')
-            text = '\n'.join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50)
-            if not text:
-                text = soup.body.get_text(separator='\n', strip=True) if soup.body else ""
-
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        cleaned_text = '\n'.join(chunk for chunk in chunks if chunk)
-        
-        if not cleaned_text:
-            return "기사 본문을 추출하지 못했습니다."
-
-        cleaned_text = cleaned_text[:max_length]
-        
-        if len(cleaned_text) < 200:
-            return "본문이 너무 짧아 분석할 수 없습니다."
-        
-        sentences = [s.strip() for s in cleaned_text.split('.') if len(s.strip()) > 20]
-        if len(sentences) < 3:
-            return "본문 품질이 낮아 분석할 수 없습니다."
-        
-        return cleaned_text
+        return _finalize_article_text(best, max_length)
 
     except requests.exceptions.RequestException as e:
-        return f"본문 수집 실패 (네트워크 오류): {e}"
+        return _fail(f"본문 수집 실패 (네트워크 오류): {e}")
     except Exception as e:
-        return f"본문 수집 실패 (알 수 없는 오류): {e}"
+        return _fail(f"본문 수집 실패 (알 수 없는 오류): {e}")
 
 # ==============================================================================
 # --- 뉴스 수집 메인 함수 ---
@@ -3366,13 +3481,8 @@ def analyze_news_with_replacement(news_to_analyze, all_news_items, target_count=
         log_info(f"      → 본문 수집 중...")
         item['content'] = get_article_content(item['link'])
 
-        if "실패" in item['content'] or "추출하지 못했습니다" in item['content']:
-            log_warning(f"      ❌ 본문 수집 실패, 다른 뉴스로 대체합니다.")
-            failed_count += 1
-            continue
-
-        if "너무 짧아" in item['content'] or "품질이 낮아" in item['content']:
-            log_warning(f"      ❌ 본문 품질 불량, 다른 뉴스로 대체합니다.")
+        if _is_extraction_failed(item['content']):
+            log_warning(f"      ❌ 본문 수집·품질 실패, 다른 뉴스로 대체합니다.")
             failed_count += 1
             continue
 
@@ -7010,9 +7120,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         item = dict(orig_item)
         try:
             item['content'] = get_article_content(item['link'])
-            if not item.get('content') or len(item['content']) < 100:
-                return None
-            if any(s in item['content'] for s in ('실패', '추출하지 못했습니다', '너무 짧아', '품질이 낮아')):
+            if _is_extraction_failed(item['content']):
                 return None
             analysis = analyze_news_with_ai(item, ai_model=ai_model)
             if not is_valid_analysis(analysis):
@@ -7608,9 +7716,7 @@ def run_daily_collection(ai_model: str = None):
             try:
                 art_item = dict(art_item)
                 art_item["content"] = get_article_content(art_item["link"])
-                if any(k in art_item["content"] for k in [
-                    "실패", "추출하지 못했습니다", "너무 짧아", "품질이 낮아"
-                ]):
+                if _is_extraction_failed(art_item["content"]):
                     return art_item["link"], None
                 analysis = analyze_news_with_ai(art_item, ai_model=ai_model)
                 if is_valid_analysis(analysis):
