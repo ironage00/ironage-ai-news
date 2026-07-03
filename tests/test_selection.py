@@ -3,6 +3,9 @@
 대상: _parse_selection_response(응답 파싱), _apply_unit_floor(하한 보장),
 _classify_article_to_units(단 분류). AI 호출·DB 쓰기는 다루지 않는다.
 """
+import sys
+import types
+
 import news_engine
 from news_engine import (
     _parse_selection_response,
@@ -11,6 +14,7 @@ from news_engine import (
     _encode_unit_ids,
     _decode_unit_ids,
     _interleave_pools,
+    _dedup_by_embedding,
     run_phase26_selection,
     ai_select_articles,
     OPENAI_SELECTION_MODEL_DEFAULT,
@@ -240,6 +244,96 @@ def test_classify_counts_keyword_matches():
 
 def test_classify_no_match_returns_empty():
     assert _classify_article_to_units('오늘의 맛집 추천', {1: ['위성']}) == {}
+
+
+# ── _dedup_by_embedding (Phase D2) ───────────────────────────────────────────
+
+def _install_fake_rag(monkeypatch, vec_map):
+    """rag_search._embed_texts/_cosine_similarity를 가짜로 주입.
+
+    vec_map: {정제된_텍스트: [벡터]} — 실제 API 호출 없이 결정적으로 검증.
+    """
+    fake = types.ModuleType('rag_search')
+
+    def _embed_texts(texts):
+        return [vec_map[t] for t in texts]
+
+    def _cosine_similarity(a, b):
+        import math
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a)); nb = math.sqrt(sum(y * y for y in b))
+        return dot / (na * nb) if na and nb else 0.0
+
+    fake._embed_texts = _embed_texts
+    fake._cosine_similarity = _cosine_similarity
+    monkeypatch.setitem(sys.modules, 'rag_search', fake)
+
+
+def test_dedup_by_embedding_merges_near_duplicates(monkeypatch):
+    # A와 B는 거의 같은 방향(중복), C는 직교(다른 기사)
+    vecs = {'a': [1.0, 0.0], 'a2': [0.98, 0.02], 'c': [0.0, 1.0]}
+    _install_fake_rag(monkeypatch, vecs)
+    items = [{'title': 'a', 'link': '1'}, {'title': 'a2', 'link': '2'}, {'title': 'c', 'link': '3'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    assert removed == 1
+    assert [r['link'] for r in result] == ['1', '3']  # 앞 기사 대표 유지, c는 별개
+
+
+def test_dedup_by_embedding_keeps_distinct(monkeypatch):
+    vecs = {'x': [1.0, 0.0], 'y': [0.0, 1.0]}
+    _install_fake_rag(monkeypatch, vecs)
+    items = [{'title': 'x', 'link': '1'}, {'title': 'y', 'link': '2'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    assert removed == 0 and len(result) == 2
+
+
+def test_dedup_by_embedding_single_item_noop(monkeypatch):
+    result, removed = _dedup_by_embedding([{'title': 'x', 'link': '1'}], threshold=0.70)
+    assert removed == 0 and len(result) == 1
+
+
+def test_dedup_by_embedding_graceful_on_embed_failure(monkeypatch):
+    fake = types.ModuleType('rag_search')
+    def _boom(texts): raise RuntimeError('API down')
+    fake._embed_texts = _boom
+    fake._cosine_similarity = lambda a, b: 0.0
+    monkeypatch.setitem(sys.modules, 'rag_search', fake)
+    items = [{'title': 'a', 'link': '1'}, {'title': 'b', 'link': '2'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    assert removed == 0 and result is items  # 실패 시 원본 그대로 (파이프라인 보호)
+
+
+def test_dedup_by_embedding_length_mismatch_guard(monkeypatch):
+    # 임베딩 개수가 입력과 다르면 조용히 원본 유지 (인덱스 어긋남 방지)
+    fake = types.ModuleType('rag_search')
+    fake._embed_texts = lambda texts: [[1.0, 0.0]]   # 2개 요청에 1개만 반환
+    fake._cosine_similarity = lambda a, b: 0.0
+    monkeypatch.setitem(sys.modules, 'rag_search', fake)
+    items = [{'title': 'a', 'link': '1'}, {'title': 'b', 'link': '2'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    assert removed == 0 and result is items
+
+
+def test_dedup_by_embedding_rag_import_unavailable(monkeypatch):
+    # rag_search 모듈에 _embed_texts가 없으면 ImportError → 원본 유지
+    fake = types.ModuleType('rag_search')  # 헬퍼 미정의
+    monkeypatch.setitem(sys.modules, 'rag_search', fake)
+    items = [{'title': 'a', 'link': '1'}, {'title': 'b', 'link': '2'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    assert removed == 0 and result is items
+
+
+def test_dedup_by_embedding_transitive_representative_only(monkeypatch):
+    """A~B, B~C 이지만 A와 C는 임계값 미만 — 대표(A)에만 비교하므로
+    C는 A에 병합되지 않고 자기 대표로 남는다(greedy 표준 동작 고정)."""
+    # A=[1,0], B=[0.8,0.6](A와 0.8), C=[0.2,0.98](B와 높지만 A와는 0.2)
+    vecs = {'A': [1.0, 0.0], 'B': [0.8, 0.6], 'C': [0.2, 0.98]}
+    _install_fake_rag(monkeypatch, vecs)
+    items = [{'title': 'A', 'link': '1'}, {'title': 'B', 'link': '2'}, {'title': 'C', 'link': '3'}]
+    result, removed = _dedup_by_embedding(items, threshold=0.70)
+    # B는 A(0.8)에 병합, C는 A(0.2)와 미달 → 별개 유지
+    assert [r['link'] for r in result] == ['1', '3']
+    assert removed == 1
 
 
 # ── ai_select_articles: 선별 모델 선택 (Phase B4) ────────────────────────────
