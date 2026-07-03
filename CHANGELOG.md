@@ -3,6 +3,17 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.2.1.0] - 2026-07-03
+
+### Changed
+- **선별 모델 gpt-4o-mini 다운그레이드 (Phase B4)** — Phase 2.6 전역 선별(`ai_select_articles`,
+  제목+요약 목록에서 번호를 고르는 판단 작업)만 `gpt-4o-mini`로 전환. 심층분석
+  (`analyze_news_with_ai`) 등 다른 OpenAI 사용처는 `gpt-4o` 그대로 유지.
+- `CONFIG.selection_openai_model`로 즉시 모델 재정의 가능(문제 시 롤백용).
+- 실측 비교(동일 25건 후보 — 실제 후보 20건 + 명백한 쓰레기 5건): 두 모델 모두 쓰레기
+  0건 선별, 최우선 항목(score 5) 완전 일치, 상위 15개 중 80% 일치(차이는 score 1~2
+  경계선에서만 발생) — 섀도 모드이므로 뉴스레터 영향 없음.
+
 ## [0.2.0.0] - 2026-07-03
 
 ### Changed
