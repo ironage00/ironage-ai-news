@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate weekly report
-        run: python news_engine.py weekly
+      - name: Generate weekly report (자율 인텔리전스 — GPT-4o 초안+Claude 검증, 급등 엔티티 RAG 분석)
+        run: python auto_intel_report.py --period weekly
         env:
           DATABASE_URL:                 ${{ secrets.DATABASE_URL }}
           OPENAI_API_KEY:               ${{ secrets.OPENAI_API_KEY }}

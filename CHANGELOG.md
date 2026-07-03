@@ -3,6 +3,20 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.2.2.0] - 2026-07-03
+
+### Fixed
+- **매주 자동 발송되는 주간 리포트가 잘못된(레거시) 형식으로 나가던 문제** — 매주 월요일
+  cron-job.org가 트리거하는 `weekly-report.yml`이 `python news_engine.py weekly`
+  (`trend_analyzer.py`의 구 형식 — GPT-4o+Claude 검증만 있고 급등 엔티티·RAG 분석 없음)를
+  호출하고 있었다. `auto_intel_report.py --period weekly`(🤖 자율 인텔리전스, Phase 4)로
+  전환 — 급등 엔티티 감지(`knowledge_graph.py`) + RAG 심층분석(`rag_search.py`) 섹션이
+  Google Docs에 추가된 완전한 형식으로 매주 자동 발송됨. 기존 필요 시크릿으로 충분(추가
+  설정 불필요) — `node_build_report`가 내부적으로 동일한 `trend_analyzer.py` 기반 리포트를
+  생성한 뒤 급등 분석을 덧붙이는 구조라 CLAUDE_API_KEY 등 기존 시크릿을 그대로 재사용.
+- 레거시 `news_engine.py weekly`(`run_weekly_report()`) 경로는 코드에 그대로 유지 —
+  자동 실행 경로만 전환됨
+
 ## [0.2.1.0] - 2026-07-03
 
 ### Changed
