@@ -3,6 +3,26 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.3.0.0] - 2026-07-03
+
+### Added
+- **임베딩 기반 교차언어·패러프레이즈 중복 제거 (Phase D2)** — Phase 2.6 AI 선별 직전,
+  후보 풀을 text-embedding-3-small 코사인 유사도로 클러스터링해 같은 사건의 표현만 다른
+  기사를 병합. 제목 단어 Jaccard(Phase 2.5)가 못 잡는 "Nvidia Launches..." vs
+  "NVIDIA rolls out..." 류, 한/영 교차 중복을 제거. 기존 `rag_search`의 임베딩
+  인프라(`_embed_texts`/`_cosine_similarity`) 재사용 — 신규 인프라 없음.
+- 임계값 0.70은 실제 중복 쌍(Nvidia 패러프레이즈 0.80~0.92, 한/영 앤트로픽 0.84) vs
+  서로 다른 쌍(최대 0.595)으로 실측 검증 — 38건 실데이터에서 오병합 0건(38→34).
+  `CONFIG.selection_embed_dedup`(기본 True)·`selection_embed_threshold`(기본 0.70)로 조정.
+- 실행당 임베딩 배치 1회(후보 ~150개) 추가. 실패 시 원본 유지(파이프라인 보호).
+  섀도 모드에서는 후보에만 적용(unit_pools 불변)되어 뉴스레터 영향 없음.
+
+### Notes
+- 제목만으로는 표현이 크게 다른 일부 패러프레이즈(예: Meta AI컴퓨팅 3종 변형 0.62~0.68)는
+  안전 임계값 아래라 잡지 못함 — 이를 잡으려 임계값을 낮추면 서로 다른 기사(예: Meta
+  클라우드 vs SoftBank 클라우드 0.595)를 병합할 위험이 있어 보수적 0.70 채택. 본문 기반
+  중복 제거는 후속 과제.
+
 ## [0.2.2.0] - 2026-07-03
 
 ### Fixed

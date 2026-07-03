@@ -6731,6 +6731,64 @@ def _interleave_pools(unit_pools: dict, cap: int) -> List[Dict]:
     return merged
 
 
+# Phase D2: 임베딩(text-embedding-3-small) 코사인 유사도 기반 교차언어·패러프레이즈
+# 중복 제거. 제목 단어 Jaccard(Phase 2.5)가 못 잡는 "Nvidia Launches..." vs
+# "NVIDIA rolls out..." 류 표현 차이, 한/영 교차 중복을 잡는다.
+# 임계값 0.70은 실측(실제 중복 쌍 vs 서로 다른 쌍)에서 오병합 0건이 되는 보수적 값.
+# 낮추면 서로 다른 중요 기사가 병합될 위험이 있어 CONFIG로만 조정.
+SELECTION_EMBED_THRESHOLD_DEFAULT = 0.70
+
+
+def _dedup_by_embedding(items: List[Dict], threshold: float,
+                        text_key: str = 'title') -> tuple:
+    """제목 임베딩 코사인 유사도로 의미적 중복 제거 (greedy 클러스터링).
+
+    Returns:
+        (대표 기사 리스트, 제거된 건수). rag_search 미가용·임베딩 실패 시
+        원본 그대로 반환(파이프라인 보호 — dedup은 best-effort).
+    앞에 오는 기사를 대표로 유지한다(호출부에서 이미 중요도 순 정렬 가정).
+    """
+    if len(items) <= 1:
+        return items, 0
+    # lazy import: rag_search가 모듈 로드 시 news_engine를 import하므로, 최상단에서
+    # 가져오면 순환 import가 됨 → 함수 내부에서 지연 import.
+    # _embed_texts/_cosine_similarity는 rag_search의 관례상 private(_) 헬퍼지만
+    # 임베딩 인프라 중복 구현을 피하려 여기서 재사용한다. rag_search에서 이 둘의
+    # 시그니처가 바뀌면 아래 except가 D2를 조용히 비활성화(경고 로그만)하므로,
+    # rag_search 수정 시 이 소비 지점을 함께 확인할 것.
+    try:
+        from rag_search import _embed_texts, _cosine_similarity
+    except Exception as e:
+        log_warning(f"[D2] rag_search 임베딩 모듈 미가용 — 임베딩 중복 제거 건너뜀: {e}")
+        return items, 0
+
+    texts = [(_clean_text_hint(it.get(text_key, '')) or '.') for it in items]
+    try:
+        embs = _embed_texts(texts)
+    except Exception as e:
+        log_warning(f"[D2] 임베딩 생성 실패 — 중복 제거 건너뜀: {e}")
+        return items, 0
+    if len(embs) != len(items):
+        log_warning("[D2] 임베딩 개수 불일치 — 중복 제거 건너뜀")
+        return items, 0
+
+    used: set = set()
+    result: List[Dict] = []
+    removed = 0
+    for i in range(len(items)):
+        if i in used:
+            continue
+        used.add(i)
+        result.append(items[i])
+        for j in range(i + 1, len(items)):
+            if j in used:
+                continue
+            if _cosine_similarity(embs[i], embs[j]) >= threshold:
+                used.add(j)
+                removed += 1
+    return result, removed
+
+
 def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int) -> tuple:
     """활성 모드용 단별 하한 보장 (순수 함수).
 
@@ -7045,11 +7103,24 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     # 후보: 단별 풀 라운드로빈 병합 — 상한(150) 안에서 모든 단이 대표되도록
     # (순차 병합 시 큰 첫 풀이 뒤 단 기사를 상한 밖으로 밀어내는 편향 방지)
     candidates = _interleave_pools(unit_pools, SELECTION_CANDIDATES_MAX)
-    info['candidates'] = len(candidates)
     _total_unique = len({it['link'] for pool in unit_pools.values() for it in pool})
     if _total_unique > len(candidates):
         log_info(f"[Phase 2.6] 후보 상한 적용: 고유 기사 {_total_unique}개 중 {len(candidates)}개만 AI에 전달 "
                  f"({_total_unique - len(candidates)}개 제외)")
+
+    # Phase D2: 임베딩 기반 교차언어·패러프레이즈 중복 제거 (선별 전).
+    # 제목 Jaccard(Phase 2.5)가 못 잡는 "Nvidia Launches..." vs "NVIDIA rolls out..."
+    # 류를 제거해 AI가 같은 사건을 여러 번 뽑는 것을 방지한다. 섀도 모드에서도
+    # candidates에만 적용되므로(unit_pools 불변) 뉴스레터에는 영향 없음.
+    info['embed_deduped'] = 0
+    if CONFIG.get('selection_embed_dedup', True):
+        _thr = float(CONFIG.get('selection_embed_threshold', SELECTION_EMBED_THRESHOLD_DEFAULT))
+        candidates, _emb_removed = _dedup_by_embedding(candidates, threshold=_thr)
+        info['embed_deduped'] = _emb_removed
+        if _emb_removed:
+            log_info(f"[Phase 2.6/D2] 임베딩 중복 제거: {_emb_removed}건 병합 → 후보 {len(candidates)}개")
+
+    info['candidates'] = len(candidates)
     if not candidates:
         return unit_pools, info
 
@@ -7465,7 +7536,8 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                 f"(실패·제외 {len(unique_candidates) - len(analysis_cache)}개 — 본문 부족/품질 미달 포함)",
                 f"- AI 선별 (Phase 2.6, mode={_sel_info['mode']}): 후보 {_sel_info['candidates']}개 → "
                 f"선별 {_sel_info['selected']}개"
-                + (f", 하한 보충 {_sel_info['supplemented']}개" if _sel_info['supplemented'] else ""),
+                + (f", 하한 보충 {_sel_info['supplemented']}개" if _sel_info['supplemented'] else "")
+                + (f" (D2 임베딩 중복 {_sel_info['embed_deduped']}건 병합)" if _sel_info.get('embed_deduped') else ""),
                 f"- C2 정리(30일 경과 미선별·미분석): {_c2_deleted}건",
                 f"- RAG 임베딩 신규: {_emb_count}건",
                 "",
