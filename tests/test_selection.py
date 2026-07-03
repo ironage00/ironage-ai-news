@@ -3,6 +3,7 @@
 대상: _parse_selection_response(응답 파싱), _apply_unit_floor(하한 보장),
 _classify_article_to_units(단 분류). AI 호출·DB 쓰기는 다루지 않는다.
 """
+import news_engine
 from news_engine import (
     _parse_selection_response,
     _apply_unit_floor,
@@ -11,6 +12,9 @@ from news_engine import (
     _decode_unit_ids,
     _interleave_pools,
     run_phase26_selection,
+    ai_select_articles,
+    OPENAI_SELECTION_MODEL_DEFAULT,
+    OPENAI_MODEL_DEFAULT,
 )
 
 
@@ -236,3 +240,44 @@ def test_classify_counts_keyword_matches():
 
 def test_classify_no_match_returns_empty():
     assert _classify_article_to_units('오늘의 맛집 추천', {1: ['위성']}) == {}
+
+
+# ── ai_select_articles: 선별 모델 선택 (Phase B4) ────────────────────────────
+
+class _FakeChoice:
+    def __init__(self, content, finish_reason='stop'):
+        self.message = type('M', (), {'content': content})
+        self.finish_reason = finish_reason
+
+
+class _FakeResponse:
+    def __init__(self, content):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeClient:
+    """model 인자를 기록만 하는 가짜 OpenAI 클라이언트."""
+    def __init__(self, captured):
+        self.captured = captured
+        self.chat = self
+        self.completions = self
+
+    def create(self, model, **kwargs):
+        self.captured.append(model)
+        return _FakeResponse('{"selections": [{"index": 0, "score": 5, "reason": "x"}]}')
+
+
+def test_selection_uses_mini_model_by_default(monkeypatch):
+    captured = []
+    monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _FakeClient(captured))
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=5)
+    assert captured == [OPENAI_SELECTION_MODEL_DEFAULT]
+    assert OPENAI_SELECTION_MODEL_DEFAULT != OPENAI_MODEL_DEFAULT  # 심층분석과 분리됐는지 확인
+
+
+def test_selection_model_config_override(monkeypatch):
+    captured = []
+    monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _FakeClient(captured))
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_openai_model', 'gpt-4o')
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=5)
+    assert captured == ['gpt-4o']  # 설정으로 즉시 롤백 가능

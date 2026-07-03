@@ -103,6 +103,12 @@ CLAUDE_MODEL_DEFAULT = "claude-sonnet-4-6"
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 
+# Phase B4: Phase 2.6 전역 선별(ai_select_articles) 전용 모델 — 제목+요약 목록에서
+# 번호를 고르는 판단 작업이라 심층분석(OPENAI_MODEL_DEFAULT)보다 가벼운 모델로 충분.
+# 실측 비교(gpt-4o vs gpt-4o-mini, 동일 후보 목록)에서 선별 결과·점수·사유 품질 동등
+# 확인 후 전환. CONFIG.selection_openai_model로 재정의 가능(문제 시 즉시 롤백용).
+OPENAI_SELECTION_MODEL_DEFAULT = "gpt-4o-mini"
+
 # 단별 일일 뉴스레터 목표 기사 수 (Step Summary·scripts/eval_selection.py에서 공용)
 NEWSLETTER_TARGET = 20
 
@@ -6810,10 +6816,13 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
 {{"selections": [{{"index": 번호, "score": 1~5, "reason": "선별 사유 한 문장"}}, ...]}}
 """
 
+    # Phase B4: 선별은 심층분석보다 가벼운 모델 사용 (CONFIG로 즉시 롤백 가능)
+    _selection_openai_model = CONFIG.get('selection_openai_model') or OPENAI_SELECTION_MODEL_DEFAULT
+
     if ai_model == 'openai':
         client = get_ai_client('openai')
         response = client.chat.completions.create(
-            model=OPENAI_MODEL_DEFAULT,
+            model=_selection_openai_model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
@@ -6850,7 +6859,7 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
             log_warning(f"[Phase 2.6] 알 수 없는 ai_model '{ai_model}' — OpenAI로 대체 (설정 오타 확인 필요)")
         client = get_ai_client('perplexity' if ai_model == 'perplexity' else 'openai')
         response = client.chat.completions.create(
-            model=PERPLEXITY_MODEL_DEFAULT if ai_model == 'perplexity' else OPENAI_MODEL_DEFAULT,
+            model=PERPLEXITY_MODEL_DEFAULT if ai_model == 'perplexity' else _selection_openai_model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt},
