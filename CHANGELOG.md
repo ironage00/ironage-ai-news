@@ -3,6 +3,25 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.1.1.0] - 2026-07-03
+
+### Changed
+- **본문 추출 trafilatura 도입** — `get_article_content()`가 trafilatura(정밀 추출)를
+  우선 시도하고 부족할 때만 기존 BeautifulSoup 휴리스틱으로 폴백. 실측에서 BeautifulSoup이
+  본문을 놓치던 사이트(aitimes 29자→3,573자, techtimes 86자→17,603자)를 복구해
+  분석 실패로 인한 단별 뉴스레터 미달을 줄임
+- 응답 본문을 bytes로 각 추출기에 전달해 EUC-KR/CP949 한국 사이트의 인코딩 깨짐(mojibake) 감소
+- 응답 본문 5MB 스트리밍 상한 도입 — 거대·악성 페이지의 파싱 폭주로 워커가 묶이는 것 차단
+
+### Fixed
+- **정상 기사 오탈락 버그** — 본문 추출 실패 판정이 `'실패'` 같은 흔한 단어를 substring으로
+  검사해, "발사 실패" 등 정상 기사가 잘못 버려지던 문제 수정. 실패 신호를 센티넬 기반
+  `_is_extraction_failed()`로 일원화(4개 소비 지점 통일)
+
+### 후속 (별도 PR)
+- `get_article_content()` SSRF 방어 (리다이렉트 최종 목적지 IP 검증) — 리뷰에서 지적된
+  기존 네트워크 보안 이슈로, 정상 사이트를 깨지 않도록 전용 작업으로 분리
+
 ## [0.1.0.0] - 2026-07-02
 
 ### Added
