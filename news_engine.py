@@ -6594,6 +6594,29 @@ _UNIT_DRIVE_FOLDER_MAP = {
 # --- 기사->단 분류 헬퍼 (룰 기반, Level 3) ---
 # ==============================================================================
 
+@functools.lru_cache(maxsize=1024)
+def _ascii_kw_pattern(kw_lower: str):
+    """순수 ASCII 키워드용 단어 경계 정규식(캐싱).
+
+    앞뒤가 영문·숫자가 아닐 때만 매칭 → 'ai'가 'ukrainian'·'against',
+    'its'가 'its'(소유격)·'digits', 'ax'가 'tax' 속에서 오매칭되는 것을 막는다.
+    한글·하이픈·공백은 경계로 취급되므로 'AI반도체'·'o-ran'은 정상 매칭된다.
+    """
+    return re.compile(r'(?<![a-z0-9])' + re.escape(kw_lower) + r'(?![a-z0-9])')
+
+
+def _keyword_hit(kw_lower: str, title_lower: str) -> bool:
+    """단어 경계 인식 키워드 매칭.
+
+    - 순수 ASCII 키워드(ai, 5g, 3gpp, its, o-ran 등): 단어 경계 매칭.
+    - 한글 포함 키워드(위성통신, 피지컬 ai 등): 기존 부분 문자열 매칭
+      (한국어는 조사·복합어 결합 때문에 substring이 자연스러움).
+    """
+    if kw_lower.isascii():
+        return _ascii_kw_pattern(kw_lower).search(title_lower) is not None
+    return kw_lower in title_lower
+
+
 def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
     """기사 제목을 단별 키워드로 매칭하여 매칭 횟수 반환.
 
@@ -6606,7 +6629,7 @@ def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
     title_lower = title.lower()
     result = {}
     for uid, kws in unit_kw_map.items():
-        count = sum(1 for kw in kws if kw in title_lower)
+        count = sum(1 for kw in kws if _keyword_hit(kw, title_lower))
         if count > 0:
             result[uid] = count
     return result

@@ -11,6 +11,7 @@ from news_engine import (
     _parse_selection_response,
     _apply_unit_floor,
     _classify_article_to_units,
+    _keyword_hit,
     _encode_unit_ids,
     _decode_unit_ids,
     _interleave_pools,
@@ -244,6 +245,44 @@ def test_classify_counts_keyword_matches():
 
 def test_classify_no_match_returns_empty():
     assert _classify_article_to_units('오늘의 맛집 추천', {1: ['위성']}) == {}
+
+
+# ── _keyword_hit: ASCII 단어 경계 매칭 (Fix A) ───────────────────────────────
+
+def test_keyword_hit_ascii_word_boundary_blocks_buried_match():
+    # 'ai'가 다른 영단어 속에 묻히면 매칭 안 됨
+    assert _keyword_hit('ai', 'ukrainian drone update') is False
+    assert _keyword_hit('ai', 'complaints against carrier') is False
+    assert _keyword_hit('ax', 'new tax policy') is False
+    assert _keyword_hit('its', 'company reports strong digits') is False
+    assert _keyword_hit('iot', 'patriot missile test') is False
+
+
+def test_keyword_hit_ascii_matches_standalone_and_korean_adjacent():
+    assert _keyword_hit('ai', '삼성 AI 반도체 발표'.lower()) is True
+    assert _keyword_hit('ai', 'ai반도체 국제표준') is True          # 한글 인접 = 경계
+    assert _keyword_hit('ax', '삼성 sk ax 파트너십') is True
+    assert _keyword_hit('o-ran', 'o-ran alliance 발표') is True     # 하이픈 키워드
+
+
+def test_keyword_hit_6g_not_6ghz():
+    # 6G(세대) 키워드가 6GHz(주파수 단위)에 오매칭되지 않음
+    assert _keyword_hit('6g', '6ghz 주파수 할당') is False
+    assert _keyword_hit('6g', '6g 표준화 착수') is True
+
+
+def test_keyword_hit_korean_keeps_substring():
+    # 한글 키워드는 부분 문자열 유지 (조사·복합어)
+    assert _keyword_hit('위성통신', '저궤도 위성통신망 구축') is True
+    assert _keyword_hit('표준화', 'ai 표준화 회의') is True
+
+
+def test_keyword_hit_its_english_word_collision_is_known_limit():
+    """단어경계로도 못 고치는 한계: 'ITS'(지능형교통) 키워드가 영어 단어
+    'its'(소유격)와 철자가 같아 표준 단어로 등장하면 매칭됨.
+    → 이 케이스는 키워드 자체를 바꿔야 함(Fix B: 'ITS' → 'C-ITS'/'지능형교통').
+    이 테스트는 그 한계를 문서화(회귀 감지)한다."""
+    assert _keyword_hit('its', 'verizon defends its network') is True  # 못 막음(의도된 문서화)
 
 
 # ── _dedup_by_embedding (Phase D2) ───────────────────────────────────────────
