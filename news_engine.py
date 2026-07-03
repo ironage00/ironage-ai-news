@@ -6869,16 +6869,164 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
     return parsed
 
 
+# ==============================================================================
+# --- Phase C1: 저장 시점 이동 — 분석 성공 시에만 삽입(업서트) ---
+#
+# 기존에는 Phase 2 분류 직후 원시 후보 전체(단별 수백 개)를 무조건 저장했다.
+# Stage 0 필터가 이미 수집 단계에서 명백한 비ICT를 걸러내지만, 그 뒤에도
+# "ICT 관련은 맞으나 결국 분석되지 않는" 기사가 대량으로 남아 저장됐다
+# (C3 정리에서 확인). 이제는 이 함수가 유일한 저장 경로이며, Phase 3에서
+# 본문 스크래핑+AI 분석까지 성공한 기사만 삽입한다 — 실패/미선택 기사는
+# 애초에 Supabase에 들어가지 않는다.
+# ==============================================================================
+
+def _recent_title_snapshot(days: int = 2) -> list:
+    """최근 N일 (title, id) 스냅샷. Phase 3 병렬 루프 밖에서 1회 계산해
+    _upsert_analyzed_article에 넘겨, 기사마다 전체 스캔을 반복하지 않게 한다."""
+    cutoff = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(days=days)
+    with get_db_session() as session:
+        return [
+            (a.title, a.id)
+            for a in session.query(NewsArticle.title, NewsArticle.id)
+                            .filter(NewsArticle.collected_at >= cutoff).all()
+        ]
+
+
+def _upsert_analyzed_article(item: Dict, unit_id, is_selected: bool, ai_model: str,
+                             recent_titles=None) -> Optional[int]:
+    """분석 성공한 기사 1건을 삽입(신규) 또는 갱신(기존 row 존재 시).
+
+    - exact-link 중복: link 기준 존재 확인 후 upsert. Phase 3 후보는 사전에 exact
+      link로 dedup되고 link 컬럼에 unique 제약이 있어, 같은 실행 내 동일 link가
+      두 스레드에서 동시에 삽입되는 race는 발생하지 않는다(정확성 보장의 핵심).
+    - 교차 단 제목 유사도 중복(같은 사건, 다른 링크): 중복 삽입 대신 기존 id 반환.
+      ⚠️ 수용된 한계 — recent_titles 스냅샷은 Phase 3 루프 시작 시점(=오늘 분석 전)
+      기준이므로 주로 '지난 2일 저장분'과의 중복만 잡는다. 같은 실행에서 분석되는
+      교차 단 유사 기사끼리는 서로 스냅샷에 없어 둘 다 저장될 수 있다. 이는 표시상
+      중복 row일 뿐 데이터 손상·크래시가 아니고, 뉴스레터는 DB가 아니라 메모리
+      analysis_cache로 구성되므로 발송 결과에는 영향이 없다. 락/실시간 재조회로
+      '고치지' 말 것(비용 대비 이득 없음).
+
+    Args:
+        recent_titles: [(title, id)] 사전 계산 스냅샷. None이면 함수가 직접 조회
+            (단위 테스트·레거시 호출 호환).
+
+    Returns:
+        article id (삽입 또는 갱신된 row) — 완전히 건너뛴 경우 None.
+    """
+    link = item.get('link', '')
+    title = item.get('title', '')
+    content = item.get('content', '')
+    analysis = item.get('analysis_result', '')
+
+    own_write_id = None  # 이 기사 자신의 row를 삽입/갱신한 경우만 설정(교차 단 스킵 제외)
+    with get_db_session() as session:
+        existing = session.query(NewsArticle).filter_by(link=link).first()
+        if existing:
+            existing.is_analyzed = True
+            existing.analysis_result = analysis
+            existing.ai_model = ai_model
+            existing.is_selected = existing.is_selected or is_selected
+            existing.quality_score = 1.0 if is_selected else existing.quality_score
+            if item.get('extracted_keywords'):
+                existing.extracted_keywords = item['extracted_keywords']
+            if content and len(content) > len(existing.content or ''):
+                existing.content = content[:2000]
+            session.commit()
+            own_write_id = existing.id
+        else:
+            # 교차 단 제목 유사도 중복 체크 (같은 사건이 다른 링크로 중복 저장 방지).
+            # 스냅샷 미제공 시에만 직접 조회(단위 테스트 경로) — cutoff는 collected_at
+            # (naive UTC 저장)과 맞추기 위해 naive UTC로 계산.
+            if recent_titles is None:
+                recent_titles = _recent_title_snapshot(days=2)
+            similar_id = next(
+                (rid for (rtitle, rid) in recent_titles if rtitle and is_similar_news(title, rtitle)),
+                None,
+            )
+            if similar_id is not None:
+                # 이 기사 자신의 row가 아니므로 reclassify 대상이 아니다 —
+                # 남의 row(similar_id)에 이 기사 키워드로 단을 바꾸면 안 됨.
+                return similar_id
+
+            pub_date = None
+            published = item.get('published')
+            try:
+                if isinstance(published, str):
+                    pub_date = date_parser.parse(published)
+                elif isinstance(published, datetime.datetime):
+                    pub_date = published
+            except Exception:
+                pass
+
+            article = NewsArticle(
+                title=title,
+                link=link,
+                source=item.get('source', '출처 불명'),
+                published=pub_date,
+                content=content[:2000] if content else '',
+                quality_score=1.0 if is_selected else 0.0,
+                unit_id=unit_id,
+                is_selected=is_selected,
+                is_analyzed=True,
+                analysis_result=analysis,
+                ai_model=ai_model,
+                extracted_keywords=item.get('extracted_keywords'),
+            )
+            session.add(article)
+            session.commit()
+            own_write_id = article.id
+
+    # 분析 추출 키워드로 단 배정 재검토 — own-write(자기 row)에만 적용.
+    # 세션 밖에서 호출(reclassify_article_unit이 자체 세션을 열고, 위 commit을 봐야 함).
+    if own_write_id and item.get('extracted_keywords'):
+        try:
+            reclassify_article_unit(own_write_id, item['extracted_keywords'])
+        except Exception:
+            pass
+    return own_write_id
+
+
+def cleanup_stale_unselected_articles(days: int = 30) -> int:
+    """C2: 30일 넘게 미선별·미분석 상태로 남은 기사 자동 삭제.
+
+    Phase C1 이후 신규 삽입은 항상 is_analyzed=True로 생성되므로, 이 조건에
+    걸리는 행은 대부분 레거시 저장 경로(run_all_units_daily/run_daily_collection
+    같은 비프로덕션 경로)나 마이그레이션 이전 잔여 데이터다. 정기적으로
+    쓸어내는 백스톱 역할.
+    """
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    try:
+        with get_db_session() as session:
+            deleted = (
+                session.query(NewsArticle)
+                .filter(
+                    NewsArticle.is_selected.is_(False),
+                    NewsArticle.is_analyzed.is_(False),
+                    NewsArticle.collected_at < cutoff.replace(tzinfo=None),
+                )
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+            return deleted
+    except Exception as e:
+        log_warning(f"[C2] 오래된 미선별 기사 정리 실패: {e}")
+        return 0
+
+
 def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> tuple:
     """Phase 2.6 전역 AI 선별 오케스트레이터.
 
     Returns:
         (unit_pools, info) — shadow/off 모드에서는 unit_pools 원본 그대로,
         active 모드에서만 선별+하한 보장으로 재구성된 풀 반환.
-        info = {'mode', 'candidates', 'selected', 'supplemented'} (Step Summary용)
+        info = {'mode', 'candidates', 'selected', 'supplemented', 'selected_links'}
+        (selected_links는 Phase 3 upsert 시 is_selected 표기에 사용 — Phase C1 이후
+        NewsArticle row가 Phase 2.6 시점에는 아직 존재하지 않으므로, 이 함수 내부에서
+        직접 DB에 is_selected를 쓰지 않고 후속 단계로 정보만 전달한다.)
     """
     mode = CONFIG.get('selection_mode', 'shadow')
-    info = {'mode': mode, 'candidates': 0, 'selected': 0, 'supplemented': 0}
+    info = {'mode': mode, 'candidates': 0, 'selected': 0, 'supplemented': 0, 'selected_links': set()}
     if mode not in ('shadow', 'active'):
         if mode != 'off':
             log_warning(f"[Phase 2.6] selection_mode='{mode}' 인식 불가 (shadow/active/off 중 하나) — off로 간주")
@@ -6921,22 +7069,18 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
 
     selected_map = {candidates[s['index']]['link']: s for s in selections}
     info['selected'] = len(selected_map)
+    info['selected_links'] = set(selected_map.keys())
 
-    # 활성 모드: 풀 재구성 + 하한 보장 + is_selected DB 반영
-    # ⚠️ 활성 전환 전 결정 필요 (섀도 검증 PR 참고): 재실행 시 is_selected 누적(un-select
-    #    없음), quality_score 덮어쓰기, 수동 큐레이션(is_selected)과 AI 선별 구분 문제.
+    # 활성 모드: 풀 재구성 + 하한 보장.
+    # Phase C1(저장 시점 이동) 이후 NewsArticle row는 Phase 3 분석 성공 시점에야
+    # 생성되므로, 여기서 DB에 is_selected를 미리 쓰지 않는다 — 대신 info['selected_links']를
+    # Phase 3의 업서트(_upsert_analyzed_article)에 전달해 삽입 시점에 함께 기록한다.
+    # (이 방식은 "재실행 시 is_selected 누적"·"수동 큐레이션과 AI 선별 구분 불가" 문제도
+    # 자연히 해소한다 — is_selected는 항상 그 실행에서 분석된 값으로 매번 새로 결정됨.)
     supplemented: set = set()
     if mode == 'active':
         unit_pools, supplemented = _apply_unit_floor(unit_pools, set(selected_map), floor)
         info['supplemented'] = len(supplemented)
-        try:
-            with get_db_session() as _s:
-                _s.query(NewsArticle).filter(
-                    NewsArticle.link.in_(list(selected_map))
-                ).update({'is_selected': True, 'quality_score': 1.0}, synchronize_session=False)
-                _s.commit()
-        except Exception as _dbe:
-            log_warning(f"[Phase 2.6] is_selected DB 반영 실패: {_dbe}")
 
     # 섀도/활성 공통: selection_log 기록 (실패해도 파이프라인 영향 없음)
     try:
@@ -7083,14 +7227,10 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     # Step Summary용 Phase 2 직후 단별 풀 크기 스냅샷
     _stats_pool_phase2 = {uid: len(pool) for uid, pool in unit_pools.items()}
 
-    _by_punit: dict = defaultdict(list)
-    for item in global_pool:
-        _by_punit[item['_primary_unit_id']].append(item)
-    for puid, items in _by_punit.items():
-        try:
-            save_news_to_db(items, unit_id=puid)
-        except Exception as _e:
-            log_warning(f"DB 저장 실패 (unit_id={puid}): {_e}")
+    # Phase C1: 저장 시점 이동 — 분류만 된 원시 후보(수백~수천 개)를 여기서
+    # 통째로 저장하지 않는다. is_analyzed=True로 확정되는 시점(Phase 3의
+    # _upsert_analyzed_article)에만 DB row가 생기므로, Supabase에는 실제로
+    # 심층분석된(=AI가 다룬) 기사만 남는다. 아래 bulk save는 의도적으로 제거함.
 
     # Phase 2.5: 단별 풀 타이틀 유사도 클러스터링 (분析 전 동일 이벤트 중복 제거)
     log_info("[Phase 2.5] 단별 풀 타이틀 유사도 클러스터링 (threshold_numeric=0.35 / threshold_text=0.50)")
@@ -7105,16 +7245,23 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
 
     # Phase 2.6: 전역 AI 선별 (섀도 기본 — CONFIG.selection_mode로 제어)
     unit_pools, _sel_info = run_phase26_selection(unit_pools, unit_cfgs, ai_model)
+    _selected_links = _sel_info.get('selected_links', set())
 
     # Phase 3: Unique 기사 병렬 심층 분析
     _TOP = 50
     _needed: dict = {}
+    _link_unit: dict = {}  # link -> primary unit_id (업서트 시 저장할 단)
     for uid, pool in unit_pools.items():
         for it in pool[:_TOP]:
             if it['link'] not in _needed:
                 _needed[it['link']] = it
+                _link_unit[it['link']] = it.get('_primary_unit_id') or uid
     unique_candidates = list(_needed.values())
     log_info(f"[Phase 3] Unique 기사 {len(unique_candidates)}개 병렬 분析 시작")
+
+    # 교차 단 제목 유사도 중복 검사용 스냅샷 — 병렬 루프 밖에서 1회만 계산
+    # (기사마다 최근 2일 전체 스캔을 반복하지 않도록. 리뷰 지적 반영)
+    _recent_snapshot = _recent_title_snapshot(days=2)
 
     def _analyze_one(orig_item: dict):
         item = dict(orig_item)
@@ -7126,25 +7273,15 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if not is_valid_analysis(analysis):
                 return None
             item['analysis_result'] = analysis
-            _art_id = None
-            with get_db_session() as _s:
-                art = _s.query(NewsArticle).filter_by(link=item['link']).first()
-                if art:
-                    art.is_analyzed    = True
-                    art.analysis_result = analysis
-                    art.ai_model       = item.get('ai_model', ai_model)
-                    if item.get('extracted_keywords'):
-                        art.extracted_keywords = item['extracted_keywords']
-                    if item.get('content') and len(item['content']) > len(art.content or ''):
-                        art.content = item['content'][:2000]
-                    _art_id = art.id
-                    _s.commit()
-            # 분析 추출 키워드로 단 배정 재검토
-            if _art_id and item.get('extracted_keywords'):
-                try:
-                    reclassify_article_unit(_art_id, item['extracted_keywords'])
-                except Exception:
-                    pass
+            # Phase C1: 여기서만 DB에 삽입/갱신 — 분석까지 성공한 기사만 저장 대상.
+            # 단 배정 재검토(reclassify)는 _upsert 내부에서 own-write에만 수행한다.
+            _upsert_analyzed_article(
+                item,
+                unit_id=_link_unit.get(item['link']),
+                is_selected=item['link'] in _selected_links,
+                ai_model=item.get('ai_model', ai_model),
+                recent_titles=_recent_snapshot,
+            )
             return item
         except Exception as _e:
             log_warning(f"분析 실패: {item.get('title','')[:40]} -- {_e}")
@@ -7281,6 +7418,13 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         )
         log_info(f"   [{display}] 완료 -- 분析 {len(analyzed)}개")
 
+    # ── Phase C2: 30일 넘은 미선별·미분석 잔여 기사 자동 정리 ──────────────────
+    # Phase C1 이후 신규 삽입은 항상 is_analyzed=True라 대상이 거의 없어야 정상.
+    # 레거시 저장 경로·마이그레이션 이전 데이터에 대한 백스톱.
+    _c2_deleted = cleanup_stale_unselected_articles(days=30)
+    if _c2_deleted:
+        log_info(f"[C2] 30일 경과 미선별·미분석 기사 {_c2_deleted}건 정리")
+
     # ── RAG 임베딩 자동 실행 (전체 단 분析 완료 후 한 번) ──────────────────────
     log_info("\n[임베딩] RAG 임베딩 자동 처리 중...")
     _emb_count = 0
@@ -7313,6 +7457,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                 f"- AI 선별 (Phase 2.6, mode={_sel_info['mode']}): 후보 {_sel_info['candidates']}개 → "
                 f"선별 {_sel_info['selected']}개"
                 + (f", 하한 보충 {_sel_info['supplemented']}개" if _sel_info['supplemented'] else ""),
+                f"- C2 정리(30일 경과 미선별·미분석): {_c2_deleted}건",
                 f"- RAG 임베딩 신규: {_emb_count}건",
                 "",
                 f"| 단 | Phase 2 분류 풀 | 중복 제거 후 | 뉴스레터 게재 (목표 {NEWSLETTER_TARGET}) |",
