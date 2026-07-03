@@ -3,6 +3,16 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.1.2.0] - 2026-07-03
+
+### Added
+- `scripts/cleanup_junk_articles.py` — 기존에 쌓인 비ICT 기사(차익실현·코스피·스포츠·
+  연예 등) 일회성 정리 스크립트 (Phase C3). 프로덕션 Stage 0 필터
+  (`_collect_stage_filter_reason`)를 과거 데이터에 소급 적용. 기본은 dry-run,
+  `--confirm` 플래그 없이는 절대 삭제하지 않음. AI 선별(`is_selected`)·심층분석
+  (`is_analyzed`) 결과물은 절대 삭제 대상에서 제외
+- 프로덕션 Supabase에 1회 실행 — 330건 삭제 (재실행 시 0건, 멱등성 확인)
+
 ## [0.1.1.0] - 2026-07-03
 
 ### Changed
