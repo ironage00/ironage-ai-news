@@ -6626,7 +6626,10 @@ def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
 #   selection_unit_floor: 활성 모드에서 단별 최소 보장 기사 수 (기본 15)
 # ==============================================================================
 
-SELECTION_CANDIDATES_MAX = 150   # AI에 전달할 최대 후보 수 (토큰 상한)
+# AI 선별에 전달할 최대 후보 수. gpt-4o-mini는 input이 저렴하고 컨텍스트 128k라
+# 후보 수를 늘려도 비용·용량 부담이 작다(선별 응답 길이는 target에만 좌우됨).
+# CONFIG.selection_candidates_max로 조정 가능(배포 없이 튜닝).
+SELECTION_CANDIDATES_MAX = 300   # 기본값 150 → 300 상향 (더 많은 후보를 AI가 검토)
 SELECTION_SUMMARY_MAX = 120      # 프롬프트에 넣는 기사 요약 길이
 SELECTION_TEXT_MAX = 500         # reason/title 저장 길이 (SelectionLog String(500)과 동기)
 
@@ -7100,12 +7103,24 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
         log_info(f"[Phase 2.6] selection_mode={mode} — AI 선별 건너뜀")
         return unit_pools, info
 
-    # 후보: 단별 풀 라운드로빈 병합 — 상한(150) 안에서 모든 단이 대표되도록
+    def _safe_int(value, default, lo, hi):
+        """설정값 안전 파싱 — '15개' 같은 오타로 파이프라인 전체가 죽지 않도록."""
+        try:
+            return max(lo, min(hi, int(value)))
+        except (TypeError, ValueError):
+            log_warning(f"[Phase 2.6] 설정값 '{value}' 파싱 불가 — 기본값 {default} 사용")
+            return default
+
+    # 후보 상한 — CONFIG로 조정 가능(기본 300). 모든 후보를 보내려면 크게 설정.
+    _cap = _safe_int(CONFIG.get('selection_candidates_max', SELECTION_CANDIDATES_MAX),
+                     SELECTION_CANDIDATES_MAX, 50, 2000)
+
+    # 후보: 단별 풀 라운드로빈 병합 — 상한 안에서 모든 단이 대표되도록
     # (순차 병합 시 큰 첫 풀이 뒤 단 기사를 상한 밖으로 밀어내는 편향 방지)
-    candidates = _interleave_pools(unit_pools, SELECTION_CANDIDATES_MAX)
+    candidates = _interleave_pools(unit_pools, _cap)
     _total_unique = len({it['link'] for pool in unit_pools.values() for it in pool})
     if _total_unique > len(candidates):
-        log_info(f"[Phase 2.6] 후보 상한 적용: 고유 기사 {_total_unique}개 중 {len(candidates)}개만 AI에 전달 "
+        log_info(f"[Phase 2.6] 후보 상한({_cap}) 적용: 고유 기사 {_total_unique}개 중 {len(candidates)}개만 AI에 전달 "
                  f"({_total_unique - len(candidates)}개 제외)")
 
     # Phase D2: 임베딩 기반 교차언어·패러프레이즈 중복 제거 (선별 전).
@@ -7124,15 +7139,8 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     if not candidates:
         return unit_pools, info
 
-    def _safe_int(value, default, lo, hi):
-        """설정값 안전 파싱 — '15개' 같은 오타로 파이프라인 전체가 죽지 않도록."""
-        try:
-            return max(lo, min(hi, int(value)))
-        except (TypeError, ValueError):
-            log_warning(f"[Phase 2.6] 설정값 '{value}' 파싱 불가 — 기본값 {default} 사용")
-            return default
-
-    target = _safe_int(CONFIG.get('daily_global_select_count', 60), 60, 10, SELECTION_CANDIDATES_MAX)
+    # 목표는 실제 후보 수를 넘을 수 없음 (상한을 후보 수로 클램프)
+    target = _safe_int(CONFIG.get('daily_global_select_count', 60), 60, 10, len(candidates))
     # 하한은 최소 1 보장 — floor=0 설정 시 과압축(258→9) 재발 경로가 되살아남
     floor = _safe_int(CONFIG.get('selection_unit_floor', 15), 15, 1, 50)
     log_info(f"[Phase 2.6] 전역 AI 선별 (mode={mode}, 후보 {len(candidates)}개 → 목표 {target}개)")

@@ -3,6 +3,17 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.3.1.0] - 2026-07-03
+
+### Changed
+- **Phase 2.6 선별 후보 상한 150 → 300 상향** — 그날 고유 후보 526건 중 150건만
+  AI에 전달돼 376건이 검토조차 안 되던 문제 완화. gpt-4o-mini는 input이 저렴하고
+  컨텍스트 128k라 후보를 늘려도 비용·용량 부담이 작다(선별 응답 길이는 목표 개수에만
+  좌우됨). `CONFIG.selection_candidates_max`로 배포 없이 조정 가능(50~2000). 크게 잡으면
+  사실상 전체 후보를 AI에 전달.
+- `daily_global_select_count`(목표 개수) 상한 클램프를 상수(150)가 아닌 실제 후보 수로
+  변경 — 후보보다 큰 목표를 요청하는 모순 제거.
+
 ## [0.3.0.0] - 2026-07-03
 
 ### Added
