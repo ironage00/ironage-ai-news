@@ -699,12 +699,15 @@ def send_trend_report_email(
 ):
     """트렌드 보고서 HTML 이메일 발송 (개조식, 링크 포함)"""
     from news_engine import SENDER_EMAIL, GMAIL_PASSWORD, RECEIVER_EMAIL
+    import os
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     from email.utils import formatdate
 
     log_info("📧 트렌드 보고서 이메일 발송 중...")
+
+    portal_url = os.environ.get("TTA_PORTAL_URL", "https://tta-radar.streamlit.app")
 
     period_name = "주간" if report_type == 'weekly' else "월간"
     stats = analysis_result.get('statistics', {})
@@ -797,7 +800,10 @@ def send_trend_report_email(
         .outlook-box { background:#fce4ec; border-radius:10px; padding:18px; margin:16px 0; }
         .doc-btn { display:inline-block; background:linear-gradient(135deg,#667eea,#764ba2);
                    color:white; padding:14px 32px; text-decoration:none; border-radius:25px;
-                   font-weight:600; margin:25px 0; box-shadow:0 4px 14px rgba(102,126,234,.4); }
+                   font-weight:600; margin:25px 8px; box-shadow:0 4px 14px rgba(102,126,234,.4); }
+        .portal-btn { display:inline-block; background:#ffffff; color:#667eea;
+                      border:2px solid #667eea; padding:12px 30px; text-decoration:none;
+                      border-radius:25px; font-weight:600; margin:25px 8px; }
         .footer { margin-top:40px; padding:25px; background:linear-gradient(135deg,#2c3e50,#34495e);
                   border-radius:12px; text-align:center; color:white; font-size:13px; }
     """
@@ -956,6 +962,7 @@ def send_trend_report_email(
 
 <div style="text-align:center;">
   <a href="{doc_url}" class="doc-btn" target="_blank">📄 전체 보고서 보기 (Google Docs)</a>
+  <a href="{portal_url}" class="portal-btn" target="_blank">📡 TTA Radar 포털에서 보기</a>
 </div>
 
 <div class="footer">
