@@ -3,6 +3,39 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.0.0] - 2026-07-04
+
+### Added — 인사이트 파이프라인 1단계 (운영 알림 + 섀도 미리보기)
+
+**α. 운영 알림 인프라 (관리자 전용 통보 — 즉시 활성)**
+- `_ops_alert`/`_send_admin_email`: 관리자(`CONFIG.ops_alert_email`, 기본
+  ironage@tta.or.kr)에게만 발송. `google_chat_webhook` 설정 시 챗 병행.
+- `PipelineRunStat` 테이블: 매 daily 실행 단별 배정/게재/선별 통계 영속화.
+- `_detect_pipeline_anomalies`: 전일 대비 Phase 2 배정 ±50% 급변(절대 10건 이상)
+  + 게재 5건 미만 감지 → 관리자 알림. '표준기획단 37→1'류 사고 조기 포착.
+- 실패 알림 훅: Phase 1 수집 0건, Phase 2.6 AI 선별 실패(타임아웃 경로),
+  분석 결과 없는 단, CLI 치명적 예외.
+
+**β. 일일 브리핑 내러티브 (섀도 — 관리자 미리보기만)**
+- `generate_daily_narrative`: 단별 '오늘의 핵심 흐름' 3문장 (gpt-4o-mini,
+  기사 제목+영향도만 근거, 목록 외 사실 금지 제약, SDK 재시도 off).
+- `CONFIG.daily_narrative_mode='shadow'` 기본 — active 전환 시 뉴스레터
+  TODAY'S INTELLIGENCE BRIEF 최상단에 삽입되는 배관까지 구현 완료.
+
+**γ. 사건 클러스터 + 연속 보도 타임라인 (섀도 — 관리자 미리보기만)**
+- `_cluster_by_embedding`: D2 dedup 로직을 클러스터 구조 반환으로 리팩터링
+  (`_dedup_by_embedding`은 이를 재사용, 기존 동작·테스트 계약 불변).
+- `_build_cluster_preview_html`: 단별 분석 기사(~20건)를 "대표기사 (관련 N건)"
+  묶음으로 표시 — 활성화 시 뉴스레터 모습을 관리자가 미리 확인.
+- `_get_story_timeline`/`_build_timeline_preview_html`: rag_search 의미검색으로
+  과거 30일 내 같은 사안 보도를 찾아 "연속 보도 N건 — 최초 M/D" 컨텍스트 표시.
+  임계값 `CONFIG.timeline_min_similarity=0.55` (섀도 기간에 실측 튜닝 예정).
+- `run_insight_shadow_preview`: 매 daily 실행 후 β·γ 결과를 관리자에게
+  "[IRONAGE 섀도] 인사이트 미리보기" 이메일 1통으로 발송 (주말 포함).
+  뉴스레터 풀·발송에는 어떤 변경도 없음.
+
+- pytest 28건 추가 (전체 109개). 비용: mini 4콜 + 임베딩 쿼리 ~20회/일 수준.
+
 ## [0.3.7.0] - 2026-07-04
 
 ### Security
