@@ -2,6 +2,9 @@
 
 네트워크·trafilatura 실제 호출은 다루지 않는다 — 정제·게이트·선택 로직만 검증.
 """
+import socket
+
+import news_engine
 from news_engine import (
     _finalize_article_text,
     _extract_with_bs4,
@@ -9,6 +12,10 @@ from news_engine import (
     _is_extraction_failed,
     _fail,
     _MIN_BODY_LEN,
+    _is_blocked_ip,
+    _is_ssrf_safe_url,
+    _SSRFBlockedError,
+    get_article_content,
 )
 
 
@@ -101,3 +108,129 @@ def test_bs4_paragraph_aggregation_without_article():
 
 def test_bs4_empty_html_returns_empty():
     assert _extract_with_bs4('<html></html>') == ''
+
+
+# ── SSRF 방어: _is_blocked_ip ────────────────────────────────────────────────
+
+def test_blocked_ip_private_ranges():
+    for ip in ('10.0.0.1', '172.16.0.1', '192.168.1.1'):
+        assert _is_blocked_ip(ip)
+
+
+def test_blocked_ip_loopback_and_link_local():
+    assert _is_blocked_ip('127.0.0.1')
+    assert _is_blocked_ip('169.254.169.254')  # 클라우드 메타데이터 엔드포인트
+    assert _is_blocked_ip('::1')
+
+
+def test_blocked_ip_unspecified_and_reserved():
+    assert _is_blocked_ip('0.0.0.0')
+    assert _is_blocked_ip('240.0.0.1')  # 예약 대역
+
+
+def test_blocked_ip_ipv4_mapped_ipv6_bypass():
+    """::ffff:127.0.0.1로 사설 IP를 감추는 우회 시도도 차단."""
+    assert _is_blocked_ip('::ffff:127.0.0.1')
+    assert _is_blocked_ip('::ffff:10.0.0.1')
+
+
+def test_blocked_ip_public_allowed():
+    assert not _is_blocked_ip('8.8.8.8')
+    assert not _is_blocked_ip('1.1.1.1')
+
+
+def test_blocked_ip_invalid_string_is_unsafe():
+    assert _is_blocked_ip('not-an-ip')
+
+
+# ── SSRF 방어: _is_ssrf_safe_url ─────────────────────────────────────────────
+
+def test_ssrf_url_rejects_non_http_scheme():
+    assert not _is_ssrf_safe_url('file:///etc/passwd')
+    assert not _is_ssrf_safe_url('ftp://example.com/x')
+
+
+def test_ssrf_url_rejects_private_host(monkeypatch):
+    monkeypatch.setattr(
+        socket, 'getaddrinfo',
+        lambda host, port: [(None, None, None, None, ('10.0.0.5', 0))],
+    )
+    assert not _is_ssrf_safe_url('http://internal.example/path')
+
+
+def test_ssrf_url_accepts_public_host(monkeypatch):
+    monkeypatch.setattr(
+        socket, 'getaddrinfo',
+        lambda host, port: [(None, None, None, None, ('93.184.216.34', 0))],
+    )
+    assert _is_ssrf_safe_url('https://example.com/article')
+
+
+def test_ssrf_url_rejects_if_any_resolved_ip_is_private(monkeypatch):
+    """DNS가 여러 IP를 반환할 때 하나라도 사설망이면 전체 차단."""
+    monkeypatch.setattr(
+        socket, 'getaddrinfo',
+        lambda host, port: [
+            (None, None, None, None, ('93.184.216.34', 0)),
+            (None, None, None, None, ('192.168.1.1', 0)),
+        ],
+    )
+    assert not _is_ssrf_safe_url('https://example.com/article')
+
+
+def test_ssrf_url_rejects_dns_failure(monkeypatch):
+    def _boom(host, port):
+        raise socket.gaierror('no such host')
+    monkeypatch.setattr(socket, 'getaddrinfo', _boom)
+    assert not _is_ssrf_safe_url('https://nonexistent.invalid/x')
+
+
+# ── get_article_content: SSRF 통합 동작 ──────────────────────────────────────
+
+def test_get_article_content_blocks_private_ip_url(monkeypatch):
+    """사설 IP를 직접 가리키는 URL은 네트워크 요청 없이 즉시 차단."""
+    monkeypatch.setattr(
+        socket, 'getaddrinfo',
+        lambda host, port: [(None, None, None, None, ('192.168.1.1', 0))],
+    )
+    def _boom(*a, **k):
+        raise AssertionError('SSRF 차단되어야 하며 실제 요청이 발생하면 안 됨')
+    monkeypatch.setattr(news_engine.requests, 'get', _boom)
+
+    result = get_article_content('http://192.168.1.1/admin')
+    assert _is_extraction_failed(result)
+    assert 'SSRF' in result
+
+
+def test_get_article_content_blocks_redirect_to_private_ip(monkeypatch):
+    """공인 IP로 시작해도 리다이렉트가 사설망을 가리키면 따라가지 않고 차단."""
+    calls = {'n': 0}
+
+    def _fake_getaddrinfo(host, port):
+        if host == 'public.example':
+            return [(None, None, None, None, ('93.184.216.34', 0))]
+        return [(None, None, None, None, ('10.0.0.9', 0))]
+    monkeypatch.setattr(socket, 'getaddrinfo', _fake_getaddrinfo)
+
+    class _FakeResp:
+        def __init__(self):
+            self.headers = {'Location': 'http://169.254.169.254/latest/meta-data/'}
+            self.is_redirect = True
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def raise_for_status(self):
+            pass
+
+    def _fake_get(url, **kwargs):
+        calls['n'] += 1
+        assert calls['n'] == 1, '리다이렉트 대상이 차단됐어야 하므로 두 번째 요청은 없어야 함'
+        return _FakeResp()
+
+    monkeypatch.setattr(news_engine.requests, 'get', _fake_get)
+
+    result = get_article_content('http://public.example/redirect-me')
+    assert _is_extraction_failed(result)
+    assert 'SSRF' in result
+    assert calls['n'] == 1

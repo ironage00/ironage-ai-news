@@ -33,6 +33,7 @@ from contextlib import contextmanager
 
 # 네트워크 및 웹
 import socket
+import ipaddress
 import requests
 import urllib3
 import feedparser
@@ -2048,6 +2049,63 @@ def _finalize_article_text(text: str, max_length: int) -> str:
     return cleaned_text
 
 
+# ── SSRF 방어 ─────────────────────────────────────────────────────────────
+# 뉴스 크롤러는 RSS/Naver 피드가 제공하는 임의 URL을 그대로 요청한다 — 악성
+# 피드가 내부망(사설 IP·루프백·링크로컬 등)을 가리키는 URL이나, 정상 URL처럼
+# 보이지만 내부망으로 리다이렉트하는 응답을 주면 서버가 내부망을 스캔/접근하는
+# 데 악용될 수 있다(SSRF). 요청 전, 그리고 리다이렉트를 따라갈 때마다 대상
+# 호스트가 공인 IP로만 해석되는지 검증한다.
+_MAX_REDIRECTS = 5  # 리다이렉트 체인 상한 (무한 루프·우회 시도 차단)
+
+
+class _SSRFBlockedError(Exception):
+    """SSRF 방어에 의해 요청이 차단됨 (사설/링크로컬/루프백 등 내부망 대상)."""
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    """사설망·루프백·링크로컬·예약 대역 등 SSRF 위험 IP인지 판정.
+
+    IPv4-mapped IPv6(::ffff:127.0.0.1)로 사설 IP를 감추는 우회도 매핑된
+    IPv4 주소로 재검사해 차단한다.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # 파싱 불가 → 안전하지 않다고 간주
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private or ip.is_loopback or ip.is_link_local or
+        ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def _is_ssrf_safe_url(url: str) -> bool:
+    """URL이 http/https 스킴이고, 호스트명이 해석하는 모든 IP가 공인망인지 검증.
+
+    DNS가 여러 레코드(IPv4/IPv6)를 반환할 수 있으므로 전부 검사한다 — 하나라도
+    사설/링크로컬이면 차단. 리다이렉트를 수동으로 따라가는 _fetch_capped에서
+    매 홉마다 호출된다.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ('http', 'https'):
+        return False
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    ips = {info[4][0] for info in infos}
+    if not ips:
+        return False
+    return not any(_is_blocked_ip(ip) for ip in ips)
+
+
 def get_article_content(url: str, max_length: int = 3000) -> str:
     """주어진 URL에서 뉴스 기사 본문을 추출.
 
@@ -2060,19 +2118,37 @@ def get_article_content(url: str, max_length: int = 3000) -> str:
     }
 
     def _fetch_capped(verify: bool) -> bytes:
-        """스트리밍으로 최대 _MAX_FETCH_BYTES까지만 읽어 반환 (파싱 폭주 차단)."""
-        with requests.get(url, headers=headers, timeout=10, verify=verify, stream=True) as resp:
-            resp.raise_for_status()
-            total = 0
-            parts = []
-            for chunk in resp.iter_content(chunk_size=65536):
-                if not chunk:
+        """스트리밍으로 최대 _MAX_FETCH_BYTES까지만 읽어 반환 (파싱 폭주 차단).
+
+        SSRF 방어: 리다이렉트를 자동으로 따라가지 않고(allow_redirects=False)
+        매 홉마다 대상 URL을 재검증한다 — 악성 피드가 사설/링크로컬 IP로 직접
+        향하거나 리다이렉트로 우회하는 것을 차단한다.
+        """
+        current_url = url
+        for _ in range(_MAX_REDIRECTS + 1):
+            if not _is_ssrf_safe_url(current_url):
+                raise _SSRFBlockedError(f"허용되지 않는 URL 대상: {current_url[:100]}")
+            with requests.get(current_url, headers=headers, timeout=10, verify=verify,
+                               stream=True, allow_redirects=False) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get('Location')
+                    if not location:
+                        resp.raise_for_status()
+                        return b''
+                    current_url = urllib.parse.urljoin(current_url, location)
                     continue
-                parts.append(chunk)
-                total += len(chunk)
-                if total >= _MAX_FETCH_BYTES:
-                    break
-            return b''.join(parts)
+                resp.raise_for_status()
+                total = 0
+                parts = []
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    parts.append(chunk)
+                    total += len(chunk)
+                    if total >= _MAX_FETCH_BYTES:
+                        break
+                return b''.join(parts)
+        raise _SSRFBlockedError("리다이렉트 횟수 초과")
 
     try:
         try:
@@ -2089,6 +2165,8 @@ def get_article_content(url: str, max_length: int = 3000) -> str:
 
         return _finalize_article_text(best, max_length)
 
+    except _SSRFBlockedError as e:
+        return _fail(f"본문 수집 차단 (SSRF 방어): {e}")
     except requests.exceptions.RequestException as e:
         return _fail(f"본문 수집 실패 (네트워크 오류): {e}")
     except Exception as e:
