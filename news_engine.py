@@ -1354,11 +1354,16 @@ def reclassify_article_unit(article_id: int, extracted_kw_json: str) -> bool:
             continue
         score = 0.0
         for term in extracted_terms:
+            # term당 최고 매칭 1건만 반영 (합산 시 짧은 term이 결합어 다수와
+            # 부분매칭되어 점수가 인플레이션되는 문제 방지 — 예: "ai"가 표준혁신단의
+            # "AI 표준"·"AI 모델"·"AI 시스템" 등 23개 키워드 전부와 부분일치)
+            term_best = 0.0
             for ukw in ukws:
                 if ukw == term:
-                    score += len(ukw) * 2.0
+                    term_best = max(term_best, len(ukw) * 2.0)
                 elif ukw in term or term in ukw:
-                    score += min(len(ukw), len(term)) * 1.0
+                    term_best = max(term_best, min(len(ukw), len(term)) * 1.0)
+            score += term_best
         if score > 0:
             unit_scores[uid] = score
 
