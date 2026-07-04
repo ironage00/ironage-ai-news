@@ -6910,7 +6910,11 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
 
     if ai_model == 'openai':
         client = get_ai_client('openai')
-        response = client.chat.completions.create(
+        # openai SDK 기본 max_retries=2 — timeout=120과 결합하면 타임아웃 시
+        # 최대 3회 재시도(약 6분)까지 늘어나 섀도 선별 하나가 전체 daily 파이프라인을
+        # 지연시킨다. 호출부(run_phase26_selection)에 이미 graceful fallback이
+        # 있으므로 SDK 재시도는 끄고 빠르게 실패시킨다.
+        response = client.with_options(max_retries=0).chat.completions.create(
             model=_selection_openai_model,
             messages=[
                 {"role": "system", "content": system_msg},
@@ -6947,7 +6951,8 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
         if ai_model != 'perplexity':
             log_warning(f"[Phase 2.6] 알 수 없는 ai_model '{ai_model}' — OpenAI로 대체 (설정 오타 확인 필요)")
         client = get_ai_client('perplexity' if ai_model == 'perplexity' else 'openai')
-        response = client.chat.completions.create(
+        # 위와 동일한 이유로 SDK 자동 재시도 비활성화 (빠른 실패 → graceful fallback)
+        response = client.with_options(max_retries=0).chat.completions.create(
             model=PERPLEXITY_MODEL_DEFAULT if ai_model == 'perplexity' else _selection_openai_model,
             messages=[
                 {"role": "system", "content": system_msg},

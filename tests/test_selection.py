@@ -390,10 +390,16 @@ class _FakeResponse:
 
 class _FakeClient:
     """model 인자를 기록만 하는 가짜 OpenAI 클라이언트."""
-    def __init__(self, captured):
+    def __init__(self, captured, with_options_calls=None):
         self.captured = captured
+        self.with_options_calls = with_options_calls
         self.chat = self
         self.completions = self
+
+    def with_options(self, **kwargs):
+        if self.with_options_calls is not None:
+            self.with_options_calls.append(kwargs)
+        return self
 
     def create(self, model, **kwargs):
         self.captured.append(model)
@@ -414,3 +420,16 @@ def test_selection_model_config_override(monkeypatch):
     monkeypatch.setitem(news_engine.CONFIG, 'selection_openai_model', 'gpt-4o')
     ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=5)
     assert captured == ['gpt-4o']  # 설정으로 즉시 롤백 가능
+
+
+def test_selection_disables_sdk_retries(monkeypatch):
+    """openai SDK 기본 max_retries=2 + timeout=120이 겹치면 타임아웃 시 최대
+    6분까지 늘어나 daily 파이프라인을 지연시킨다(7/4 실 운영 관찰). 섀도 선별은
+    호출부에 이미 graceful fallback이 있으므로 SDK 재시도를 꺼서 빠르게 실패해야 한다."""
+    captured, with_options_calls = [], []
+    monkeypatch.setattr(
+        news_engine, 'get_ai_client',
+        lambda name: _FakeClient(captured, with_options_calls),
+    )
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=5)
+    assert with_options_calls == [{'max_retries': 0}]

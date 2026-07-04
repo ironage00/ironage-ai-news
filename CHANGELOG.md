@@ -3,6 +3,19 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.3.5.0] - 2026-07-04
+
+### Fixed
+- **Phase 2.6 AI 선별 타임아웃 시 6분 지연 버그** — 7/4(토) daily 실행에서
+  `ai_select_articles`가 `Request timed out.`으로 실패했는데, 개별 호출에 명시한
+  `timeout=120`과 별개로 openai SDK 클라이언트 기본값(`max_retries=2`)이 겹쳐
+  타임아웃 시 최대 3회(약 6분)까지 재시도가 누적되는 것을 확인(SDK
+  `DEFAULT_MAX_RETRIES=2` 검증). `run_phase26_selection` 호출부에 이미 graceful
+  fallback(원본 풀 유지)이 있어 SDK 재시도는 이득 없이 daily 파이프라인 전체를
+  지연시키기만 함. `client.with_options(max_retries=0)`으로 선별 호출(OpenAI·
+  Perplexity 계열 분기 모두)의 SDK 자동 재시도를 끄고 실패 시 즉시 폴백하도록 수정.
+  `tests/test_selection.py::test_selection_disables_sdk_retries` 추가.
+
 ## [0.3.4.0] - 2026-07-04
 
 ### Fixed
