@@ -3,6 +3,22 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.3.7.0] - 2026-07-04
+
+### Security
+- **`get_article_content` SSRF 방어 추가** — RSS/Naver 피드가 제공하는 URL을 검증
+  없이 그대로 요청하던 것을, 요청 전 및 리다이렉트를 따라갈 때마다 대상 호스트가
+  공인 IP로만 해석되는지 검증하도록 수정.
+  - `_is_blocked_ip`: 사설망(10/8, 172.16/12, 192.168/16)·루프백·링크로컬(클라우드
+    메타데이터 엔드포인트 169.254.169.254 포함)·멀티캐스트·예약 대역·미지정 주소
+    차단. `::ffff:127.0.0.1` 같은 IPv4-mapped IPv6 우회도 매핑된 IPv4로 재검사.
+  - `_is_ssrf_safe_url`: http/https 스킴만 허용, 호스트명이 해석하는 모든 DNS
+    레코드(IPv4/IPv6)를 검사해 하나라도 사설/링크로컬이면 차단.
+  - `_fetch_capped`가 `allow_redirects=False`로 바꾸고 최대 5홉까지 수동으로
+    리다이렉트를 따라가며 매 홉마다 재검증 — 공인 IP로 시작해도 리다이렉트가
+    내부망을 가리키면 차단.
+  - `tests/test_extraction.py` 17건 추가(IP 판정, URL 검증, 통합 차단 시나리오).
+
 ## [0.3.6.0] - 2026-07-04
 
 ### Changed (프로덕션 DB unit_settings — 코드 아닌 데이터)
