@@ -1555,7 +1555,7 @@ def load_config():
         'jaccard_threshold_text': 0.6,
         # ── 운영 알림 (α) — 관리자 전용 통보 ──────────────────────────────
         'ops_alert_enabled': True,
-        'ops_alert_email': 'iroange@tta.or.kr',   # 쉼표 구분으로 복수 지정 가능
+        'ops_alert_email': 'ironage@tta.or.kr',   # 쉼표 구분으로 복수 지정 가능
         # ── 인사이트 (β·γ) — shadow=관리자 미리보기만 / active=뉴스레터 반영 / off ──
         'insight_preview_enabled': True,
         'daily_narrative_mode': 'shadow',
@@ -6378,7 +6378,7 @@ def send_google_chat_alert(issue_title: str, issue_desc: str, impact_level: str,
 # '우연한 발견' 의존을 끊기 위한 장치.
 # ==============================================================================
 
-OPS_ALERT_EMAIL_DEFAULT = 'iroange@tta.or.kr'   # CONFIG.ops_alert_email로 재지정 가능
+OPS_ALERT_EMAIL_DEFAULT = 'ironage@tta.or.kr'   # CONFIG.ops_alert_email로 재지정 가능
 
 
 def _ops_email_receivers() -> list:

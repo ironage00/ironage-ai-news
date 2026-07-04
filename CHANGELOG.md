@@ -9,7 +9,7 @@
 
 **α. 운영 알림 인프라 (관리자 전용 통보 — 즉시 활성)**
 - `_ops_alert`/`_send_admin_email`: 관리자(`CONFIG.ops_alert_email`, 기본
-  iroange@tta.or.kr)에게만 발송. `google_chat_webhook` 설정 시 챗 병행.
+  ironage@tta.or.kr)에게만 발송. `google_chat_webhook` 설정 시 챗 병행.
 - `PipelineRunStat` 테이블: 매 daily 실행 단별 배정/게재/선별 통계 영속화.
 - `_detect_pipeline_anomalies`: 전일 대비 Phase 2 배정 ±50% 급변(절대 10건 이상)
   + 게재 5건 미만 감지 → 관리자 알림. '표준기획단 37→1'류 사고 조기 포착.
