@@ -1553,6 +1553,12 @@ def load_config():
         'ict_min_articles': 25,
         'jaccard_threshold_numeric': 0.5,
         'jaccard_threshold_text': 0.6,
+        # Phase 2.6 선별 모델 override (심층분석 ai_model과 별개, 즉시 롤백용).
+        # 7/4~7/5 gpt-4o-mini가 283개 규모에서 이틀 연속 timeout=120s 초과 —
+        # 재시도(PR #18)를 꺼도 단일 시도 자체가 못 끝남. B4 다운그레이드 이전
+        # 이력상 gpt-4o는 유사 규모를 완주한 전례가 있어 우선 이 모델로 교체
+        # 테스트(섀도 모드라 뉴스레터 무영향). 비면 OPENAI_SELECTION_MODEL_DEFAULT 사용.
+        'selection_openai_model': os.environ.get('SELECTION_OPENAI_MODEL', ''),
         # ── 운영 알림 (α) — 관리자 전용 통보 ──────────────────────────────
         'ops_alert_enabled': True,
         'ops_alert_email': 'ironage@tta.or.kr',   # 쉼표 구분으로 복수 지정 가능
@@ -6628,6 +6634,11 @@ def _build_cluster_preview_html(articles: List[Dict]) -> str:
     D2(선별용 dedup)와 동일한 _cluster_by_embedding·임계값을 재사용하되,
     여기서는 기사를 제거하지 않고 묶음 구조만 보여준다 — 활성화 시 뉴스레터가
     "대표기사 (관련 N건)" 형태로 바뀌었을 때의 모습을 관리자가 미리 확인.
+
+    Returns:
+        <div class="subsection">...</div> 프래그먼트 (스타일은 _build_insight_preview_html의
+        공용 <style> 블록에 정의됨). CONFIG.newsletter_clustering_mode='off'거나
+        기사가 없으면 빈 문자열.
     """
     if CONFIG.get('newsletter_clustering_mode', 'shadow') == 'off':
         return ''
@@ -6638,26 +6649,28 @@ def _build_cluster_preview_html(articles: List[Dict]) -> str:
     if not ok:
         return ''
     multi = [c for c in clusters if len(c) > 1]
-    header = ('<div style="margin:8px 0"><b>📎 사건 클러스터</b> '
-              f'<span style="color:#888;font-size:12px">(기사 {len(articles)}건 → '
-              f'클러스터 {len(clusters)}개, 임계값 {thr})</span>')
+    title = (
+        '<div class="subsection-title">📎 사건 클러스터 '
+        f'<span class="subsection-meta">기사 {len(articles)}건 → 클러스터 {len(clusters)}개 · 임계값 {thr}</span>'
+        '</div>'
+    )
     if not multi:
-        return header + '<p style="color:#999;margin:4px 0">중복 사건 없음 — 모든 기사가 단독 사안</p></div>'
+        return f'<div class="subsection">{title}<p class="empty-note">중복 사건 없음 — 모든 기사가 단독 사안</p></div>'
     rows = []
     for c in multi:
         rep = c[0]
         members = ''.join(
-            f'<li style="color:#666;font-size:13px">{_esc(m.get("title", ""))} '
-            f'<span style="color:#aaa">({_esc(m.get("source", ""))})</span></li>'
+            f'<li class="cluster-member">{_esc(m.get("title", ""))} '
+            f'<span class="member-source">({_esc(m.get("source", ""))})</span></li>'
             for m in c[1:]
         )
         rows.append(
-            f'<div style="margin:6px 0;padding:6px 10px;background:#fdf6ec;border-radius:4px">'
-            f'<b>{_esc(rep.get("title", ""))}</b> '
-            f'<span style="color:#e67e22">(관련 {len(c) - 1}건)</span>'
-            f'<ul style="margin:4px 0 0 16px;padding:0">{members}</ul></div>'
+            '<div class="cluster-card">'
+            f'<span class="cluster-title">{_esc(rep.get("title", ""))}</span>'
+            f'<span class="cluster-badge">관련 {len(c) - 1}건</span>'
+            f'<ul class="cluster-members">{members}</ul></div>'
         )
-    return header + ''.join(rows) + '</div>'
+    return f'<div class="subsection">{title}{"".join(rows)}</div>'
 
 
 def _get_story_timeline(article: Dict, days: int = 30,
@@ -6703,6 +6716,9 @@ def _build_timeline_preview_html(articles: List[Dict]) -> str:
 
     과거 30일 내 같은 사안 보도를 RAG로 검색 — 활성화 시 뉴스레터 기사 카드에
     "🔗 연속 보도 N번째" 배지가 붙었을 때의 모습을 관리자가 미리 확인.
+
+    Returns:
+        <div class="subsection">...</div> 프래그먼트. off거나 기사가 없으면 빈 문자열.
     """
     if CONFIG.get('newsletter_timeline_mode', 'shadow') == 'off':
         return ''
@@ -6717,52 +6733,158 @@ def _build_timeline_preview_html(articles: List[Dict]) -> str:
             continue
         oldest = ctx['items'][-1]
         rows.append(
-            f'<div style="margin:6px 0;padding:6px 10px;background:#eef7f1;border-radius:4px">'
-            f'🔗 <b>{_esc(it.get("title", ""))}</b><br>'
-            f'<span style="color:#27ae60;font-size:13px">과거 30일 내 관련 보도 {ctx["count"]}건 '
+            '<div class="timeline-card">'
+            f'<span class="timeline-title">🔗 {_esc(it.get("title", ""))}</span>'
+            f'<div class="timeline-meta">과거 30일 내 관련 보도 {ctx["count"]}건 '
             f'— 최초 {_fmt_pub_date(oldest.get("published"))} '
-            f'"{_esc((oldest.get("title") or "")[:60])}" '
-            f'(유사도 {oldest.get("similarity", 0):.2f})</span></div>'
+            f'&ldquo;{_esc((oldest.get("title") or "")[:60])}&rdquo; '
+            f'(유사도 {oldest.get("similarity", 0):.2f})</div></div>'
         )
-    header = ('<div style="margin:8px 0"><b>🔗 연속 사건 타임라인</b> '
-              f'<span style="color:#888;font-size:12px">(상위 {top_n}건 검사, '
-              f'유사도 임계값 {thr})</span>')
+    title = (
+        '<div class="subsection-title">🔗 연속 사건 타임라인 '
+        f'<span class="subsection-meta">상위 {top_n}건 검사 · 유사도 임계값 {thr}</span>'
+        '</div>'
+    )
     if not rows:
-        return header + '<p style="color:#999;margin:4px 0">연속 보도 감지 없음 — 모두 신규 사안</p></div>'
-    return header + ''.join(rows) + '</div>'
+        return f'<div class="subsection">{title}<p class="empty-note">연속 보도 감지 없음 — 모두 신규 사안</p></div>'
+    return f'<div class="subsection">{title}{"".join(rows)}</div>'
+
+
+# 단별 헤더 그라디언트 — send_gmail_report의 _UNIT_HEADER_COLORS와 동일한 팔레트를
+# 공유해 미리보기 메일도 실제 뉴스레터와 같은 단별 색으로 인식되도록 한다.
+_INSIGHT_UNIT_COLORS = {
+    'standards_planning':   'linear-gradient(90deg,#1e3a5f,#2563eb)',
+    'standards_innovation': 'linear-gradient(90deg,#14532d,#16a34a)',
+    'ai_convergence':       'linear-gradient(90deg,#78350f,#d97706)',
+    'radio_network':        'linear-gradient(90deg,#4c1d95,#7c3aed)',
+}
+_INSIGHT_UNIT_EMOJI = {
+    'standards_planning': '🧭', 'standards_innovation': '🔬',
+    'ai_convergence': '🤖', 'radio_network': '📡',
+}
+
+_INSIGHT_PREVIEW_CSS = """
+    body { margin:0; padding:0; background:#eef1f4; }
+    .insight-wrap {
+        max-width: 700px; margin: 0 auto; font-family: 'Noto Sans KR', -apple-system,
+        BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#fff; border-radius:12px;
+        overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.06);
+    }
+    .insight-header {
+        background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+        padding: 26px 28px 22px;
+    }
+    .insight-badge {
+        display:inline-block; background:#f59e0b; color:#0f2027; font-size:10px;
+        font-weight:700; letter-spacing:1.5px; padding:3px 10px; border-radius:20px;
+        text-transform:uppercase; margin-bottom:10px;
+    }
+    .insight-title { color:#fff; font-size:19px; font-weight:700; margin:2px 0 12px; }
+    .insight-disclaimer {
+        color:#cbd5e1; font-size:12px; line-height:1.6; background:rgba(255,255,255,0.08);
+        padding:10px 14px; border-radius:8px; margin:0;
+    }
+    .unit-section { border-bottom: 1px solid #e2e8f0; }
+    .unit-section:last-child { border-bottom:none; }
+    .unit-header {
+        padding: 13px 26px; color:#fff; font-weight:700; font-size:14px;
+    }
+    .unit-content { padding: 18px 26px 6px; }
+    .narrative-box {
+        background: linear-gradient(135deg, #f8fbfd 0%, #eef4f8 100%);
+        border-left: 4px solid #2980b9; border-radius: 0 8px 8px 0;
+        padding: 13px 16px; margin-bottom: 18px;
+    }
+    .narrative-label {
+        color:#2980b9; font-size:10px; font-weight:700; letter-spacing:1px;
+        text-transform:uppercase; margin-bottom:6px;
+    }
+    .narrative-text { color:#1e293b; font-size:14px; line-height:1.7; }
+    .subsection { margin-bottom: 18px; }
+    .subsection-title {
+        font-size:12px; font-weight:700; color:#475569; text-transform:uppercase;
+        letter-spacing:0.5px; margin-bottom:9px;
+    }
+    .subsection-meta { color:#94a3b8; font-weight:400; text-transform:none; font-size:11px; margin-left:6px; }
+    .cluster-card {
+        background:#fdf6ec; border:1px solid #fbe4c0; border-radius:8px;
+        padding:10px 14px; margin-bottom:8px;
+    }
+    .cluster-title { font-size:13.5px; font-weight:600; color:#1e293b; }
+    .cluster-badge {
+        display:inline-block; background:#e67e22; color:#fff; font-size:10.5px;
+        font-weight:700; padding:2px 8px; border-radius:10px; margin-left:7px;
+    }
+    .cluster-members { list-style:none; margin:6px 0 0; padding:0 0 0 4px; }
+    .cluster-member { font-size:12px; color:#78716c; padding:2px 0; }
+    .member-source { color:#a8a29e; }
+    .timeline-card {
+        background:#eef7f1; border:1px solid #cdebd7; border-radius:8px;
+        padding:10px 14px; margin-bottom:8px;
+    }
+    .timeline-title { font-size:13.5px; font-weight:600; color:#1e293b; }
+    .timeline-meta { font-size:12px; color:#16a34a; margin-top:4px; line-height:1.5; }
+    .empty-note { color:#94a3b8; font-size:12.5px; padding:2px 0 8px; }
+    .insight-footer {
+        padding:16px 26px; color:#94a3b8; font-size:11px; text-align:center;
+        background:#f8fafc;
+    }
+"""
 
 
 def _build_insight_preview_html(run_date: str, unit_sections: list) -> str:
     """관리자용 섀도 미리보기 이메일 HTML 조립.
 
-    unit_sections: [{'display': 단명, 'narrative': str|None,
+    unit_sections: [{'display': 단명, 'name': 단 name(색상용), 'narrative': str|None,
                      'clusters_html': str, 'timeline_html': str}]
     """
-    parts = [
-        '<div style="font-family:sans-serif;max-width:720px;margin:0 auto">',
-        f'<h2 style="border-bottom:2px solid #2c3e50;padding-bottom:8px">'
-        f'🔬 인사이트 섀도 미리보기 — {run_date}</h2>',
-        '<p style="color:#666;font-size:13px">이 이메일은 관리자 검증용입니다. '
-        '실제 뉴스레터에는 아직 반영되지 않았으며, 품질 확인 후 CONFIG에서 '
-        'active로 전환하면 수신자 뉴스레터에 포함됩니다.</p>',
-    ]
+    unit_blocks = []
     for sec in unit_sections:
-        parts.append(f'<h3 style="background:#f4f6f7;padding:8px 12px;margin-top:24px">'
-                     f'🏢 {sec["display"]}</h3>')
+        name = sec.get('name', '')
+        color = _INSIGHT_UNIT_COLORS.get(name, 'linear-gradient(90deg,#334155,#475569)')
+        emoji = _INSIGHT_UNIT_EMOJI.get(name, '🏢')
+
         if sec.get('narrative'):
-            parts.append('<div style="border-left:4px solid #2980b9;padding:8px 12px;'
-                         'background:#f8fbfd;margin:8px 0">'
-                         '<b>오늘의 핵심 흐름 (3문장 내러티브)</b><br>'
-                         + _esc(sec['narrative']).replace('\n', '<br>') + '</div>')
+            narrative_html = (
+                '<div class="narrative-box">'
+                '<div class="narrative-label">오늘의 핵심 흐름 · 3문장 요약</div>'
+                f'<div class="narrative-text">{_esc(sec["narrative"]).replace(chr(10), "<br>")}</div>'
+                '</div>'
+            )
         else:
-            parts.append('<p style="color:#999">내러티브 생성 실패 또는 대상 기사 없음</p>')
-        if sec.get('clusters_html'):
-            parts.append(sec['clusters_html'])
-        if sec.get('timeline_html'):
-            parts.append(sec['timeline_html'])
-    parts.append('<hr><p style="color:#888;font-size:12px">IRONAGE AI Analytics — '
-                 '섀도 모드 인사이트 미리보기</p></div>')
-    return ''.join(parts)
+            narrative_html = '<p class="empty-note">내러티브 생성 실패 또는 대상 기사 없음</p>'
+
+        unit_blocks.append(
+            '<div class="unit-section">'
+            f'<div class="unit-header" style="background:{color}">{emoji} {_esc(sec["display"])}</div>'
+            f'<div class="unit-content">{narrative_html}'
+            f'{sec.get("clusters_html", "")}{sec.get("timeline_html", "")}</div>'
+            '</div>'
+        )
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>{_INSIGHT_PREVIEW_CSS}</style>
+    </head>
+    <body>
+        <div class="insight-wrap">
+            <div class="insight-header">
+                <div class="insight-badge">Admin Preview · Shadow Mode</div>
+                <div class="insight-title">🔬 인사이트 섀도 미리보기 — {_esc(run_date)}</div>
+                <p class="insight-disclaimer">이 이메일은 관리자 검증용입니다. 실제 뉴스레터에는
+                아직 반영되지 않았으며, 품질 확인 후 CONFIG에서 active로 전환하면
+                수신자 뉴스레터에 포함됩니다.</p>
+            </div>
+            {''.join(unit_blocks)}
+            <div class="insight-footer">IRONAGE AI Analytics — 섀도 모드 인사이트 미리보기</div>
+        </div>
+    </body>
+    </html>
+    """
 
 
 def _generate_unit_narratives(unit_cfgs: dict, all_unit_analyzed: dict) -> dict:
@@ -6815,7 +6937,8 @@ def run_insight_shadow_preview(unit_cfgs: dict, all_unit_analyzed: dict,
             error_msg=f"[{display}] 타임라인 미리보기 실패",
             default_return='',
         )
-        sections.append({'display': display, 'narrative': narratives.get(uid),
+        sections.append({'display': display, 'name': cfg.get('name', ''),
+                         'narrative': narratives.get(uid),
                          'clusters_html': clusters_html, 'timeline_html': timeline_html})
         log_info(f"   [{display}] 내러티브 {'✅' if narratives.get(uid) else '—'} / "
                  f"클러스터 {'✅' if clusters_html else '—'} / 타임라인 {'✅' if timeline_html else '—'}")

@@ -3,6 +3,23 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.1.0] - 2026-07-05
+
+### Changed
+- **인사이트 섀도 미리보기 이메일 디자인 전면 개편**: 기존 인라인 style 나열을
+  뉴스레터 본체와 동일한 브랜드(다크 네이비 인텔리전스 브리프 테마 + 단별
+  컬러 그라디언트 헤더)로 통일. `_INSIGHT_PREVIEW_CSS` 공용 스타일 블록,
+  단 이모지(🧭🔬🤖📡), 카드형 클러스터/타임라인 레이아웃 도입.
+
+### Experiment
+- **Phase 2.6 선별 모델 실험 (gpt-4o-mini → gpt-4o, 섀도)**: mini가 283개
+  규모에서 7/4·7/5 이틀 연속 timeout=120s 초과(재시도를 꺼도 재현 — PR #18은
+  6분→2분으로 단축시켰을 뿐 근본 완주 여부는 못 고침). B4 다운그레이드 이전
+  이력상 gpt-4o가 유사 규모를 완주한 전례가 있어 우선 테스트.
+  `CONFIG.selection_openai_model`(기존 B4 롤백 레버 재사용, env var
+  `SELECTION_OPENAI_MODEL` 매핑 추가)을 `.github/workflows/daily-collection.yml`
+  에서 `gpt-4o`로 설정. 섀도 모드라 뉴스레터엔 무영향 — 며칠 관찰 후 결정.
+
 ## [0.4.0.0] - 2026-07-04
 
 ### Added — 인사이트 파이프라인 1단계 (운영 알림 + 섀도 미리보기)
