@@ -3,7 +3,20 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
-## [0.4.1.0] - 2026-07-05
+## [0.4.2.0] - 2026-07-06
+
+### Fixed
+- **[긴급] 주간/월간 리포트 수신자 목록 붕괴 회귀 수정**: 2026-07-03
+  auto_intel_report.py 전환(PR #12) 시 `node_send_report`가
+  `send_trend_report_email()`을 receivers 인자 없이 호출하도록 구현되어,
+  레거시 `run_weekly_report()`가 쓰던 `get_weekly_subscribers()`(단별
+  email_recipients 취합, 정상 약 45명) 로직이 누락됨. 그 결과 전역
+  `RECEIVER_EMAIL` 폴백(GitHub Actions엔 GMAIL_RECEIVERS 미설정 → GMAIL_SENDER
+  1명)으로 조용히 축소 — 실제로 2026-07-06 첫 주간 실행에서 45명이 아닌
+  1명(관리자 본인)에게만 발송됨. `node_send_report`가 `get_weekly_subscribers()`를
+  명시적으로 호출해 `receivers`로 전달하도록 수정하고, 구독자 수가
+  비정상적으로 적으면(5명 미만) `_ops_alert`로 즉시 관리자에게 통보하도록
+  안전장치 추가. `tests/test_auto_intel_report.py` 3건 회귀 테스트 추가.
 
 ### Changed
 - **인사이트 섀도 미리보기 이메일 디자인 전면 개편**: 기존 인라인 style 나열을
