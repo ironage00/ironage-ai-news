@@ -3,6 +3,23 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.4.0] - 2026-07-06
+
+### Changed
+- **하한 보충 품질 게이트 추가 (구 시스템 `has_ict_keyword` 이식)**: 선별 활성화 시
+  `_apply_unit_floor`가 후보 부족 단(표준기획 등)의 floor를 채우려고 키워드
+  오매칭 쓰레기(축구 'ITU'·홈쇼핑·연예 'AX'/'라디오' 등)를 끌어오던 문제 차단.
+  구 시스템(main6.93t.py)이 선별 품질이 좋았던 핵심 이유 — 보충 풀에 양성 ICT
+  키워드 게이트를 적용 — 를 그대로 이식. `_has_ict_signal`(강한 ICT 마커 필수)
+  + `_collect_stage_filter_reason`(비ICT 카테고리 제외)을 결합한
+  `_is_floor_supplement_eligible`로 보충 자격 판정. AI가 명시적으로 고른 선별
+  기사에는 게이트를 걸지 않음(그 판단은 이미 AI가 함). 깨끗한 보충거리가
+  부족하면 floor 미달로 그냥 적게 냄(쓰레기 강제 충원 금지). `CONFIG.selection_floor_quality_gate`
+  (기본 True)로 즉시 롤백 가능. 오늘(7/6) 활성화 시뮬레이션에서 floor가 끌어오던
+  쓰레기 5건 중 4건 제거 확인(잔존 1건 ITU=트라이애슬론 약어 충돌은 별도 Phase 2
+  트랙). `tests/test_selection.py` 3건 추가(총 115개 통과). 선별은 여전히 shadow라
+  현재 뉴스레터엔 무영향 — 활성화 선결 과제 해소.
+
 ## [0.4.3.0] - 2026-07-06
 
 ### Fixed

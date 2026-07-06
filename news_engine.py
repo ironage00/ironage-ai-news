@@ -1559,6 +1559,10 @@ def load_config():
         # 이력상 gpt-4o는 유사 규모를 완주한 전례가 있어 우선 이 모델로 교체
         # 테스트(섀도 모드라 뉴스레터 무영향). 비면 OPENAI_SELECTION_MODEL_DEFAULT 사용.
         'selection_openai_model': os.environ.get('SELECTION_OPENAI_MODEL', ''),
+        # 하한 보충 품질 게이트 — True면 floor를 채울 때 비ICT/무신호 기사를 제외
+        # (구 시스템 has_ict_keyword 이식). 후보 부족 단이 축구·홈쇼핑·연예 기사로
+        # 억지 충원되던 문제 차단. 문제 시 False로 즉시 롤백.
+        'selection_floor_quality_gate': True,
         # ── 운영 알림 (α) — 관리자 전용 통보 ──────────────────────────────
         'ops_alert_enabled': True,
         'ops_alert_email': 'ironage@tta.or.kr',   # 쉼표 구분으로 복수 지정 가능
@@ -7542,12 +7546,37 @@ def _dedup_by_embedding(items: List[Dict], threshold: float,
     return reps, len(items) - len(reps)
 
 
-def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int) -> tuple:
+def _has_ict_signal(item: Dict) -> bool:
+    """제목+요약에 강한 ICT 마커가 있는지 — 구 시스템(main6.93t) has_ict_keyword의
+    양성 게이트 이식. 하한 보충이 키워드 오매칭 쓰레기(축구 'ITU', 'AX' 브랜드 등)를
+    끌어오지 않도록, 보충 후보는 명시적 ICT 신호를 요구한다."""
+    blob = (
+        f"{item.get('title', '')} "
+        f"{item.get('summary') or item.get('description') or ''}"
+    ).lower()
+    return any(marker in blob for marker in _COLLECT_STAGE_STRONG_ICT_MARKERS)
+
+
+def _is_floor_supplement_eligible(item: Dict) -> bool:
+    """하한 보충 자격 — 음성 필터(비ICT 카테고리)와 양성 게이트(ICT 신호)를 모두 통과.
+    AI가 명시적으로 고른 기사에는 적용하지 않고, 오직 무점수 '바닥 채우기'에만 적용한다."""
+    if _collect_stage_filter_reason(item):   # 스포츠·연예·홈쇼핑 등 명백한 비ICT
+        return False
+    return _has_ict_signal(item)             # 통신·표준·위성 등 양성 신호 필수
+
+
+def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int,
+                      quality_gate: bool = False) -> tuple:
     """활성 모드용 단별 하한 보장 (순수 함수).
 
     각 단 풀을 [선별 기사(원래 순서 유지)] + [하한 미달 시 미선별 기사 보충]으로
     재구성한다. 과거 과압축(258→9) 재발 방지 장치 — 선별이 과하게 걸러도
     단별 최소 floor개(풀이 그보다 작으면 풀 전체)는 항상 남는다.
+
+    quality_gate=True면 보충 후보에 품질 게이트(_is_floor_supplement_eligible)를
+    적용해, 후보가 적은 단에서 floor를 채우려고 키워드 오매칭 쓰레기(축구·홈쇼핑·연예)를
+    끌어오는 것을 막는다(구 시스템 방식: 깨끗한 게 부족하면 floor 미달로 그냥 적게 낸다).
+    AI가 고른 선별 기사에는 게이트를 걸지 않는다(그 판단은 이미 AI가 함).
 
     Returns:
         (new_pools: dict, supplemented_links: set)
@@ -7560,9 +7589,12 @@ def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int) -> tupl
             for it in pool:
                 if len(picked) >= floor:
                     break
-                if it['link'] not in selected_links:
-                    picked.append(it)
-                    supplemented.add(it['link'])
+                if it['link'] in selected_links:
+                    continue
+                if quality_gate and not _is_floor_supplement_eligible(it):
+                    continue
+                picked.append(it)
+                supplemented.add(it['link'])
         new_pools[uid] = picked
     return new_pools, supplemented
 
@@ -7925,9 +7957,13 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     # Phase 3의 업서트(_upsert_analyzed_article)에 전달해 삽입 시점에 함께 기록한다.
     # (이 방식은 "재실행 시 is_selected 누적"·"수동 큐레이션과 AI 선별 구분 불가" 문제도
     # 자연히 해소한다 — is_selected는 항상 그 실행에서 분석된 값으로 매번 새로 결정됨.)
+    # 하한 보충 품질 게이트 — 후보 부족 단이 floor를 채우려고 오매칭 쓰레기를
+    # 끌어오는 것을 차단(구 시스템 has_ict_keyword 이식). 문제 시 CONFIG로 즉시 롤백.
+    _floor_gate = bool(CONFIG.get('selection_floor_quality_gate', True))
     supplemented: set = set()
     if mode == 'active':
-        unit_pools, supplemented = _apply_unit_floor(unit_pools, set(selected_map), floor)
+        unit_pools, supplemented = _apply_unit_floor(
+            unit_pools, set(selected_map), floor, quality_gate=_floor_gate)
         info['supplemented'] = len(supplemented)
 
     # 섀도/활성 공통: selection_log 기록 (실패해도 파이프라인 영향 없음)
@@ -7959,7 +7995,8 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     # 섀도 모드 미리보기: 활성 모드와 동일하게 하한 보장까지 시뮬레이션해
     # '전환 시 단별로 실제 몇 개가 남는지'를 정직하게 기록 (풀은 변경하지 않음)
     if mode == 'shadow':
-        _sim_pools, _sim_supp = _apply_unit_floor(unit_pools, set(selected_map), floor)
+        _sim_pools, _sim_supp = _apply_unit_floor(
+            unit_pools, set(selected_map), floor, quality_gate=_floor_gate)
         info['supplemented'] = len(_sim_supp)
         for uid, pool in unit_pools.items():
             picked = sum(1 for it in pool if it['link'] in selected_map)
