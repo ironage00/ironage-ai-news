@@ -3,6 +3,20 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.6.0] - 2026-07-06
+
+### Changed
+- **중요도 게이트를 DB 저장까지 확장 (Medium 이하 미저장)**: 사용자 확인 "Medium
+  이하는 전부 쓰레기" → 중요도 필터를 이메일 뉴스레터에만 적용하던 것을 DB 저장
+  단계(`_upsert_analyzed_article` 호출부)로 끌어올림. 이제 Critical/High만 Supabase에
+  저장되어 **포털(tta-trend-portal)·RAG 검색·주간 리포트도 Medium 쓰레기 청결**.
+  `_analyze_one`이 impact_level 판정 후 `_impact_at_least`로 저장 여부 결정, 미저장
+  건수를 집계 로그로 출력. 뉴스레터 목록 필터는 이중 안전장치 + 월요일 주말누적
+  (DB 로드분) 대비로 유지. `CONFIG.newsletter_min_impact='Low'`로 전량 저장 롤백.
+  ⚠️ 심층분석 자체는 여전히 전량 수행됨(impact_level이 분석 산출물이라 회피 불가) —
+  저장·게재만 제외. 필터 첫 적용일엔 저장 건수 급감으로 이상탐지가 전일(무필터)
+  대비 일회성 오알림 가능(다음날부터 정상).
+
 ## [0.4.5.0] - 2026-07-06
 
 ### Added

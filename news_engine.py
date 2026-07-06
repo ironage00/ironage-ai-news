@@ -1588,8 +1588,9 @@ def load_config():
         'newsletter_timeline_mode': 'shadow',
         'timeline_min_similarity': 0.55,
         'insight_timeline_top_n': 5,
-        # 뉴스레터 중요도 게이트 — 'High'면 Critical/High만 게재(Medium/Low 제외).
-        # 분석은 전량 수행·DB 저장되고 이메일 게재 목록만 필터. 'Low'로 두면 해제.
+        # 중요도 게이트 — 'High'면 Critical/High만 유지(Medium 이하는 쓰레기라 제외).
+        # 분석은 전량 수행되나 Medium 이하는 DB 미저장(포털·RAG·주간리포트도 청결) +
+        # 뉴스레터 미게재. 'Low'로 두면 전량 저장·게재(필터 해제).
         'newsletter_min_impact': 'High',
     }
     
@@ -8190,6 +8191,12 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     # (기사마다 최근 2일 전체 스캔을 반복하지 않도록. 리뷰 지적 반영)
     _recent_snapshot = _recent_title_snapshot(days=2)
 
+    # 중요도 게이트 임계값 — Medium/Low(사용자 확인: 전부 쓰레기)는 DB 저장·뉴스레터
+    # 게재에서 모두 제외. impact_level은 심층분석 산출물이라 분석 자체는 피할 수 없으나,
+    # 저장 이전에 판정되므로 Supabase(포털·RAG·주간리포트 소스)엔 아예 남기지 않는다.
+    # CONFIG.newsletter_min_impact='Low'로 두면 전량 저장(필터 해제).
+    _min_impact = CONFIG.get('newsletter_min_impact', 'High')
+
     def _analyze_one(orig_item: dict):
         item = dict(orig_item)
         try:
@@ -8200,15 +8207,19 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if not is_valid_analysis(analysis):
                 return None
             item['analysis_result'] = analysis
-            # Phase C1: 여기서만 DB에 삽입/갱신 — 분석까지 성공한 기사만 저장 대상.
-            # 단 배정 재검토(reclassify)는 _upsert 내부에서 own-write에만 수행한다.
-            _upsert_analyzed_article(
-                item,
-                unit_id=_link_unit.get(item['link']),
-                is_selected=item['link'] in _selected_links,
-                ai_model=item.get('ai_model', ai_model),
-                recent_titles=_recent_snapshot,
-            )
+            # 중요도 게이트 — Critical/High만 DB에 저장(Medium 이하는 쓰레기라 미저장).
+            # impact_level은 analyze_news_with_ai가 item에 세팅함(파싱실패 시 'Medium').
+            item['_stored'] = _impact_at_least(item.get('impact_level'), _min_impact)
+            if item['_stored']:
+                # Phase C1: 여기서만 DB에 삽입/갱신 — 분석+중요도까지 통과한 기사만 저장.
+                # 단 배정 재검토(reclassify)는 _upsert 내부에서 own-write에만 수행한다.
+                _upsert_analyzed_article(
+                    item,
+                    unit_id=_link_unit.get(item['link']),
+                    is_selected=item['link'] in _selected_links,
+                    ai_model=item.get('ai_model', ai_model),
+                    recent_titles=_recent_snapshot,
+                )
             return item
         except Exception as _e:
             log_warning(f"분析 실패: {item.get('title','')[:40]} -- {_e}")
@@ -8230,26 +8241,27 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
                     log_info(f"  분析 완료 {_done}/{len(unique_candidates)}")
     log_info(f"   분析 캐시 {len(analysis_cache)}개 완성")
 
+    # 중요도 게이트 집계 — Medium 이하(미저장) 건수 리포트
+    _stored_n = sum(1 for v in analysis_cache.values() if v.get('_stored'))
+    _gated_n = len(analysis_cache) - _stored_n
+    if _gated_n:
+        log_info(f"   중요도 게이트(≥{_min_impact}): 분析 {len(analysis_cache)}개 중 "
+                 f"{_gated_n}개(Medium 이하)는 DB 미저장·뉴스레터 제외, {_stored_n}개 저장")
+
     # Phase 3.5: 타 단 컴팩트 브리프 사전 생성 (Phase 4 cross-unit 표시용)
     import pytz as _pytz_l4
     _kst_date = datetime.datetime.now(_pytz_l4.timezone('Asia/Seoul')).strftime('%Y년 %m월 %d일')
     _weekday = datetime.date.today().weekday()
     _skip_email = _weekday >= 5
 
-    # 뉴스레터 중요도 필터 — Critical/High만 게재, Medium/Low 제외.
-    # ⚠️ impact_level은 심층분석의 산출물이라 '분석 전 제외'는 불가능하다.
-    # 분석은 전량 수행돼 DB엔 그대로 저장되고(포털·RAG·주간리포트 유지), 여기서
-    # 이메일 뉴스레터에 실릴 목록만 걸러낸다. CONFIG.newsletter_min_impact='Low'로 롤백.
-    _min_impact = CONFIG.get('newsletter_min_impact', 'High')
+    # 뉴스레터 중요도 필터 — Critical/High만 게재(Medium 이하는 위 저장 게이트에서 이미
+    # DB 미저장 처리됨). analysis_cache엔 남아 있으므로 여기서 뉴스레터 목록도 한 번 더
+    # 걸러 이중 안전장치 + Monday 주말누적(DB 로드분) 대비. _min_impact는 위에서 정의.
     _all_unit_analyzed: dict = {}
     for _uid, _udata in unit_cfgs.items():
         _pool = unit_pools.get(_uid, [])
         _analyzed = [analysis_cache[it['link']] for it in _pool if it['link'] in analysis_cache]
         _kept = [a for a in _analyzed if _impact_at_least(a.get('impact_level'), _min_impact)]
-        _dropped = len(_analyzed) - len(_kept)
-        if _dropped:
-            log_info(f"   [{_udata['display']}] 중요도 필터(≥{_min_impact}): "
-                     f"{len(_analyzed)}개 중 {_dropped}개(Medium 이하) 제외 → {len(_kept)}개 게재")
         _all_unit_analyzed[_uid] = _kept[:20]
 
     # Phase 3.6: 키워드 기반 의미적 중복 클러스터링 (타이틀 유사도로 잡히지 않는 동일 주제 제거)
