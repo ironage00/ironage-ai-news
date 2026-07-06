@@ -357,6 +357,33 @@ class PipelineRunStat(Base):
         return f"<PipelineRunStat(date='{self.run_date}', unit={self.unit_id}, phase2={self.phase2_count})>"
 
 
+class ScoreImpactSample(Base):
+    """섀도 계측 — Phase 2.6 선별점수 × Phase 3 영향도(impact_level) 상관 표본.
+
+    '값싼 선별 점수(title+summary 배치)로 비싼 심층분석을 앞단에서 게이트할 수
+    있는가'를 데이터로 판정하기 위해, 분석된 기사마다 (선별점수, impact_level)를
+    함께 기록한다. impact_level은 DB 본 테이블(news_articles)에 저장되지 않으므로
+    (PR #28 이후 Medium 이하는 아예 미저장) 이 표본이 유일한 상관분석 소스다.
+
+    scripts/eval_score_impact.py가 이 표본으로 컷별(score≥3/4/5) 혼동행렬·
+    회귀위험(고impact인데 저score = 잘못 버릴 기사)을 계산한다. 순수 계측이라
+    뉴스레터·저장·발송에 영향 없음.
+    """
+    __tablename__ = 'score_impact_samples'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_ts = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), index=True)
+    run_date = Column(String(10), index=True)   # KST 기준 'YYYY-MM-DD'
+    link = Column(String(1000))
+    unit_id = Column(Integer)
+    phase26_score = Column(Integer, nullable=True)   # 1~5, 미선별이면 NULL
+    was_selected = Column(Boolean, default=False)    # Phase 2.6이 선별했는가
+    impact_level = Column(String(10))                # Critical/High/Medium/Low
+
+    def __repr__(self):
+        return f"<ScoreImpactSample(score={self.phase26_score}, impact='{self.impact_level}')>"
+
+
 class StandardizationGap(Base):
     """표준화 공백/선점 필요 영역 누적 DB"""
     __tablename__ = 'standardization_gaps'
@@ -6530,6 +6557,41 @@ def _detect_pipeline_anomalies(today: dict, prev: dict, unit_names: dict,
     return warnings_out
 
 
+def _persist_score_impact_samples(analysis_cache: dict, sel_info: dict,
+                                  link_unit: dict, retention_days: int = 90) -> int:
+    """섀도 계측 — 분석된 기사마다 (선별점수, impact_level)를 score_impact_samples에 기록.
+
+    선별점수(값싼 배치 신호)가 impact_level(비싼 심층분석 결과)을 얼마나 잘 예측하는지
+    데이터를 쌓아, 심층분석 앞단 게이트의 score 컷을 근거 있게 확정하기 위함.
+    analysis_cache는 Critical~Low 전부 포함(저장 게이트 이전 메모리)이라 혼동행렬의
+    Medium/Low 칸까지 채울 수 있다. 순수 계측 — 뉴스레터·저장·발송 무영향.
+
+    Returns: 기록한 표본 수.
+    """
+    scores = (sel_info or {}).get('selected_scores', {})
+    run_date = _now_kst().strftime('%Y-%m-%d')
+    n = 0
+    with get_db_session() as s:
+        for link, item in analysis_cache.items():
+            s.add(ScoreImpactSample(
+                run_date=run_date,
+                link=(link or '')[:1000],
+                unit_id=link_unit.get(link),
+                phase26_score=scores.get(link),
+                was_selected=link in scores,
+                impact_level=(item.get('impact_level') or 'Medium')[:10],
+            ))
+            n += 1
+        # 보존 정책: 90일 지난 표본 정리
+        _cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=retention_days)
+        s.query(ScoreImpactSample).filter(
+            ScoreImpactSample.run_ts < _cutoff.replace(tzinfo=None)
+        ).delete(synchronize_session=False)
+        s.commit()
+    log_info(f"   [계측] score_impact 표본 {n}개 기록 (선별점수×impact_level 상관 누적)")
+    return n
+
+
 def _persist_and_check_run_stats(unit_cfgs: dict, stats_phase2: dict,
                                  unit_pools: dict, summary: dict,
                                  sel_info: dict) -> None:
@@ -7969,6 +8031,9 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     selected_map = {candidates[s['index']]['link']: s for s in selections}
     info['selected'] = len(selected_map)
     info['selected_links'] = set(selected_map.keys())
+    # 섀도 계측용 — 링크→선별점수(1~5). Phase 3에서 impact_level과 조인해
+    # score_impact_samples에 기록(선별점수가 심층분석 게이트로 쓸 만한지 측정).
+    info['selected_scores'] = {lnk: s.get('score') for lnk, s in selected_map.items()}
 
     # 활성 모드: 풀 재구성 + 하한 보장.
     # Phase C1(저장 시점 이동) 이후 NewsArticle row는 Phase 3 분석 성공 시점에야
@@ -8247,6 +8312,13 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     if _gated_n:
         log_info(f"   중요도 게이트(≥{_min_impact}): 분析 {len(analysis_cache)}개 중 "
                  f"{_gated_n}개(Medium 이하)는 DB 미저장·뉴스레터 제외, {_stored_n}개 저장")
+
+    # 섀도 계측 — 선별점수 × impact_level 상관 표본 적재 (best-effort, 파이프라인 무영향)
+    safe_execute(
+        lambda: _persist_score_impact_samples(analysis_cache, _sel_info, _link_unit),
+        error_msg="[계측] score_impact 표본 기록 실패",
+        default_return=None,
+    )
 
     # Phase 3.5: 타 단 컴팩트 브리프 사전 생성 (Phase 4 cross-unit 표시용)
     import pytz as _pytz_l4

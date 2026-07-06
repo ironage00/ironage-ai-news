@@ -3,6 +3,22 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.7.0] - 2026-07-06
+
+### Added
+- **섀도 계측 — 선별점수 × impact_level 상관 표본 (심층분석 게이트 준비)**: "값싼
+  Phase 2.6 배치 선별점수로 비싼 심층분석을 앞단에서 게이트할 수 있는가"를 데이터로
+  판정하기 위한 계측. `ScoreImpactSample` 테이블 신설, Phase 3 분석 루프 직후
+  `analysis_cache`(Critical~Low 전부, 저장 게이트 이전)와 Phase 2.6 선별점수를
+  조인해 기사별 `(phase26_score, was_selected, impact_level, unit_id)`를 기록
+  (`_persist_score_impact_samples`, best-effort, 90일 보존). `run_phase26_selection`이
+  `info['selected_scores']`(링크→점수)를 노출. **순수 계측 — 뉴스레터·저장·발송 무영향.**
+  `scripts/eval_score_impact.py`가 컷별(score≥3/4/5) 혼동행렬·물량·단별잔존·
+  회귀위험(고impact인데 저score = 게이트가 잘못 버릴 기사)을 계산, daily 워크플로
+  STEP_SUMMARY에 누적 출력. impact_level은 본 테이블 미저장(PR #28)이라 이 표본이
+  유일한 상관 소스. `tests/test_score_impact.py` 2건 추가(총 135개 통과).
+  1~2주 누적 후 회귀위험 데이터로 score 컷을 확정해 심층분석 앞단 게이트를 활성화 예정.
+
 ## [0.4.6.0] - 2026-07-06
 
 ### Changed
