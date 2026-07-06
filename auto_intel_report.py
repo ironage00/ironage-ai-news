@@ -31,7 +31,18 @@ from news_engine import (
     log_info,
     log_warning,
     log_error,
+    get_weekly_subscribers,
+    _ops_alert,
 )
+
+# 2026-07-03 auto_intel_report.py 전환(PR #12) 당시 known-issue로 명시됐던 "무음 미발송"
+# 리스크와는 별개로, 실제로는 수신자 목록 자체가 전역 GMAIL_SENDER 1명으로 조용히
+# 축소되는 훨씬 심각한 회귀가 발생함(2026-07-06 첫 주간 실행에서 발견 — 45명 → 1명).
+# 원인: node_send_report가 send_trend_report_email()을 receivers 인자 없이 호출해
+# 레거시 run_weekly_report()가 쓰던 get_weekly_subscribers() 취합 로직이 누락됨.
+# 재발 방지를 위해 여기서 구독자 목록을 명시적으로 계산해 전달하고, 목록이
+# 비정상적으로 작으면(관리자 1인 폴백 수준) 즉시 운영 알림을 보낸다.
+_MIN_EXPECTED_SUBSCRIBERS = 5
 
 # ==============================================================================
 # --- 상태 타입 ---
@@ -351,11 +362,25 @@ def node_send_report(state: Dict) -> Dict:
             pct_str = f"+{pct*100:.0f}%" if pct != float('inf') else "신규"
             analysis['_surge_summary'] = f"급등: {top['name']} ({pct_str})"
 
+        subscribers = get_weekly_subscribers()
+        _log(state, f"  📧 구독자: {len(subscribers)}명")
+        if len(subscribers) < _MIN_EXPECTED_SUBSCRIBERS:
+            _ops_alert(
+                f"{'주간' if state['period'] == 'weekly' else '월간'} 리포트 수신자 목록 이상",
+                [
+                    f"구독자 {len(subscribers)}명만 조회됨 (정상 시 수십 명 예상) — {', '.join(subscribers) or '없음'}",
+                    "get_weekly_subscribers()가 단별 email_recipients를 못 찾고 전역 관리자 폴백을 쓰고 있을 가능성이 높습니다.",
+                    "대시보드에서 단별 이메일 수신자 설정을 확인해주세요.",
+                ],
+                severity='critical',
+            )
+
         send_trend_report_email(
             state['report_title'],
             analysis,
             state['doc_url'],
             report_type=state['period'],
+            receivers=subscribers,
         )
         state['email_sent'] = True
         _log(state, "  ✅ 이메일 발송 완료")
