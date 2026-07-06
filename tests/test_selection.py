@@ -126,6 +126,57 @@ def test_floor_multiple_units_independent():
     assert [it['link'] for it in new_pools[2]] == ['c']   # 선별 1개로 하한 충족
 
 
+# ── _apply_unit_floor 품질 게이트 (구 시스템 has_ict_keyword 이식) ─────────────
+
+def _art(link, title):
+    return {'link': link, 'title': title}
+
+
+def test_floor_quality_gate_skips_junk_supplement():
+    """quality_gate=True면 하한 보충이 비ICT/무신호 쓰레기를 건너뛴다.
+
+    오늘(7/6) 활성화 시뮬레이션에서 floor 보충이 끌어온 실제 쓰레기 재현:
+    축구 해설·홈쇼핑·연예 기사는 ICT 신호가 없어 보충에서 제외돼야 한다.
+    """
+    pool = [
+        _art('sel', '中, 저궤도 위성 20기 발사 성공'),          # AI 선별(유지)
+        _art('espn', 'Crawley - Barnet (26 sep.) - ESPN (NL)'),   # 축구 → 제외
+        _art('shop', '그래비티 신상, 롯데홈쇼핑 첫 방송 2만병 완판'),  # 홈쇼핑 → 제외
+        _art('ict1', 'SKT, 15GW 규모 AI 데이터센터 구축 추진'),   # ICT → 보충 허용
+        _art('ict2', '노키아, 6G 네트워크 장비 국내 공략'),        # ICT → 보충 허용
+    ]
+    new_pools, supp = _apply_unit_floor(
+        {1: pool}, selected_links={'sel'}, floor=3, quality_gate=True)
+    links = [it['link'] for it in new_pools[1]]
+    assert 'sel' in links                    # 선별은 항상 유지
+    assert 'espn' not in links and 'shop' not in links   # 쓰레기 제외
+    assert 'ict1' in links and 'ict2' in links           # 깨끗한 ICT로 보충
+    assert supp == {'ict1', 'ict2'}
+
+
+def test_floor_quality_gate_undershoots_rather_than_add_junk():
+    """깨끗한 보충거리가 부족하면 floor 미달로 그냥 적게 낸다(쓰레기 강제 충원 금지)."""
+    pool = [
+        _art('sel', 'FCC, 6G 주파수 정책 발표'),
+        _art('espn', 'Crawley - Barnet - ESPN'),           # 쓰레기
+        _art('shop', '롯데홈쇼핑 완판 기록'),                  # 쓰레기
+    ]
+    new_pools, supp = _apply_unit_floor(
+        {1: pool}, selected_links={'sel'}, floor=15, quality_gate=True)
+    links = [it['link'] for it in new_pools[1]]
+    assert links == ['sel']      # 깨끗한 보충거리 없음 → 1개만
+    assert supp == set()
+
+
+def test_floor_quality_gate_off_preserves_legacy_behavior():
+    """quality_gate=False(기본)면 기존처럼 무조건 보충 — 하위호환."""
+    pool = [_art('sel', 'FCC 6G 정책'), _art('espn', 'Crawley - Barnet ESPN')]
+    new_pools, supp = _apply_unit_floor(
+        {1: pool}, selected_links={'sel'}, floor=2, quality_gate=False)
+    assert [it['link'] for it in new_pools[1]] == ['sel', 'espn']
+    assert supp == {'espn'}
+
+
 # ── _interleave_pools ────────────────────────────────────────────────────────
 
 def test_interleave_no_starvation_by_large_first_pool():
@@ -181,8 +232,10 @@ def _fake_db_session():
 
 
 def _pools_with_tags():
+    # 제목에 ICT 신호(통신/표준 등)를 포함 — 하한 보충 품질 게이트(기본 ON)를
+    # 통과해 floor 보충 동작을 그대로 검증할 수 있도록 한다.
     def art(link):
-        return {'link': link, 'title': link, '_unit_tags': {1: 1}}
+        return {'link': link, 'title': f'{link} 통신 표준 정책', '_unit_tags': {1: 1}}
     return {1: [art(f'l{i}') for i in range(30)]}
 
 
