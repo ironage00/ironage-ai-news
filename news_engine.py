@@ -1135,6 +1135,17 @@ _NON_ICT_COLLECT_PATTERNS = {
     ),
 }
 
+# 하드 정크 오버라이드 — ICT 약어(ITU 등)를 우연히 포함해도 명백한 스포츠/홈쇼핑/
+# 연예 문맥이면 강한-ICT-마커 예외보다 '우선'해 제외한다. Phase2 키워드 오매칭
+# (ITU=트라이애슬론, '라디오'→전파, '완판'→홈쇼핑 등)이 심층분석·뉴스레터에 들어가는
+# 것을 수집 단계에서 원천 차단. 오탐 방지를 위해 반드시 다단어/경계 포함 패턴만 사용.
+_HARD_JUNK_OVERRIDE = re.compile(
+    r'\bespn\b|triathlon|\bitu sprint\b|congratulates.*winning|'      # 영어 스포츠
+    r'홈쇼핑|완판|첫 방송.*팔려|주문액|매진 행렬|'                       # 홈쇼핑
+    r'라디오 복귀|라디오 dj|두시의 데이트|신곡 발표|컴백 무대|예능 출연',  # 연예·방송
+    re.IGNORECASE,
+)
+
 
 def _clean_text_hint(value) -> str:
     """RSS/API 요약과 본문 힌트에서 태그·엔티티·과도한 공백을 제거."""
@@ -1163,6 +1174,10 @@ def _collect_stage_filter_reason(item: Dict) -> Optional[str]:
         item.get('summary') or item.get('description') or item.get('content_hint') or ''
     )
     blob = f"{title} {summary}".lower()
+
+    # 하드 정크는 강한-ICT-마커 예외보다 먼저 판정 (ITU 트라이애슬론 등 약어 충돌 차단)
+    if _HARD_JUNK_OVERRIDE.search(blob):
+        return 'hard_junk'
 
     if any(marker in blob for marker in _COLLECT_STAGE_STRONG_ICT_MARKERS):
         return None
@@ -1573,6 +1588,9 @@ def load_config():
         'newsletter_timeline_mode': 'shadow',
         'timeline_min_similarity': 0.55,
         'insight_timeline_top_n': 5,
+        # 뉴스레터 중요도 게이트 — 'High'면 Critical/High만 게재(Medium/Low 제외).
+        # 분석은 전량 수행·DB 저장되고 이메일 게재 목록만 필터. 'Low'로 두면 해제.
+        'newsletter_min_impact': 'High',
     }
     
     if config_file.exists():
@@ -8013,6 +8031,25 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
 
 
 # ==============================================================================
+# --- 뉴스레터 중요도(영향도) 필터 ---
+# ==============================================================================
+
+# impact_level 서열 — 심층분석(analyze_news_with_ai)이 4개 값 중 하나로 판정.
+_IMPACT_RANK = {'critical': 3, 'high': 2, 'medium': 1, 'low': 0}
+
+
+def _impact_at_least(level: Optional[str], min_level: str = 'High') -> bool:
+    """기사 영향도가 최소 기준 이상인지. 알 수 없는 값은 Medium으로 간주(보수적 제외).
+
+    min_level='High'면 Critical·High만 통과(Medium·Low 제외) — 뉴스레터 게재 게이트.
+    min_level='Low'로 두면 전량 통과(필터 사실상 해제).
+    """
+    lv = _IMPACT_RANK.get(str(level or '').strip().lower(), _IMPACT_RANK['medium'])
+    floor = _IMPACT_RANK.get(str(min_level or '').strip().lower(), _IMPACT_RANK['high'])
+    return lv >= floor
+
+
+# ==============================================================================
 # --- Level 3 최적화 파이프라인 ---
 # ==============================================================================
 
@@ -8199,13 +8236,21 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     _weekday = datetime.date.today().weekday()
     _skip_email = _weekday >= 5
 
+    # 뉴스레터 중요도 필터 — Critical/High만 게재, Medium/Low 제외.
+    # ⚠️ impact_level은 심층분석의 산출물이라 '분석 전 제외'는 불가능하다.
+    # 분석은 전량 수행돼 DB엔 그대로 저장되고(포털·RAG·주간리포트 유지), 여기서
+    # 이메일 뉴스레터에 실릴 목록만 걸러낸다. CONFIG.newsletter_min_impact='Low'로 롤백.
+    _min_impact = CONFIG.get('newsletter_min_impact', 'High')
     _all_unit_analyzed: dict = {}
     for _uid, _udata in unit_cfgs.items():
         _pool = unit_pools.get(_uid, [])
-        _all_unit_analyzed[_uid] = [
-            analysis_cache[it['link']] for it in _pool
-            if it['link'] in analysis_cache
-        ][:20]
+        _analyzed = [analysis_cache[it['link']] for it in _pool if it['link'] in analysis_cache]
+        _kept = [a for a in _analyzed if _impact_at_least(a.get('impact_level'), _min_impact)]
+        _dropped = len(_analyzed) - len(_kept)
+        if _dropped:
+            log_info(f"   [{_udata['display']}] 중요도 필터(≥{_min_impact}): "
+                     f"{len(_analyzed)}개 중 {_dropped}개(Medium 이하) 제외 → {len(_kept)}개 게재")
+        _all_unit_analyzed[_uid] = _kept[:20]
 
     # Phase 3.6: 키워드 기반 의미적 중복 클러스터링 (타이틀 유사도로 잡히지 않는 동일 주제 제거)
     log_info("[Phase 3.6] 분析 결과 키워드 기반 의미적 중복 클러스터링 (threshold=0.30)")
