@@ -128,15 +128,8 @@ def _run_dual_ai_analysis(
     max_tokens_initial: int = 2500,
     max_tokens_validation: int = 2500,
 ) -> Dict:
-    """
-    2단계 AI 분석:
-      1단계: GPT-4o로 초안 분석
-      2단계: Claude로 검증/보완 후 최종본 반환
-
-    validation_prompt_builder(initial_result: Dict) -> str
-    """
-    # ── 1단계: GPT-4o 초안 ──────────────────────────────────────────────────
-    log_info("  [1단계] GPT-4o 초안 분석 중...")
+    """GPT-4o 단일 분석 (Claude 검증 단계 제거)"""
+    log_info("  GPT-4o 분석 중...")
     try:
         client = get_openai_client()
         resp = client.chat.completions.create(
@@ -151,34 +144,13 @@ def _run_dual_ai_analysis(
         text = resp.choices[0].message.content.strip()
         if text.startswith('```'):
             text = re.sub(r'^```[a-z]*\n?', '', text).rstrip('`').strip()
-        initial_result = json.loads(text)
-        log_info("  ✅ GPT-4o 초안 완료")
+        result = json.loads(text)
+        result['_analysis_chain'] = 'GPT-4o'
+        log_info("  ✅ GPT-4o 분석 완료")
+        return result
     except Exception as e:
-        log_error(f"❌ GPT-4o 초안 분석 실패: {e}")
+        log_error(f"❌ GPT-4o 분석 실패: {e}")
         return {}
-
-    # ── 2단계: Claude 검증/보완 ──────────────────────────────────────────────
-    log_info("  [2단계] Claude 검증/보완 중...")
-    try:
-        val_prompt = validation_prompt_builder(initial_result)
-        claude = get_claude_client()
-        msg = claude.messages.create(
-            model=CLAUDE_MODEL_DEFAULT,
-            max_tokens=max_tokens_validation,
-            system=validation_system,
-            messages=[{"role": "user", "content": val_prompt}],
-        )
-        text = msg.content[0].text.strip()
-        if text.startswith('```'):
-            text = re.sub(r'^```[a-z]*\n?', '', text).rstrip('`').strip()
-        final_result = json.loads(text)
-        log_info("  ✅ Claude 검증/보완 완료")
-        final_result['_analysis_chain'] = 'GPT-4o 초안 → Claude 검증/보완'
-        return final_result
-    except Exception as e:
-        log_warning(f"⚠️ Claude 검증 실패 ({e}), GPT-4o 초안으로 대체합니다.")
-        initial_result['_analysis_chain'] = 'GPT-4o 단독 (Claude 검증 불가)'
-        return initial_result
 
 
 # ==============================================================================
@@ -198,36 +170,57 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
     title_link_map = _build_title_link_map(articles)
 
     news_summaries = []
-    for i, article in enumerate(articles[:50], 1):
+    for i, article in enumerate(articles[:100], 1):
         summary = f"{i}. [{article.get('source', 'Unknown')}] {article.get('title', '')}"
         if article.get('analysis_result'):
-            summary += f"\n   분석: {article['analysis_result'][:200]}"
+            summary += f"\n   분석: {article['analysis_result'][:500]}"
         news_summaries.append(summary)
 
-    news_text = "\n\n".join(news_summaries)
+    news_text = "\n".join(news_summaries)
 
     initial_prompt = f"""
 당신은 TTA(한국정보통신기술협회) 수석 전략 컨설턴트입니다.
 아래 주간 ICT 뉴스를 분석하여 보직자용 전략 인사이트 보고서 초안을 JSON으로 작성하십시오.
 
 [분석 기간] 최근 7일  |  [기사 수] {stats['total_articles']}개
-[주요 키워드] {', '.join([kw[0] for kw in stats['top_keywords'][:10]])}
+[주요 키워드] {', '.join([kw[0] for kw in stats['top_keywords'][:15]])}
 
 [뉴스 목록]
 {news_text}
 
 아래 JSON 스키마를 정확히 따르십시오:
 {{
+  "one_line_summary": "이번 주 ICT 표준화 이슈는 [키워드1], [키워드2], [키워드3]을 중심으로 확대되었습니다.",
   "executive_summary": "ㅇ 핵심 전략 메시지 1\\nㅇ 핵심 전략 메시지 2\\nㅇ 핵심 전략 메시지 3",
   "key_issues": [
     {{
       "title": "이슈 제목",
+      "summary": "이슈 한 줄 요약",
+      "why_important": "이 이슈가 중요한 이유 (한 문장)",
+      "article_count": 3,
+      "related_entities": ["관련 기업명1", "관련 국가명1"],
+      "standardization_keywords": ["표준화 키워드1", "표준화 키워드2"],
       "description": ["ㅇ 현황 설명", "ㅇ 주요 플레이어 동향", "ㅇ 기술적 특이사항"],
       "impact_level": "상/중/하",
       "standardization_gap": "표준화 공백 또는 선점 필요 영역",
       "tta_action_item": "TTA 구체적 대응 방향",
       "related_articles": ["뉴스 목록의 기사 제목 그대로 복사 1", "기사 제목 2"]
     }}
+  ],
+  "surge_keywords": ["급등 키워드1", "급등 키워드2", "급등 키워드3", "급등 키워드4", "급등 키워드5", "급등 키워드6"],
+  "new_entities": {{
+    "companies": ["신규 등장 기업1", "신규 등장 기업2"],
+    "countries": ["신규 등장 국가1"],
+    "technologies": ["신규 등장 기술1", "신규 등장 기술2"]
+  }},
+  "country_trends": [
+    {{"country": "미국", "trend": "해당 국가의 주요 ICT 동향 한 줄"}},
+    {{"country": "중국", "trend": "해당 국가의 주요 ICT 동향 한 줄"}},
+    {{"country": "한국", "trend": "해당 국가의 주요 ICT 동향 한 줄"}}
+  ],
+  "company_activities": [
+    {{"company": "기업명", "activity": "주요 활동 한 줄"}},
+    {{"company": "기업명2", "activity": "주요 활동 한 줄"}}
   ],
   "trends": [
     {{
@@ -244,14 +237,26 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
     }}
   ],
   "insights": ["ㅇ 핵심 인사이트 1", "ㅇ 핵심 인사이트 2", "ㅇ 핵심 인사이트 3"],
+  "next_week_watch": ["다음 주 관찰 포인트 1", "다음 주 관찰 포인트 2", "다음 주 관찰 포인트 3"],
   "outlook": ["ㅇ 차주 예상 동향 1", "ㅇ 모니터링 리스크 1", "ㅇ 대응 권고 1"]
 }}
 
 규칙:
-- 모든 서술은 "ㅇ"로 시작하는 개조식으로 작성
+- 모든 description/insights/outlook 서술은 "ㅇ"로 시작하는 개조식으로 작성
 - related_articles는 반드시 위 뉴스 목록에 실제로 존재하는 제목만 기재 (최대 3개)
-- impact_level '상' 이슈를 앞에 배치, 최대 5개
-- technology_highlights 최대 4개
+- key_issues는 반드시 정확히 5개를 도출하십시오 (기사가 적더라도 관련 이슈를 묶어서 5개 채울 것)
+- key_issues의 description은 반드시 5개 이상 항목을 작성하고, 각 항목에 구체적 기업명·수치·기술명을 포함할 것
+  예) ㅇ Ericsson이 발표한 6G 프리커서 테스트베드에서 1Tbps 전송 속도 달성
+- key_issues의 why_important는 표준화·정책·시장 관점에서 구체적 이유를 2~3문장으로 서술
+- impact_level '상' 이슈를 앞에 배치
+- technology_highlights는 반드시 4개, 각 description 4개 이상 항목 포함
+- trends는 반드시 4개, 각 description 3개 이상 항목 포함
+- surge_keywords: 이번 주 기사 빈도가 급증한 키워드 최대 8개
+- country_trends: 기사에 언급된 국가만 포함, 최대 6개국, trend는 2문장 이상
+- company_activities: 기사에 등장한 실제 기업만, 최대 10개, activity는 구체적 행동·수치 포함
+- next_week_watch: 다음 주 모니터링이 필요한 구체적 사안 최대 6개, 각 항목은 모니터링 이유까지 포함
+- insights는 반드시 5개 이상, 각 항목은 구체적 전략 방향 포함
+- outlook은 반드시 5개 이상, 각 항목에 구체적 기업·기술·정책 언급
 """
 
     def build_validation_prompt(initial: Dict) -> str:
@@ -261,11 +266,16 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
 내용의 정확성, 완결성, 개조식 표현의 일관성을 검토하고 최종본을 동일한 JSON 스키마로 반환하십시오.
 
 [검토 기준]
-1. 모든 설명은 "ㅇ"로 시작하는 개조식인지 확인
+1. 모든 description/insights/outlook 서술은 "ㅇ"로 시작하는 개조식인지 확인
 2. related_articles가 실제 기사 제목과 일치하는지 검토
-3. insights와 outlook이 구체적이고 실행 가능한지 보완
-4. technology_highlights가 누락된 핵심 기술은 없는지 확인
-5. 중복 내용 제거, 논리적 일관성 확보
+3. one_line_summary가 이번 주 핵심 키워드를 자연스러운 한 문장으로 담고 있는지 확인
+4. key_issues의 summary/why_important가 명확하고 간결한지, article_count가 타당한지 검토
+5. surge_keywords가 실제 기사 빈도를 반영하는지 확인
+6. country_trends와 company_activities가 기사에 실제 등장한 내용인지 검토
+7. next_week_watch가 구체적이고 실행 가능한 관찰 포인트인지 보완
+8. insights와 outlook이 구체적이고 실행 가능한지 보완
+9. technology_highlights가 누락된 핵심 기술은 없는지 확인
+10. 중복 내용 제거, 논리적 일관성 확보
 
 [GPT-4o 초안]
 {json.dumps(initial, ensure_ascii=False, indent=2)}
@@ -281,15 +291,20 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
         validation_prompt_builder=build_validation_prompt,
         initial_system=initial_system,
         validation_system=validation_system,
-        max_tokens_initial=3000,
+        max_tokens_initial=10000,
         max_tokens_validation=8000,
     )
 
     if not analysis_result:
         return {
+            'one_line_summary': '트렌드 분석 중 오류가 발생했습니다.',
             'executive_summary': '트렌드 분석 중 오류가 발생했습니다.',
-            'key_issues': [], 'trends': [], 'technology_highlights': [],
-            'insights': [], 'outlook': [], 'statistics': stats
+            'key_issues': [], 'surge_keywords': [],
+            'new_entities': {'companies': [], 'countries': [], 'technologies': []},
+            'country_trends': [], 'company_activities': [],
+            'trends': [], 'technology_highlights': [],
+            'insights': [], 'next_week_watch': [], 'outlook': [],
+            'statistics': stats
         }
 
     analysis_result['statistics'] = stats
@@ -553,6 +568,16 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
             "본 보고서는 IRONAGE AI Analytics System으로 자동 생성되었습니다.\n"
         )
 
+        # 다음 주 관찰 포인트 (주간 전용)
+        if report_type == 'weekly':
+            next_watch = analysis_result.get('next_week_watch', [])
+            if next_watch:
+                nw_text = "📅 다음 주 관찰 포인트\n\n"
+                for item in next_watch:
+                    nw_text += f"  • {item}\n"
+                nw_text += "\n"
+                add(nw_text)
+
         # 향후 전망
         outlook = _bullet_lines(analysis_result.get('outlook', []))
         if outlook:
@@ -619,11 +644,21 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
         # 핵심 이슈
         issues = analysis_result.get('key_issues', [])
         if issues:
-            issue_text = "🔥 핵심 이슈\n\n"
+            issue_text = "🔥 핵심 이슈 TOP 5\n\n"
             for i, issue in enumerate(issues, 1):
                 level = issue.get('impact_level', issue.get('importance', '하'))
                 level_mark = "🔴" if level == '상' else "🟡" if level == '중' else "🟢"
                 issue_text += f"{i}. {level_mark} {issue.get('title', '')} [영향도: {level}]\n"
+                if issue.get('summary'):
+                    issue_text += f"   ▶ {issue['summary']}\n"
+                if issue.get('why_important'):
+                    issue_text += f"   ㅇ [중요한 이유] {issue['why_important']}\n"
+                if issue.get('article_count'):
+                    issue_text += f"   ㅇ [관련 기사 수] {issue['article_count']}건\n"
+                if issue.get('related_entities'):
+                    issue_text += f"   ㅇ [관련 기업/국가] {', '.join(issue['related_entities'])}\n"
+                if issue.get('standardization_keywords'):
+                    issue_text += f"   ㅇ [표준화 키워드] {', '.join(issue['standardization_keywords'])}\n"
                 for line in _bullet_lines(issue.get('description', [])):
                     issue_text += f"   {line}\n"
                 if issue.get('standardization_gap'):
@@ -643,6 +678,32 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
                 issue_text += "\n"
             add(issue_text)
 
+        # 주요 기업 활동 (주간 전용)
+        if report_type == 'weekly':
+            company_acts = analysis_result.get('company_activities', [])
+            if company_acts:
+                ca_text = "🏢 주요 기업 활동\n\n"
+                for ca in company_acts:
+                    ca_text += f"  • {ca.get('company', '')}: {ca.get('activity', '')}\n"
+                ca_text += "\n"
+                add(ca_text)
+
+        # 국가별 동향 (주간 전용)
+        if report_type == 'weekly':
+            ct_list = analysis_result.get('country_trends', [])
+            if ct_list:
+                ct_text = "🌏 국가별 동향\n\n"
+                for ct in ct_list:
+                    ct_text += f"  • {ct.get('country', '')}: {ct.get('trend', '')}\n"
+                ct_text += "\n"
+                add(ct_text)
+
+        # 급등 키워드 (주간 전용)
+        if report_type == 'weekly':
+            surge_kw = analysis_result.get('surge_keywords', [])
+            if surge_kw:
+                add("📈 급등 키워드\n\n" + "\n".join(f"  • {kw}" for kw in surge_kw) + "\n\n")
+
         # 통계
         stats_text = (
             "📈 주요 통계\n\n"
@@ -653,9 +714,13 @@ def generate_trend_report_doc(analysis_result: Dict, report_type: str = 'weekly'
         )
         add(stats_text)
 
-        # Executive Summary
+        # Executive Summary + 한 줄 요약
+        one_line = analysis_result.get('one_line_summary', '')
         summary_lines = _bullet_lines(analysis_result.get('executive_summary', ''))
-        summary_text = "📊 Executive Summary\n\n" + "\n".join(summary_lines) + "\n\n"
+        summary_text = "📊 Executive Summary\n\n"
+        if one_line:
+            summary_text += f"▶ {one_line}\n\n"
+        summary_text += "\n".join(summary_lines) + "\n\n"
         add(summary_text)
 
         # 제목 헤더
@@ -806,7 +871,103 @@ def send_trend_report_email(
                       border-radius:25px; font-weight:600; margin:25px 8px; }
         .footer { margin-top:40px; padding:25px; background:linear-gradient(135deg,#2c3e50,#34495e);
                   border-radius:12px; text-align:center; color:white; font-size:13px; }
+        .one-line-summary { background:rgba(255,255,255,.15); border-radius:8px;
+                            padding:10px 16px; margin-top:12px; font-size:15px;
+                            font-weight:600; letter-spacing:-.3px; }
+        .keyword-wrap { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+        .keyword-tag { background:#e8eaf6; color:#3949ab; border-radius:20px;
+                       padding:4px 14px; font-size:13px; font-weight:600; }
+        .country-row { display:flex; align-items:flex-start; padding:8px 0;
+                       border-bottom:1px solid #f0f0f0; font-size:14px; }
+        .country-name { min-width:60px; font-weight:700; color:#2c3e50; margin-right:12px; }
+        .company-row { display:flex; align-items:flex-start; padding:7px 0;
+                       border-bottom:1px solid #f0f0f0; font-size:14px; }
+        .company-name { min-width:100px; font-weight:700; color:#1565c0; margin-right:12px; }
+        .watch-list { list-style:none; padding:0; margin:0; }
+        .watch-list li { padding:7px 0 7px 24px; position:relative; font-size:14px;
+                         border-bottom:1px dashed #e0e0e0; }
+        .watch-list li::before { content:"👁"; position:absolute; left:0; }
+        .issue-summary { font-size:14px; font-weight:600; color:#333; margin-bottom:4px; }
+        .issue-why { font-size:13px; color:#555; margin-bottom:6px; padding:6px 10px;
+                     background:#fffde7; border-left:3px solid #ffc107; border-radius:4px; }
+        .issue-meta-badges { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+        .badge { font-size:12px; border-radius:4px; padding:2px 8px; }
+        .badge-count { background:#e3f2fd; color:#1565c0; }
+        .badge-entity { background:#f3e5f5; color:#6a1b9a; }
+        .badge-stdkw { background:#e8f5e9; color:#2e7d32; }
     """
+
+    # ── 급등 키워드 HTML (주간 전용) ─────────────────────────────────────────
+    def surge_keywords_html() -> str:
+        if report_type != 'weekly':
+            return ''
+        kws = analysis_result.get('surge_keywords', [])
+        if not kws:
+            return ''
+        tags = ''.join(f'<span class="keyword-tag">{kw}</span>' for kw in kws)
+        return (
+            '<div class="section">'
+            '<div class="section-title">📈 급등 키워드</div>'
+            f'<div class="keyword-wrap">{tags}</div>'
+            '</div>'
+        )
+
+    # ── 국가별 동향 HTML (주간 전용) ─────────────────────────────────────────
+    def country_trends_html() -> str:
+        if report_type != 'weekly':
+            return ''
+        ct = analysis_result.get('country_trends', [])
+        if not ct:
+            return ''
+        rows = ''.join(
+            f'<div class="country-row">'
+            f'<span class="country-name">{c.get("country","")}</span>'
+            f'<span>{c.get("trend","")}</span>'
+            f'</div>'
+            for c in ct
+        )
+        return (
+            '<div class="section">'
+            '<div class="section-title">🌏 국가별 동향</div>'
+            f'{rows}'
+            '</div>'
+        )
+
+    # ── 주요 기업 활동 HTML (주간 전용) ──────────────────────────────────────
+    def company_activities_html() -> str:
+        if report_type != 'weekly':
+            return ''
+        ca = analysis_result.get('company_activities', [])
+        if not ca:
+            return ''
+        rows = ''.join(
+            f'<div class="company-row">'
+            f'<span class="company-name">{c.get("company","")}</span>'
+            f'<span>{c.get("activity","")}</span>'
+            f'</div>'
+            for c in ca
+        )
+        return (
+            '<div class="section">'
+            '<div class="section-title">🏢 주요 기업 활동</div>'
+            f'{rows}'
+            '</div>'
+        )
+
+    # ── 다음 주 관찰 포인트 HTML (주간 전용) ─────────────────────────────────
+    def next_week_watch_html() -> str:
+        if report_type != 'weekly':
+            return ''
+        nw = analysis_result.get('next_week_watch', [])
+        if not nw:
+            return ''
+        items = ''.join(f'<li>{item}</li>' for item in nw)
+        return (
+            '<div class="section" style="border-left:4px solid #43a047;">'
+            '<div class="section-title" style="border-bottom:3px solid #43a047;">📅 다음 주 관찰 포인트</div>'
+            f'<ul class="watch-list">{items}</ul>'
+            '</div>'
+        )
 
     # ── 연속 이슈 HTML ──────────────────────────────────────────────────────
     def recurring_html() -> str:
@@ -852,6 +1013,28 @@ def send_trend_report_email(
             level = issue.get('impact_level', issue.get('importance', '하'))
             level_cls = 'high' if level == '상' else 'medium' if level == '중' else 'low'
             level_mark = '🔴' if level == '상' else '🟡' if level == '중' else '🟢'
+
+            # 요약 + 중요한 이유
+            summary_html = (
+                f'<div class="issue-summary">{issue["summary"]}</div>'
+                if issue.get('summary') else ''
+            )
+            why_html = (
+                f'<div class="issue-why">💡 {issue["why_important"]}</div>'
+                if issue.get('why_important') else ''
+            )
+
+            # 배지: 기사수 / 기업·국가 / 표준화 키워드
+            badges = ''
+            if issue.get('article_count'):
+                badges += f'<span class="badge badge-count">📰 관련 기사 {issue["article_count"]}건</span>'
+            for ent in (issue.get('related_entities') or [])[:4]:
+                badges += f'<span class="badge badge-entity">{ent}</span>'
+            for kw in (issue.get('standardization_keywords') or [])[:3]:
+                badges += f'<span class="badge badge-stdkw">🔖 {kw}</span>'
+            badges_html = f'<div class="issue-meta-badges">{badges}</div>' if badges else ''
+
+            # 기존 메타 태그 (TTA 대응, 표준화 공백)
             meta_parts = []
             if issue.get('tta_action_item'):
                 meta_parts.append(f'<span class="meta-tag">💼 {issue["tta_action_item"][:40]}…</span>')
@@ -860,9 +1043,13 @@ def send_trend_report_email(
             if issue.get('tta_strategic_direction'):
                 meta_parts.append(f'<span class="meta-tag">🎯 {issue["tta_strategic_direction"][:40]}…</span>')
             meta_html = f'<div class="meta-row">{"".join(meta_parts)}</div>' if meta_parts else ''
+
             html += (
                 f'<div class="issue-card {level_cls}">'
                 f'<div class="issue-title">{i}. {level_mark} {issue.get("title","")} <small style="color:#888;font-size:13px;">[영향도: {level}]</small></div>'
+                f'{summary_html}'
+                f'{why_html}'
+                f'{badges_html}'
                 f'{bullets_to_html(issue.get("description",[]))}'
                 f'{meta_html}'
                 f'{related_articles_html(issue.get("related_articles",[]))}'
@@ -922,6 +1109,7 @@ def send_trend_report_email(
   <h1>📊 {period_name} ICT 트렌드 분석 리포트</h1>
   <div class="period">분석 기간: {period_text}</div>
   <div class="chain">분석 체계: {chain}</div>
+  {f'<div class="one-line-summary">{analysis_result.get("one_line_summary","")}</div>' if analysis_result.get("one_line_summary") else ''}
 </div>
 
 <div class="stats-row">
@@ -936,12 +1124,18 @@ def send_trend_report_email(
   {bullets_to_html(analysis_result.get('executive_summary',''))}
 </div>
 
+{surge_keywords_html()}
+
 <div class="section">
-  <div class="section-title">🔥 핵심 이슈</div>
+  <div class="section-title">🔥 핵심 이슈 TOP 5</div>
   {issues_html()}
 </div>
 
 {recurring_html()}
+
+{country_trends_html()}
+
+{company_activities_html()}
 
 <div class="section">
   <div class="section-title">📍 트렌드 분석</div>
@@ -954,6 +1148,8 @@ def send_trend_report_email(
   <div class="section-title" style="border-bottom:2px solid #43a047;">🧠 인사이트</div>
   {bullets_to_html(analysis_result.get('insights',[]))}
 </div>
+
+{next_week_watch_html()}
 
 <div class="outlook-box">
   <div class="section-title" style="border-bottom:2px solid #e91e63;">🔮 향후 전망</div>
