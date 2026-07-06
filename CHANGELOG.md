@@ -3,6 +3,26 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.5.0] - 2026-07-06
+
+### Added
+- **뉴스레터 중요도 게이트 (Critical/High만 게재)**: 심층분석이 판정한 영향도
+  `impact_level`이 Medium/Low인 기사를 이메일 뉴스레터에서 제외. `_impact_at_least`
+  헬퍼 + `CONFIG.newsletter_min_impact`(기본 'High', 'Low'로 두면 해제). ⚠️
+  impact_level은 심층분석의 *산출물*이라 '분석 전 제외'는 불가능 — 분석은 전량
+  수행돼 DB엔 그대로 저장(포털·RAG·주간리포트 유지)되고, 이메일 게재 목록만 필터.
+  단별 제외 건수 로그 출력. `_all_unit_analyzed` 단일 지점 필터라 뉴스레터·브리프·
+  내러티브·인사이트 모두 일관 적용.
+
+### Changed
+- **수집 단계 하드 정크 오버라이드 (Phase 2 오매칭 차단)**: `_HARD_JUNK_OVERRIDE`
+  패턴이 ICT 약어를 우연히 포함해도 명백한 비ICT(스포츠 'ITU Sprint'=트라이애슬론·
+  ESPN, 홈쇼핑·완판, 라디오 복귀·신곡 등) 기사를 강한-ICT-마커 예외보다 '우선'해
+  제외. 하한 보충 품질 게이트(#26)가 남긴 마지막 누출(ITU 트라이애슬론)을 수집
+  단계에서 원천 차단 — 심층분석·뉴스레터 진입 이전에 제거되어 분석 비용도 절감.
+  정상 ICT(ITU-R·방송통신위·라디오 주파수·홈IoT)는 오탐 0 검증. `tests/`
+  test_impact_filter.py(7건)·test_collect_filter.py(11건) 추가(총 133개 통과).
+
 ## [0.4.4.0] - 2026-07-06
 
 ### Changed
