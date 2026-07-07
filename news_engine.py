@@ -8221,6 +8221,27 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             unit_pools[uid] = pool + extra[:20]
         log_info(f"   {unit_cfgs[uid]['display']}: {len(unit_pools[uid])}개")
 
+    # 표준기획단 보강 — ICT 표준화 "기획·정책"을 다루는 단 특성상 타 3개 단의 핵심
+    # 이슈를 정책 관점에서 참고할 가치가 있고, 만성적으로 후보가 적음(사용자 확인).
+    # 각 단의 상위 3개(이미 룰 점수순 정렬됨)를 표준기획단 풀에 노출용으로 추가한다.
+    # 원본 기사의 _primary_unit_id는 그대로라 DB 저장 시 실제 소속 단 귀속은 바뀌지 않음.
+    _planning_uid = next(
+        (uid for uid, cfg in unit_cfgs.items() if cfg.get('name') == 'standards_planning'), None)
+    if _planning_uid is not None:
+        _existing_links = {it['link'] for it in unit_pools.get(_planning_uid, [])}
+        _borrowed = []
+        for uid, pool in unit_pools.items():
+            if uid == _planning_uid:
+                continue
+            for it in pool[:3]:
+                if it['link'] not in _existing_links:
+                    _borrowed.append(it)
+                    _existing_links.add(it['link'])
+        if _borrowed:
+            unit_pools[_planning_uid] = unit_pools.get(_planning_uid, []) + _borrowed
+            log_info(f"   [{unit_cfgs[_planning_uid]['display']}] 타 단 상위 3개씩 보강: "
+                     f"+{len(_borrowed)}개 (풀 {len(unit_pools[_planning_uid])}개)")
+
     # Step Summary용 Phase 2 직후 단별 풀 크기 스냅샷
     _stats_pool_phase2 = {uid: len(pool) for uid, pool in unit_pools.items()}
 
