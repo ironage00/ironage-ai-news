@@ -8249,6 +8249,32 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             if it['link'] not in _needed:
                 _needed[it['link']] = it
                 _link_unit[it['link']] = it.get('_primary_unit_id') or uid
+
+    # AI 선별(Phase 2.6)이 고른 기사가 룰 기반 top-50 밖에 있어도 분석 대상에 편입한다.
+    # 룰 점수는 단순 키워드 매칭 횟수라 국문 복합어가 많이 겹치는 국내 기사에 유리하고,
+    # 영문 글로벌 정책 기사(예: 美 일리노이주 AI 안전법)는 매칭 1건에 그쳐 대형 풀(400개+)의
+    # top-50 밖으로 밀려난다 — 그 결과 AI가 선택했어도 분석·계측(score_impact_samples,
+    # is_selected)에서 누락된다. 뉴스레터(Phase 4)는 아래에서 _pool[:_TOP]로 별도 격리하므로
+    # 이 확장은 분석·계측 범위에만 영향을 주고 섀도 모드의 '뉴스레터 무영향' 원칙은 유지된다.
+    _added_for_measurement = 0
+    if _selected_links:
+        _pool_lookup: dict = {}
+        for uid, pool in unit_pools.items():
+            for it in pool:
+                _pool_lookup.setdefault(it['link'], (it, it.get('_primary_unit_id') or uid))
+        for lnk in _selected_links:
+            if lnk in _needed:
+                continue
+            found = _pool_lookup.get(lnk)
+            if found:
+                it, uid = found
+                _needed[lnk] = it
+                _link_unit[lnk] = uid
+                _added_for_measurement += 1
+        if _added_for_measurement:
+            log_info(f"[Phase 3] AI 선별 중 룰 top-50 밖 기사 {_added_for_measurement}개 "
+                     f"계측용 분析 추가 편입 (뉴스레터 영향 없음)")
+
     unique_candidates = list(_needed.values())
     log_info(f"[Phase 3] Unique 기사 {len(unique_candidates)}개 병렬 분析 시작")
 
@@ -8329,9 +8355,11 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     # 뉴스레터 중요도 필터 — Critical/High만 게재(Medium 이하는 위 저장 게이트에서 이미
     # DB 미저장 처리됨). analysis_cache엔 남아 있으므로 여기서 뉴스레터 목록도 한 번 더
     # 걸러 이중 안전장치 + Monday 주말누적(DB 로드분) 대비. _min_impact는 위에서 정의.
+    # _pool[:_TOP]로 룰 top-50만 사용 — Phase 3에서 AI 선별 계측용으로 추가 편입한
+    # top-50 밖 기사가 뉴스레터 소재에 섞여 들어오는 것을 차단(섀도 무영향 원칙 유지).
     _all_unit_analyzed: dict = {}
     for _uid, _udata in unit_cfgs.items():
-        _pool = unit_pools.get(_uid, [])
+        _pool = unit_pools.get(_uid, [])[:_TOP]
         _analyzed = [analysis_cache[it['link']] for it in _pool if it['link'] in analysis_cache]
         _kept = [a for a in _analyzed if _impact_at_least(a.get('impact_level'), _min_impact)]
         _all_unit_analyzed[_uid] = _kept[:20]
