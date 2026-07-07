@@ -7441,7 +7441,7 @@ def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
 #
 # CONFIG 키:
 #   selection_mode: 'shadow'(기록만, 기본) | 'active'(뉴스레터 반영) | 'off'
-#   daily_global_select_count: 전역 선별 목표 개수 (기본 60)
+#   daily_global_select_count: 전역 선별 목표 개수 (기본 150 — 단별 배정 후 잔여분은 기타뉴스 활용)
 #   selection_unit_floor: 활성 모드에서 단별 최소 보장 기사 수 (기본 15)
 # ==============================================================================
 
@@ -7713,7 +7713,9 @@ def ai_select_articles(articles: List[Dict], ai_model: str, target_count: int) -
 아래 뉴스 목록(제목 — 요약)에서 내용이 중복되는 기사를 제거한 뒤, "국내 정부·산업계에 미치는
 영향"을 최우선 기준으로 삼아 ICT 표준·정책 관점에서 가장 중요한 뉴스 {target_count}개를
 선별하세요. 아래 5개 항목은 예시일 뿐 전체 목록이 아닙니다 — 항목에 정확히 안 맞아도 국내
-정부·산업계에 실질적 영향을 줄 만한 뉴스라면 포함하세요.
+정부·산업계에 실질적 영향을 줄 만한 뉴스라면 포함하세요. [반드시 제외] 기준에 걸리지 않는 한
+목표 개수({target_count}개)에 최대한 가깝게 선별하세요 — 확신이 낮으면 낮은 score(1~2)를
+부여해 포함하는 쪽을 택하세요.
 
 [선별 우선순위 — score 값 (높을수록 우선)]
 5: 해외 주요국 정책·규제 변화 — 미국 FCC·NTIA·상무부, 유럽 EC·ETSI, 일본 총무성, 중국
@@ -8012,7 +8014,10 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
         return unit_pools, info
 
     # 목표는 실제 후보 수를 넘을 수 없음 (상한을 후보 수로 클램프)
-    target = _safe_int(CONFIG.get('daily_global_select_count', 60), 60, 10, len(candidates))
+    # 기본 150 — 단별 배정(각 20개 내외)을 채우고 남는 선별 기사를 '기타뉴스'로
+    # 활용할 수 있는 물량 확보(사용자 요청 2026-07-07). 후보(~280)의 절반 수준이라
+    # AI가 '진짜 중요한 것만' 고르는 변별력은 유지하면서 뉴스레터 소재 부족을 방지.
+    target = _safe_int(CONFIG.get('daily_global_select_count', 150), 150, 10, len(candidates))
     # 하한은 최소 1 보장 — floor=0 설정 시 과압축(258→9) 재발 경로가 되살아남
     floor = _safe_int(CONFIG.get('selection_unit_floor', 15), 15, 1, 50)
     log_info(f"[Phase 2.6] 전역 AI 선별 (mode={mode}, 후보 {len(candidates)}개 → 목표 {target}개)")
