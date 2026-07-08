@@ -3,6 +3,23 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.13.0] - 2026-07-08
+
+### Performance
+- **수집 단계 URL 리졸브 병렬화 (파이프라인 최대 병목 제거)**: Phase 1 뉴스 수집이
+  전체 실행시간의 88%(2026-07-08 실측: 총 115분 중 102분)를 차지. 원인은 기사별
+  `get_final_url_and_source()`(Google Alerts 리디렉션 추적 HTTP GET, 타임아웃
+  (5,10)초 + 최대 2회 재시도)를 for 루프 안에서 **완전 순차** 호출한 것 — 느린
+  사이트 하나당 최대 30초 블로킹 + 기사마다 `time.sleep(0.1)` 누적. RSS 피드
+  fetch는 이미 병렬(ThreadPoolExecutor)이었으나 그 다음 URL 리졸브가 병목으로
+  남아 있었음. Google Alerts·Naver 두 수집 루프를 **① 필터링(시간 윈도우·조기
+  비ICT·도메인 블랙리스트, 네트워크 없음) → ② URL 리졸브 병렬 처리** 2단계로
+  분리. Naver API 검색 자체는 쿼리별 순차 유지(레이트리밋·연속실패 조기종료
+  로직 보존). `time.sleep(0.1)` per-article 지연 제거. `COLLECT_URL_WORKERS`
+  기본 20, `CONFIG.collect_url_workers`로 조정 가능(1~50). 소규모 실검증(RSS
+  3개+Naver 2쿼리, 78건 리졸브) 9.5초 완료·결과 구조 무결성 확인. 전체 145개
+  테스트 통과. 실제 단축폭은 다음 daily 실행 로그로 확인 예정.
+
 ## [0.4.12.0] - 2026-07-08
 
 ### Fixed
