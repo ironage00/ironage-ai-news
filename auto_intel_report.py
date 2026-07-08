@@ -24,6 +24,8 @@ _KST_TZ = pytz.timezone('Asia/Seoul')
 def _now_kst() -> datetime.datetime:
     return datetime.datetime.now(_KST_TZ)
 
+from sqlalchemy import text
+
 from news_engine import (
     load_news_from_db,
     get_openai_client,
@@ -32,6 +34,7 @@ from news_engine import (
     log_warning,
     log_error,
     get_weekly_subscribers,
+    get_db_session,
     _ops_alert,
 )
 
@@ -396,6 +399,58 @@ def node_send_report(state: Dict) -> Dict:
 # --- 오케스트레이터 ---
 # ==============================================================================
 
+def _register_report_artifact(state: Dict) -> None:
+    """생성된 리포트를 report_artifacts에 등록 (포털 '보고서 보관함' 탭 자동 갱신).
+    2026-07-08까지 이 단계가 없어 리포트는 매주 생성돼도 보관함엔 사람이 손으로
+    CSV를 고쳐야만 반영됐음(build-plan-graphrag-v2-20260708.md Phase 0-1).
+    report_artifacts 테이블이 없는 환경(로컬 SQLite 등)에서는 조용히 건너뜀."""
+    if not state.get('doc_url'):
+        return
+    try:
+        days = state['days']
+        period_end = _now_kst().date()
+        period_start = period_end - datetime.timedelta(days=days - 1)
+        with get_db_session() as session:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO report_artifacts (
+                        report_type, title, period_start, period_end,
+                        google_doc_url, source_article_count, generated_at,
+                        owner, visibility, status, notes
+                    ) VALUES (
+                        :report_type, :title, :period_start, :period_end,
+                        :google_doc_url, :source_article_count, NOW(),
+                        :owner, :visibility, :status, :notes
+                    )
+                    ON CONFLICT (report_type, title, period_start) DO UPDATE SET
+                        period_end = EXCLUDED.period_end,
+                        google_doc_url = EXCLUDED.google_doc_url,
+                        source_article_count = EXCLUDED.source_article_count,
+                        generated_at = EXCLUDED.generated_at,
+                        status = EXCLUDED.status,
+                        notes = EXCLUDED.notes
+                    """
+                ),
+                {
+                    "report_type": state['period'],
+                    "title": state['report_title'],
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "google_doc_url": state['doc_url'],
+                    "source_article_count": len(state['news_current']),
+                    "owner": "표준화본부",
+                    "visibility": "tta_internal",
+                    "status": "published" if state['email_sent'] else "draft",
+                    "notes": f"auto_intel_report 자동 생성 (급등 엔티티 {len(state['surges'])}건)",
+                },
+            )
+        _log(state, "  📋 report_artifacts 등록 완료")
+    except Exception as e:
+        log_warning(f"report_artifacts 등록 실패 (테이블 부재 환경일 수 있음): {e}")
+        state['errors'].append(f"register_artifact: {e}")
+
+
 _PIPELINE = [
     node_load_data,
     node_detect_surges,
@@ -450,6 +505,9 @@ def run_auto_intel_report(
         except Exception as e:
             log_warning(f"로컬 마크다운 저장 중 예외 발생: {e}")
             state['errors'].append(f"local_markdown_save: {e}")
+
+    # 📋 report_artifacts 등록 (포털 보고서 보관함 자동 갱신)
+    _register_report_artifact(state)
 
     # 결과 요약 로그
     _log(state, f"\n{'='*50}")
