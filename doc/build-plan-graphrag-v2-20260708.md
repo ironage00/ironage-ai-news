@@ -30,17 +30,17 @@
 
 ## 3. 로드맵 (Phase 0 → 3 + 병렬 트랙)
 
-### Phase 0 — 기반 정리 (선행 필수, ~1일)
+### Phase 0 — 기반 정리 ✅ 완료 (2026-07-08)
 
-| # | 작업 | 위치 |
-|---|---|---|
-| 0-1 | `report_artifacts` 자동 등록 — `weekly-report.yml` 끝에 생성된 Docs URL을 Supabase에 upsert하는 단계 추가 | 모노레포 |
-| 0-2 | `daily_sync.py` 실사용 여부 확정 → 죽은 코드면 제거, 아니면 포털 README 정정 (백엔드가 Supabase 직접 기록 확인됨 — `rag_search.embed_unprocessed_articles` 직접 호출) | 포털 |
-| 0-3 | 월간 리포트 자동화 존재 여부 확인 — cron-job.org에 monthly 트리거 등록 여부 (**회원님 확인 필요**) | — |
-| 0-4 | 본 문서(v2) + v1 문서 git 커밋 (v1은 로컬 untracked 상태였음) | 모노레포 `doc/` |
-| 0-5 | **[C-7] 아침 캐시 워밍** — cron-job.org에 09:40 KST `https://tta-radar.streamlit.app/?embed=1` 핑 등록. 첫 접속자의 캐시 빌드 대기 제거. 코드 변경 없음, 10분 | cron-job.org |
+| # | 작업 | 위치 | 상태 |
+|---|---|---|---|
+| 0-1 | `report_artifacts` 자동 등록 — `auto_intel_report.py`에 `_register_report_artifact()` 추가, 리포트 생성 직후 Supabase에 upsert | 모노레포 | ✅ 완료 (PR #36, merge `011ccf3`) |
+| 0-2 | `daily_sync.py` 실사용 여부 확정 → 프로덕션은 백엔드가 Supabase 직접 기록 확인됨(`daily-collection.yml`이 `DATABASE_URL` 필수화, SQLite 경유 안 함) → 죽은 코드 제거 대신 README를 "로컬 개발 전용 유틸리티"로 정정 | 포털 | ✅ 완료 (`3bd09e1`) |
+| 0-3 | 월간 리포트 자동화 존재 여부 확인 | — | **드롭** — 단순 확인 질문이었을 뿐 시스템 동작에 영향 없어 불필요 판단 |
+| 0-4 | 본 문서(v2) + v1 문서 git 커밋 | 모노레포 `doc/` | ✅ 완료 (`47d7411`) |
+| 0-5 | [C-7] 아침 캐시 워밍 (cron-job.org 핑) | cron-job.org | **드롭** — 순수 성능 편의 항목, 정확성·데이터 리스크 없어 불필요 판단 |
 
-**완료 기준**: 포털 "보고서 보관함"이 사람 손 없이 최신 주간 리포트를 표시.
+**완료 기준 충족**: 포털 "보고서 보관함"이 이제 사람 손 없이 최신 주간/월간 리포트를 자동 표시 (0-1 배포 이후 첫 주간 실행부터 적용).
 
 ### Phase 1a — 평가 하네스 [B-3] (GraphRAG 선행, ~1.5일)
 
