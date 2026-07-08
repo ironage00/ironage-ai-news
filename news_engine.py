@@ -2267,6 +2267,13 @@ def get_article_content(url: str, max_length: int = 3000) -> str:
 # --- 뉴스 수집 메인 함수 ---
 # ==============================================================================
 
+# 수집 단계 URL 리졸브(get_final_url_and_source)의 동시 실행 워커 수.
+# 기사별 리디렉션 추적은 I/O 바운드라 순차 처리 시 후보 수백 개 × 1~30초로
+# 파이프라인의 최대 병목(2026-07-08 실측: 전체 115분 중 수집 102분).
+# CONFIG.collect_url_workers로 배포 없이 조정 가능(레이트리밋·대역폭 주의).
+COLLECT_URL_WORKERS = 20
+
+
 @performance_monitor
 def get_news_data(rss_urls=None, naver_queries=None):
     """여러 RSS 피드와 키워드에서 뉴스를 수집하고 24시간 이내 뉴스만 필터링.
@@ -2328,122 +2335,86 @@ def get_news_data(rss_urls=None, naver_queries=None):
         entry_count = len(feed.entries) if feed and feed.entries else 0
         log_info(f"     [{i:02d}] 🔑 {keyword} → {entry_count}개 항목")
 
-    for i, rss_url, feed, keyword in sorted(feed_results, key=lambda x: x[0]):
-        log_info(f"\n  📡 RSS 피드 {i}/{n_feeds} [🔑 {keyword}]: {rss_url[:60]}...")
+    # 수집 워커 수 (CONFIG로 조정 가능, 1~50 클램프)
+    try:
+        _url_workers = max(1, min(50, int(CONFIG.get('collect_url_workers', COLLECT_URL_WORKERS))))
+    except (TypeError, ValueError):
+        _url_workers = COLLECT_URL_WORKERS
 
+    # --- Phase A: 시간 윈도우 + 조기 필터 통과 항목만 수집 (네트워크 없음) ---
+    # URL 리졸브(네트워크)는 Phase B에서 일괄 병렬 처리한다. 순차 처리 시 이 구간이
+    # 파이프라인 최대 병목이라, 필터링(cheap)과 리졸브(I/O)를 분리해 병렬화한다.
+    _pending_ga = []  # dict(title, extracted_url, published, summary)
+    for i, rss_url, feed, keyword in sorted(feed_results, key=lambda x: x[0]):
         try:
             if feed is None or not feed.entries:
-                log_warning(f"    ⚠️  피드가 비어있거나 수집에 실패했습니다.")
+                log_warning(f"  ⚠️  피드 {i}/{n_feeds} [🔑 {keyword}] 비어있거나 수집 실패")
                 continue
 
-            log_info(f"    📰 {len(feed.entries)}개 항목 발견")
-            
-            # 배치 처리 (50개씩)
-            BATCH_SIZE = 50
-            
-            for batch_start in range(0, len(feed.entries), BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, len(feed.entries))
-                batch_entries = feed.entries[batch_start:batch_end]
-                
-                log_info(f"    🔄 배치 처리 중: {batch_start+1}~{batch_end}/{len(feed.entries)}")
-                
-                # 개별 항목 처리
-                for j, entry in enumerate(batch_entries, 1):
-                    stats['google_alerts']['total'] += 1
-                    
-                    try:
-                        # 제목 추출
-                        title_preview = entry.title[:60] if hasattr(entry, 'title') else 'No Title'
-                        
-                        # 날짜 확인
-                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                            if not is_within_time_window(entry.published_parsed, NEWS_TIME_WINDOW_HOURS):
-                                stats['google_alerts']['filtered_out'] += 1
-                                
-                                try:
-                                    article_date = datetime.datetime(*entry.published_parsed[:6])
-                                    current_time = datetime.datetime.now()
-                                    hours_ago = (current_time - article_date).total_seconds() / 3600
-                                    
-                                    current_idx = batch_start + j
-                                    log_info(f"        ⏭️  [{current_idx}/{len(feed.entries)}] 시간 초과 ({hours_ago:.0f}h 전): {title_preview}...")
-                                except Exception:
-                                    log_info(f"        ⏭️  시간 초과: {title_preview}...")
-                                
-                                continue
-                            
-                            published_date = datetime.datetime(*entry.published_parsed[:6]).strftime('%Y-%m-%d %H:%M')
-                        else:
-                            published_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-                        
-                        # 조기 Stage 0 — 제목+요약으로 비ICT 즉시 제외 (URL 요청 전)
-                        _early_summary = _clean_text_hint(
-                            getattr(entry, 'summary', '') or getattr(entry, 'description', '')
-                        )
-                        if _collect_stage_filter_reason({'title': entry.title, 'summary': _early_summary}):
-                            stats['google_alerts']['early_filtered'] += 1
+            for entry in feed.entries:
+                stats['google_alerts']['total'] += 1
+                try:
+                    # 날짜 확인
+                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        if not is_within_time_window(entry.published_parsed, NEWS_TIME_WINDOW_HOURS):
+                            stats['google_alerts']['filtered_out'] += 1
                             continue
+                        published_date = datetime.datetime(*entry.published_parsed[:6]).strftime('%Y-%m-%d %H:%M')
+                    else:
+                        published_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
 
-                        current_idx = batch_start + j
-                        log_info(f"        🔄 [{current_idx}/{len(feed.entries)}] {title_preview}...")
-
-                        # URL 추출 및 처리
-                        try:
-                            extracted_url = extract_google_alerts_url(entry.link)
-                            
-                            if len(extracted_url) > 500:
-                                log_warning(f"           ❌ URL 너무 김")
-                                stats['google_alerts']['failed'] += 1
-                                continue
-                            
-                            final_link, source, success = get_final_url_and_source(extracted_url)
-                            
-                            if success:
-                                stats['google_alerts']['success'] += 1
-                                log_info(f"           ✅ 수집: {source}")
-                            else:
-                                stats['google_alerts']['failed'] += 1
-                                failed_urls.append(extracted_url)
-                                log_warning(f"           ❌ 실패: URL 추출 오류")
-                            
-                            summary_hint = _clean_text_hint(
-                                getattr(entry, 'summary', '')
-                                or getattr(entry, 'description', '')
-                            )
-
-                            news_list.append({
-                                "title": entry.title,
-                                "link": final_link,
-                                "published": published_date,
-                                "source": source,
-                                "extraction_success": success,
-                                "summary": summary_hint,
-                                "content_hint_len": len(summary_hint),
-                            })
-
-                            time.sleep(0.1)
-                            
-                        except Exception as url_error:
-                            stats['google_alerts']['failed'] += 1
-                            failed_urls.append(getattr(entry, 'link', 'Unknown URL'))
-                            log_error(f"           ❌ URL 처리 오류: {str(url_error)[:50]}")
-                            continue
-                    
-                    except Exception as entry_error:
-                        stats['google_alerts']['failed'] += 1
-                        log_error(f"        ❌ 항목 처리 실패: {str(entry_error)[:50]}")
+                    # 조기 Stage 0 — 제목+요약으로 비ICT 즉시 제외 (URL 요청 전)
+                    _early_summary = _clean_text_hint(
+                        getattr(entry, 'summary', '') or getattr(entry, 'description', '')
+                    )
+                    if _collect_stage_filter_reason({'title': entry.title, 'summary': _early_summary}):
+                        stats['google_alerts']['early_filtered'] += 1
                         continue
-                
-                # 배치 완료 후 메모리 정리
-                if batch_start % 50 == 0 and batch_start > 0:
-                    log_info(f"    🧹 메모리 정리 중... (현재 {len(news_list)}개 수집)")
-                    import gc
-                    gc.collect()
-        
+
+                    extracted_url = extract_google_alerts_url(entry.link)
+                    if len(extracted_url) > 500:
+                        stats['google_alerts']['failed'] += 1
+                        continue
+
+                    _pending_ga.append({
+                        'title': entry.title,
+                        'extracted_url': extracted_url,
+                        'published': published_date,
+                        'summary': _early_summary,
+                    })
+                except Exception as entry_error:
+                    stats['google_alerts']['failed'] += 1
+                    log_error(f"        ❌ 항목 처리 실패: {str(entry_error)[:50]}")
+                    continue
         except Exception as feed_error:
             log_error(f"  ❌ RSS 피드 전체 처리 실패: {str(feed_error)[:100]}")
             continue
-    
+
+    # --- Phase B: URL 리졸브 병렬 처리 ---
+    log_info(f"\n  🔗 Google Alerts 후보 {len(_pending_ga)}개 URL 병렬 리졸브 (동시 {_url_workers}개)...")
+
+    def _resolve_ga(p):
+        final_link, source, success = get_final_url_and_source(p['extracted_url'])
+        return p, final_link, source, success
+
+    if _pending_ga:
+        with ThreadPoolExecutor(max_workers=_url_workers) as executor:
+            for p, final_link, source, success in executor.map(_resolve_ga, _pending_ga):
+                if success:
+                    stats['google_alerts']['success'] += 1
+                else:
+                    stats['google_alerts']['failed'] += 1
+                    failed_urls.append(p['extracted_url'])
+                news_list.append({
+                    "title": p['title'],
+                    "link": final_link,
+                    "published": p['published'],
+                    "source": source,
+                    "extraction_success": success,
+                    "summary": p['summary'],
+                    "content_hint_len": len(p['summary']),
+                })
+
     log_info(f"\n📊 Google Alerts 통계:")
     log_info(f"    • 총 처리: {stats['google_alerts']['total']}개")
     log_info(f"    • 시간 범위 내 뉴스: {stats['google_alerts']['total'] - stats['google_alerts']['filtered_out']}개")
@@ -2462,39 +2433,41 @@ def get_news_data(rss_urls=None, naver_queries=None):
 
     _naver_consecutive_failures = 0  # 연속 타임아웃 카운터
 
+    # --- Phase A: Naver API 검색(쿼리별 순차, 레이트리밋·조기종료 로직 유지) +
+    #     시간 윈도우·조기 필터·도메인 블랙리스트 통과 항목만 수집 (URL 리졸브는 Phase B) ---
+    _pending_naver = []  # dict(title, raw_link, published, summary)
     for i, query in enumerate(_active_queries, 1):
         if not query.strip():
             continue
 
         log_info(f"  🔍 검색어 {i}/{len(_active_queries)}: '{query}'")
-        
+
         try:
             naver_url = "https://openapi.naver.com/v1/search/news.json"
             headers = {
-                "X-Naver-Client-Id": NAVER_CLIENT_ID, 
+                "X-Naver-Client-Id": NAVER_CLIENT_ID,
                 "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
             }
             params = {"query": query, "display": 30, "sort": "date"}
-            
+
             response = requests.get(naver_url, headers=headers, params=params, timeout=7)
             response.raise_for_status()
             _naver_consecutive_failures = 0  # 성공 시 초기화
             data = response.json()
-            
+
             items = data.get("items", [])
             log_info(f"    📰 {len(items)}개 발견")
-            
-            for j, item in enumerate(items, 1):
+
+            for item in items:
                 stats['naver']['total'] += 1
-                
+
                 try:
                     # 제목 추출
                     clean_title = re.sub('<[^>]*>', '', item["title"])
-                    title_preview = clean_title[:60]
-                    
+
                     # 날짜 확인
                     pub_date_raw = item.get('pubDate')
-                    
+
                     if isinstance(pub_date_raw, str):
                         pub_date = datetime.datetime.strptime(
                             pub_date_raw, '%a, %d %b %Y %H:%M:%S +0900'
@@ -2503,14 +2476,11 @@ def get_news_data(rss_urls=None, naver_queries=None):
                         pub_date = pub_date_raw
                     else:
                         pub_date = datetime.datetime.now()
-                    
+
                     if not is_within_time_window(pub_date, NEWS_TIME_WINDOW_HOURS):
                         stats['naver']['filtered_out'] += 1
-                        
-                        hours_ago = (datetime.datetime.now() - pub_date).total_seconds() / 3600
-                        log_info(f"        ⏭️  [{j}/{len(items)}] 시간 초과 ({hours_ago:.0f}h 전): {title_preview}...")
                         continue
-                    
+
                     published_date = pub_date.strftime('%Y-%m-%d %H:%M')
 
                     # 조기 Stage 0 — 제목+요약으로 비ICT 즉시 제외 (URL 요청 전)
@@ -2519,56 +2489,29 @@ def get_news_data(rss_urls=None, naver_queries=None):
                         stats['naver']['early_filtered'] += 1
                         continue
 
-                    log_info(f"        🔄 [{j}/{len(items)}] {title_preview}...")
-
-                    try:
-                        raw_link = item.get("originallink", item["link"])
-
-                        if not raw_link.startswith('http'):
-                            log_info(f"           ❌ 잘못된 URL")
-                            stats['naver']['failed'] += 1
-                            continue
-
-                        # 조기 도메인 블랙리스트 — Naver는 originallink로 실제 도메인 확인 가능
-                        _raw_domain = urlparse(raw_link).netloc.replace('www.', '').replace('m.', '')
-                        if any(_raw_domain == bd or _raw_domain.endswith('.' + bd) for bd in BLOCKED_DOMAINS):
-                            stats['naver']['early_filtered'] += 1
-                            continue
-
-                        final_link, source, success = get_final_url_and_source(raw_link)
-                        
-                        if success:
-                            stats['naver']['success'] += 1
-                            log_info(f"           ✅ 수집: {source}")
-                        else:
-                            stats['naver']['failed'] += 1
-                            failed_urls.append(raw_link)
-                            log_info(f"           ❌ 실패: URL 추출 오류")
-                        
-                        summary_hint = _clean_text_hint(item.get("description", ""))
-
-                        news_list.append({
-                            "title": clean_title,
-                            "link": final_link,
-                            "published": published_date,
-                            "source": source,
-                            "extraction_success": success,
-                            "summary": summary_hint,
-                            "content_hint_len": len(summary_hint),
-                        })
-                        
-                        time.sleep(0.1)
-                        
-                    except Exception as url_error:
+                    raw_link = item.get("originallink", item["link"])
+                    if not raw_link.startswith('http'):
                         stats['naver']['failed'] += 1
-                        log_info(f"           ❌ URL 오류: {str(url_error)[:50]}")
                         continue
-                        
+
+                    # 조기 도메인 블랙리스트 — Naver는 originallink로 실제 도메인 확인 가능
+                    _raw_domain = urlparse(raw_link).netloc.replace('www.', '').replace('m.', '')
+                    if any(_raw_domain == bd or _raw_domain.endswith('.' + bd) for bd in BLOCKED_DOMAINS):
+                        stats['naver']['early_filtered'] += 1
+                        continue
+
+                    _pending_naver.append({
+                        'title': clean_title,
+                        'raw_link': raw_link,
+                        'published': published_date,
+                        'summary': _naver_summary,
+                    })
+
                 except Exception as item_error:
                     stats['naver']['failed'] += 1
                     log_info(f"           ❌ 오류: {str(item_error)[:50]}")
                     continue
-                    
+
         except Exception as e:
             _naver_consecutive_failures += 1
             log_info(f"  ❌ 네이버 뉴스 API 실패: {str(e)[:100]}")
@@ -2576,6 +2519,31 @@ def get_news_data(rss_urls=None, naver_queries=None):
                 log_warning(f"  ⏭️  연속 {_naver_consecutive_failures}회 실패 — Naver 수집 조기 종료 (네트워크 불안정)")
                 break
             continue
+
+    # --- Phase B: URL 리졸브 병렬 처리 ---
+    log_info(f"\n  🔗 Naver 후보 {len(_pending_naver)}개 URL 병렬 리졸브 (동시 {_url_workers}개)...")
+
+    def _resolve_naver(p):
+        final_link, source, success = get_final_url_and_source(p['raw_link'])
+        return p, final_link, source, success
+
+    if _pending_naver:
+        with ThreadPoolExecutor(max_workers=_url_workers) as executor:
+            for p, final_link, source, success in executor.map(_resolve_naver, _pending_naver):
+                if success:
+                    stats['naver']['success'] += 1
+                else:
+                    stats['naver']['failed'] += 1
+                    failed_urls.append(p['raw_link'])
+                news_list.append({
+                    "title": p['title'],
+                    "link": final_link,
+                    "published": p['published'],
+                    "source": source,
+                    "extraction_success": success,
+                    "summary": p['summary'],
+                    "content_hint_len": len(p['summary']),
+                })
 
     log_info(f"\n📊 Naver News 통계:")
     log_info(f"    • 총 처리: {stats['naver']['total']}개")
