@@ -8200,11 +8200,32 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         ], severity='critical')
 
     # Phase 2: 룰 기반 단별 분류
+    #
+    # 주단(_primary_unit_id) 동점/근접 타이브레이커 — 2026-07-08 확인:
+    # "AX", "피지컬 AI" 등 범용 AI 파생어가 여러 단 키워드에 동시 매칭될 때,
+    # 단순 max()는 항상 AI융합표준단으로 쏠린다(실측: 표준혁신단 풀 44건 중
+    # 84%가 실제로는 타 단에 귀속돼 표준혁신단 DB 반영은 7건뿐). 매칭 점수 차이가
+    # PRIMARY_UNIT_TIE_MARGIN 이내인 근접 동점에서는, 만성적으로 후보가 적은 단
+    # (표준혁신단 > 표준기획단 > 전파네트워크표준단) 우선순위를 AI융합표준단보다
+    # 앞세워 귀속을 재분배한다. 완전한 우위(마진 밖) 매칭은 그대로 max()를 따른다.
+    PRIMARY_UNIT_TIE_MARGIN = 1
+    _underfilled_priority = ['standards_innovation', 'standards_planning', 'radio_network', 'ai_convergence']
+    _unit_priority_rank = {
+        uid: (_underfilled_priority.index(cfg['name'])
+              if cfg.get('name') in _underfilled_priority else len(_underfilled_priority))
+        for uid, cfg in unit_cfgs.items()
+    }
+
     log_info("[Phase 2] 룰 기반 단별 분류")
     for item in global_pool:
         tags = _classify_article_to_units(item['title'], unit_kw_map)
-        item['_unit_tags']       = tags
-        item['_primary_unit_id'] = max(tags, key=tags.get) if tags else None
+        item['_unit_tags'] = tags
+        if tags:
+            _top_score = max(tags.values())
+            _tied = [uid for uid, score in tags.items() if _top_score - score <= PRIMARY_UNIT_TIE_MARGIN]
+            item['_primary_unit_id'] = min(_tied, key=lambda uid: (_unit_priority_rank.get(uid, 99), -tags[uid]))
+        else:
+            item['_primary_unit_id'] = None
 
     unit_pools: dict = {}
     for uid in unit_cfgs:
