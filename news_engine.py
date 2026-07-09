@@ -3211,6 +3211,57 @@ def _extract_keyword_json(text: str) -> Optional[str]:
     return None
 
 
+# T0 실데이터(2,550건 90일 샘플) 기반 정규화 — 같은 대상의 표기 분산을 통합.
+# 포털 dashboard/radar_utils.py의 COUNTRY_NORMALIZE/COMPANY_NORMALIZE와 동일 기준.
+# 쓰기 시점(AI 분석 직후)에 정규화해 그래프·클러스터 라벨·매트릭스·GraphRAG가
+# 모두 일관된 표기를 쓰도록 한다 (기존에는 포털 표시 단계 일부 화면에서만 정규화되어
+# 그래프/보드 등 나머지 화면은 "삼성"/"삼성전자"처럼 분산된 표기를 그대로 노출했음).
+COUNTRY_NORMALIZE = {
+    "대한민국": "한국", "Korea": "한국", "South Korea": "한국",
+    "United States": "미국", "USA": "미국", "US": "미국",
+    "China": "중국", "中国": "중국",
+    "Japan": "일본",
+    "유럽": "유럽연합", "EU": "유럽연합",
+    "Iran": "이란",
+    "India": "인도",
+    "UK": "영국", "United Kingdom": "영국",
+}
+
+COMPANY_NORMALIZE = {
+    "NVIDIA": "엔비디아", "Nvidia": "엔비디아",
+    "Microsoft": "마이크로소프트",
+    "Anthropic": "앤트로픽",
+    "오픈AI": "OpenAI",
+    "Google": "구글",
+    "Apple": "애플",
+    "Samsung": "삼성전자", "Samsung Electronics": "삼성전자",
+    "현대차": "현대자동차", "현대차그룹": "현대자동차",
+    "Meta": "메타", "Amazon": "아마존",
+}
+
+
+def _normalize_entity_list(values, normalize_map: dict) -> list:
+    """표기 분산 통합 + 순서를 유지한 중복 제거."""
+    if not isinstance(values, list):
+        return values
+    seen = []
+    for v in values:
+        name = normalize_map.get(v, v) if isinstance(v, str) else v
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def normalize_extracted_entities(parsed: dict) -> dict:
+    """analyze_news_with_ai가 파싱한 keyword JSON의 기업/국가 필드를 쓰기 시점에 정규화.
+    parsed를 in-place로 갱신하고 그대로 반환한다."""
+    if isinstance(parsed.get('related_companies'), list):
+        parsed['related_companies'] = _normalize_entity_list(parsed['related_companies'], COMPANY_NORMALIZE)
+    if isinstance(parsed.get('target_countries'), list):
+        parsed['target_countries'] = _normalize_entity_list(parsed['target_countries'], COUNTRY_NORMALIZE)
+    return parsed
+
+
 @performance_monitor
 def analyze_news_with_ai(news_item, max_retries=3, ai_model: str = None):
     """
@@ -3481,9 +3532,10 @@ def analyze_news_with_ai(news_item, max_retries=3, ai_model: str = None):
                     keyword_json = _extract_keyword_json(analysis)
                     if keyword_json:
                         parsed = json.loads(keyword_json)
+                        parsed = normalize_extracted_entities(parsed)
                         # 원문에서 키워드 섹션 제거
                         analysis = re.sub(r'###\s*(?:\*\*)?3\.?\s*핵심\s*키워드.*', '', analysis, flags=re.DOTALL | re.IGNORECASE)
-                        news_item['extracted_keywords'] = keyword_json
+                        news_item['extracted_keywords'] = json.dumps(parsed, ensure_ascii=False)
                         # 새 고도화 항목 저장
                         news_item['impact_level'] = parsed.get('impact_level', 'Medium')
                         news_item['impact_reason'] = parsed.get('impact_reason', '')
