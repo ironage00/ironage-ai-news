@@ -104,11 +104,13 @@ CLAUDE_MODEL_DEFAULT = "claude-sonnet-4-6"
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 PERPLEXITY_MODEL_DEFAULT = "sonar-pro"
 
-# Phase B4: Phase 2.6 전역 선별(ai_select_articles) 전용 모델 — 제목+요약 목록에서
-# 번호를 고르는 판단 작업이라 심층분석(OPENAI_MODEL_DEFAULT)보다 가벼운 모델로 충분.
-# 실측 비교(gpt-4o vs gpt-4o-mini, 동일 후보 목록)에서 선별 결과·점수·사유 품질 동등
-# 확인 후 전환. CONFIG.selection_openai_model로 재정의 가능(문제 시 즉시 롤백용).
-OPENAI_SELECTION_MODEL_DEFAULT = "gpt-4o-mini"
+# Phase 2.6 전역 선별(ai_select_articles) 전용 모델.
+# 2026-07-04 B4로 gpt-4o-mini 다운그레이드 시도 → 7/4~7/5 이틀 연속 283개 규모에서
+# timeout=120s 초과(재시도를 꺼도 재현) 확인, gpt-4o로 롤백. 이후 2026-07-06부터
+# 지금까지 gpt-4o로 타임아웃 없이 안정 운영 확인되어 정식 채택(2026-07-10, 워크플로의
+# 임시 override였던 SELECTION_OPENAI_MODEL env var를 이 기본값으로 흡수).
+# CONFIG.selection_openai_model로 재정의 가능(문제 시 즉시 롤백용).
+OPENAI_SELECTION_MODEL_DEFAULT = "gpt-4o"
 
 # 단별 일일 뉴스레터 목표 기사 수 (Step Summary·scripts/eval_selection.py에서 공용)
 NEWSLETTER_TARGET = 20
@@ -1596,10 +1598,8 @@ def load_config():
         'jaccard_threshold_numeric': 0.5,
         'jaccard_threshold_text': 0.6,
         # Phase 2.6 선별 모델 override (심층분석 ai_model과 별개, 즉시 롤백용).
-        # 7/4~7/5 gpt-4o-mini가 283개 규모에서 이틀 연속 timeout=120s 초과 —
-        # 재시도(PR #18)를 꺼도 단일 시도 자체가 못 끝남. B4 다운그레이드 이전
-        # 이력상 gpt-4o는 유사 규모를 완주한 전례가 있어 우선 이 모델로 교체
-        # 테스트(섀도 모드라 뉴스레터 무영향). 비면 OPENAI_SELECTION_MODEL_DEFAULT 사용.
+        # 기본값은 OPENAI_SELECTION_MODEL_DEFAULT(gpt-4o, 2026-07-10 정식 채택).
+        # 비면 그 기본값 사용 — env var는 임시 실험/롤백 시에만 설정.
         'selection_openai_model': os.environ.get('SELECTION_OPENAI_MODEL', ''),
         # 하한 보충 품질 게이트 — True면 floor를 채울 때 비ICT/무신호 기사를 제외
         # (구 시스템 has_ict_keyword 이식). 후보 부족 단이 축구·홈쇼핑·연예 기사로

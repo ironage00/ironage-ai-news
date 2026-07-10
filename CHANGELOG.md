@@ -3,6 +3,26 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.14.0] - 2026-07-10
+
+### Fixed
+- **선별 모델 설정 drift 정정 (B4 "다운그레이드"가 실제로는 미적용 상태였음)**:
+  2026-07-04 B4에서 코드 기본값(`OPENAI_SELECTION_MODEL_DEFAULT`)을 gpt-4o-mini로
+  낮췄으나, 그 직후 timeout 재현으로 `.github/workflows/daily-collection.yml`에
+  `SELECTION_OPENAI_MODEL: gpt-4o` env var override를 추가해 임시 롤백한 채 그대로
+  방치됨 — "결과 보고 필요 없어지면 지우면 mini로 복귀" 주석만 남고 정식 결정이
+  없어, 2026-07-06부터 오늘(07-10)까지 나흘 넘게 **실제 운영은 계속 gpt-4o였는데
+  CHANGELOG·작업 기록엔 "gpt-4o-mini로 다운그레이드 완료"로 남아 있던 상태**.
+  사용자가 오늘 선별 개수 급감(211→34) 원인을 gpt-4o-mini 탓으로 의심해 재확인하며
+  발견. 실측(07-06~07-10 전 실행)상 gpt-4o가 타임아웃 없이 안정 운영된 것을
+  근거로 gpt-4o를 정식 채택: `OPENAI_SELECTION_MODEL_DEFAULT = "gpt-4o"`로 코드
+  기본값 변경, 워크플로의 임시 override 줄 제거(기본값이 이제 실제 운영값과 일치).
+  `tests/test_selection.py`의 "선별↔심층분석 모델 분리" 단언은 두 모델이 우연히
+  같아진 현재 설계와 맞지 않아 제거, 나머지 검증(기본 모델 사용·CONFIG override
+  즉시 롤백 가능)은 유지. 전체 145개 테스트 통과.
+  ⚠️ 이 변경은 "무엇이 실제로 돌고 있었는지"를 문서에 맞춘 것으로, 선별 동작
+  자체는 바뀌지 않음 — 07-10 선별 개수 급감의 근본 원인은 별도 조사 필요.
+
 ## [0.4.13.0] - 2026-07-08
 
 ### Performance
