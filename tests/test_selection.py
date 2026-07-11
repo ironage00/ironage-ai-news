@@ -19,7 +19,6 @@ from news_engine import (
     run_phase26_selection,
     ai_select_articles,
     OPENAI_SELECTION_MODEL_DEFAULT,
-    OPENAI_MODEL_DEFAULT,
 )
 
 
@@ -498,12 +497,14 @@ class _FakeClient:
         return _FakeResponse('{"selections": [{"index": 0, "score": 5, "reason": "x"}]}')
 
 
-def test_selection_uses_mini_model_by_default(monkeypatch):
+def test_selection_uses_default_model(monkeypatch):
+    # 2026-07-10: gpt-4o-mini는 283개 규모에서 timeout=120s 초과 재현되어
+    # gpt-4o로 확정(OPENAI_SELECTION_MODEL_DEFAULT). 심층분석 모델과 우연히
+    # 같아졌더라도, 선별이 CONFIG override 없이 이 상수를 쓰는지가 검증 대상.
     captured = []
     monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _FakeClient(captured))
     ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=5)
     assert captured == [OPENAI_SELECTION_MODEL_DEFAULT]
-    assert OPENAI_SELECTION_MODEL_DEFAULT != OPENAI_MODEL_DEFAULT  # 심층분석과 분리됐는지 확인
 
 
 def test_selection_model_config_override(monkeypatch):
