@@ -8006,6 +8006,41 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
         return unit_pools, info
 
     selected_map = {candidates[s['index']]['link']: s for s in selections}
+    info['retry_applied'] = False
+
+    # 선별 미달 시 1회 재시도 — LLM은 temperature=0.0이어도 완전 결정론적이지
+    # 않고, 후보 내용이 날마다 달라 "포함할 만하다"는 판단 임계값이 흔들린다.
+    # 2026-07-07(0.4.9.0)·2026-07-08(0.4.11.0) 프롬프트 조정으로도 완전히
+    # 잡히지 않고 2026-07-10 목표 150개 중 34개(23%)로 재발 — 프롬프트만으론
+    # 근본 해결이 안 되는 LLM 변동성이라 판단해 프로그램적 안전망 추가.
+    # 재시도 응답은 1차와 합집합(링크 기준)으로 병합 — 같은 후보 목록에서 다시
+    # 뽑으므로 겹치는 선택은 자연히 dedup되고, 1차가 놓친 것만 보강된다.
+    _retry_threshold = _safe_int(
+        int(float(CONFIG.get('selection_retry_threshold_pct', 50))), 50, 0, 100) / 100.0
+    if target and len(selected_map) < target * _retry_threshold:
+        _shortfall_pct = len(selected_map) / target
+        log_warning(f"[Phase 2.6] 선별 {len(selected_map)}개 — 목표 {target}개의 "
+                    f"{_shortfall_pct:.0%}만 충족, 1회 재시도")
+        try:
+            retry_selections = ai_select_articles(candidates, ai_model=ai_model, target_count=target)
+        except Exception as e:
+            retry_selections = []
+            log_warning(f"[Phase 2.6] 재시도 호출 실패 ({e}) — 1차 결과로 진행")
+        if retry_selections:
+            for s in retry_selections:
+                link = candidates[s['index']]['link']
+                selected_map.setdefault(link, s)
+            info['retry_applied'] = True
+            log_info(f"[Phase 2.6] 재시도 후 선별 {len(selected_map)}개 "
+                     f"(목표의 {len(selected_map) / target:.0%})")
+        if len(selected_map) < target * _retry_threshold:
+            _ops_alert('Phase 2.6 AI 선별 미달 (재시도 후에도)', [
+                f"모드: {mode} / 후보 {len(candidates)}개 → 목표 {target}개",
+                f"재시도 후 선별 {len(selected_map)}개 ({len(selected_map) / target:.0%})",
+                "선별은 섀도/활성 모두 뉴스레터엔 하한 보장(단별 floor)이 있어 발송에는 "
+                "영향 없으나, AI 선별 신호 자체가 오늘 유독 약했다는 뜻이라 원인 확인 권장.",
+            ], severity='warning')
+
     info['selected'] = len(selected_map)
     info['selected_links'] = set(selected_map.keys())
     # 섀도 계측용 — 링크→선별점수(1~5). Phase 3에서 impact_level과 조인해

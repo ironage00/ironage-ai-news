@@ -277,6 +277,45 @@ def test_active_mode_applies_floor(monkeypatch):
     assert info['supplemented'] == 14
 
 
+def test_underselection_triggers_retry_and_merges_results(monkeypatch):
+    """선별이 목표의 50% 미만이면 1회 재시도하고, 결과를 링크 기준으로 합친다."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
+    calls = []
+
+    def _flaky_select(articles, ai_model, target_count):
+        calls.append(target_count)
+        if len(calls) == 1:
+            return [{'index': 0, 'score': 3, 'reason': 'x'}]  # 1개뿐 — 목표(30) 대비 미달
+        return [{'index': 0, 'score': 3, 'reason': 'x'}, {'index': 1, 'score': 4, 'reason': 'y'}]
+
+    monkeypatch.setattr(news_engine, 'ai_select_articles', _flaky_select)
+    pools = _pools_with_tags()
+    new_pools, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+    assert len(calls) == 2                 # 재시도 1회만
+    assert info['retry_applied'] is True
+    assert info['selected'] == 2           # 1차(l0) + 재시도(l0, l1) 합집합
+    assert info['selected_links'] == {'l0', 'l1'}
+
+
+def test_sufficient_selection_skips_retry(monkeypatch):
+    """목표의 50% 이상이면 재시도하지 않는다."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
+    calls = []
+
+    def _select(articles, ai_model, target_count):
+        calls.append(1)
+        return [{'index': i, 'score': 3, 'reason': 'x'} for i in range(20)]  # 목표(30)의 66%
+
+    monkeypatch.setattr(news_engine, 'ai_select_articles', _select)
+    pools = _pools_with_tags()
+    _, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+    assert len(calls) == 1
+    assert info['retry_applied'] is False
+    assert info['selected'] == 20
+
+
 def test_off_mode_skips_everything(monkeypatch):
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'off')
     called = []
