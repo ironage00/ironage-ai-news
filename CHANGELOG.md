@@ -3,6 +3,23 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.15.0] - 2026-07-13
+
+### Changed
+- **선별 프롬프트 — score 2(산업계 핵심 동향) 최소 보장 추가**: SelectionLog
+  날짜별 score 분포 실측 결과, 좋았던 날(07-08: 178건 중 130건, 07-09: 194건 중
+  147건)은 score 2가 73~76%를 차지해 목표 150개 근접의 실질적 원동력이었는데,
+  저조한 날(07-10~12)엔 이 카테고리가 2~5건으로 급감해 전체 미달의 주범으로
+  확인됨. score 3~5(정책·표준·규제)는 날짜별로 비교적 안정적이라, 카테고리 기준
+  자체보다 "확신 없음"으로 AI가 score 2를 보수적으로 건너뛰는 판단 변동성이
+  원인으로 추정. 프롬프트에 `[카테고리별 최소 보장]` 섹션을 신설해 score 2를
+  최소 `max(10, round(target_count × selection_score2_min_ratio))`개(기본 비율
+  0.4 → target 150 기준 60개) 보장하도록 명시. `SELECTION_SCORE2_MIN_RATIO_DEFAULT`
+  상수 추가, `CONFIG.selection_score2_min_ratio`로 배포 없이 조정 가능.
+  `tests/test_selection.py`에 프롬프트 내용 검증 테스트 3건 추가(기본 비율·
+  CONFIG override·하한 10 고정 각각 확인, 총 150개 통과). 실제 개선 효과는
+  다음 daily 실행 로그(score=2 건수)로 확인 예정.
+
 ## [0.4.14.0] - 2026-07-10
 
 ### Fixed
