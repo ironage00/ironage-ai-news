@@ -515,6 +515,51 @@ def test_selection_model_config_override(monkeypatch):
     assert captured == ['gpt-4o']  # 설정으로 즉시 롤백 가능
 
 
+class _PromptCapturingClient:
+    """전체 kwargs(특히 messages)를 기록하는 가짜 OpenAI 클라이언트."""
+    def __init__(self, captured_kwargs):
+        self.captured_kwargs = captured_kwargs
+        self.chat = self
+        self.completions = self
+
+    def with_options(self, **kwargs):
+        return self
+
+    def create(self, model, **kwargs):
+        self.captured_kwargs.append(kwargs)
+        return _FakeResponse('{"selections": [{"index": 0, "score": 5, "reason": "x"}]}')
+
+
+def test_prompt_includes_score2_minimum_guarantee(monkeypatch):
+    """2026-07-13: score=2가 좋은 날 73~76%를 차지했다가 저조한 날 급감한 문제 —
+    프롬프트에 카테고리별 최소 보장 지침과 계산된 최소 개수가 실제로 들어가는지 검증."""
+    captured = []
+    monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _PromptCapturingClient(captured))
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=150)
+    prompt = captured[0]['messages'][1]['content']
+    assert '[카테고리별 최소 보장' in prompt
+    assert 'score 2' in prompt
+    assert '최소 60개' in prompt   # round(150 * 0.4) == 60 (기본 비율)
+
+
+def test_prompt_score2_minimum_respects_config_ratio(monkeypatch):
+    captured = []
+    monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _PromptCapturingClient(captured))
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_score2_min_ratio', 0.2)
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=150)
+    prompt = captured[0]['messages'][1]['content']
+    assert '최소 30개' in prompt   # round(150 * 0.2) == 30
+
+
+def test_prompt_score2_minimum_floor_of_10(monkeypatch):
+    """target_count가 작아도 최소 보장 하한 10 미만으로는 안 내려간다."""
+    captured = []
+    monkeypatch.setattr(news_engine, 'get_ai_client', lambda name: _PromptCapturingClient(captured))
+    ai_select_articles([{'title': '기사1'}], ai_model='openai', target_count=10)
+    prompt = captured[0]['messages'][1]['content']
+    assert '최소 10개' in prompt   # round(10 * 0.4)=4 < 10 → 하한 10 적용
+
+
 def test_selection_disables_sdk_retries(monkeypatch):
     """openai SDK 기본 max_retries=2 + timeout=120이 겹치면 타임아웃 시 최대
     6분까지 늘어나 daily 파이프라인을 지연시킨다(7/4 실 운영 관찰). 섀도 선별은
