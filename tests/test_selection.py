@@ -241,6 +241,7 @@ def _pools_with_tags():
 def test_shadow_mode_never_alters_pools(monkeypatch):
     """섀도 모드의 핵심 계약 — 뉴스레터(풀)에 절대 영향 없음."""
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
     monkeypatch.setattr(news_engine, 'ai_select_articles',
                         lambda *a, **k: [{'index': 0, 'score': 5, 'reason': 'x'}])
     monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
@@ -267,6 +268,7 @@ def test_active_mode_applies_floor(monkeypatch):
     """활성 모드: 선별 1개여도 하한(15)만큼 보충되어 풀이 비지 않는다."""
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'active')
     monkeypatch.setitem(news_engine.CONFIG, 'selection_unit_floor', 15)
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
     monkeypatch.setattr(news_engine, 'ai_select_articles',
                         lambda *a, **k: [{'index': 0, 'score': 5, 'reason': 'x'}])
     monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
@@ -280,6 +282,7 @@ def test_active_mode_applies_floor(monkeypatch):
 def test_underselection_triggers_retry_and_merges_results(monkeypatch):
     """선별이 목표의 50% 미만이면 1회 재시도하고, 결과를 링크 기준으로 합친다."""
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
     monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
     calls = []
 
@@ -301,6 +304,7 @@ def test_underselection_triggers_retry_and_merges_results(monkeypatch):
 def test_sufficient_selection_skips_retry(monkeypatch):
     """목표의 50% 이상이면 재시도하지 않는다."""
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
     monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
     calls = []
 
@@ -314,6 +318,54 @@ def test_sufficient_selection_skips_retry(monkeypatch):
     assert len(calls) == 1
     assert info['retry_applied'] is False
     assert info['selected'] == 20
+
+
+def test_hard_supplement_fills_shortfall_to_target(monkeypatch):
+    """재시도 후에도 미달이면, AI 판단과 무관하게 룰 기반(ICT 신호)으로 목표까지
+    강제 채운다 — 구 시스템(main6.93t/6.93f)의 '미달 시 무조건 보충' 이식."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
+    monkeypatch.setattr(news_engine, 'ai_select_articles',
+                        lambda *a, **k: [{'index': 0, 'score': 3, 'reason': 'x'}])
+    pools = _pools_with_tags()  # 30개 전부 ICT 신호 포함 → 하드 보충 자격 있음
+    _, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+    assert info['hard_supplemented'] == 29        # 1(AI) + 29(보충) = 목표 30
+    assert info['selected'] == 30
+    assert info['selected_links'] == {f'l{i}' for i in range(30)}
+
+
+def test_hard_supplement_respects_quality_gate(monkeypatch):
+    """보충 후보에도 품질 게이트가 적용되어 비ICT 쓰레기는 끌어오지 않는다 —
+    깨끗한 후보가 부족하면 목표 미달을 그냥 인정(쓰레기 강제 충원 금지)."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
+    monkeypatch.setattr(news_engine, 'ai_select_articles',
+                        lambda *a, **k: [{'index': 0, 'score': 3, 'reason': 'x'}])
+
+    def _mixed_pool():
+        clean = [{'link': f'c{i}', 'title': f'{i} 6G 표준 정책', '_unit_tags': {1: 1}} for i in range(3)]
+        junk = [{'link': f'j{i}', 'title': f'{i} 롯데홈쇼핑 완판', '_unit_tags': {1: 1}} for i in range(20)]
+        return {1: clean + junk}
+
+    pools = _mixed_pool()
+    _, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+    # AI가 c0(index 0)을 선택, 보충은 깨끗한 후보(c1, c2)만 — 쓰레기(j*)는 제외
+    assert info['selected_links'] == {'c0', 'c1', 'c2'}
+    assert info['hard_supplemented'] == 2
+    assert info['selected'] == 3   # 목표(23)에 크게 못 미쳐도 쓰레기로 채우지 않음
+
+
+def test_hard_supplement_disabled_via_config(monkeypatch):
+    """CONFIG.selection_hard_supplement_enabled=False면 즉시 롤백 — 기존 동작 유지."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
+    monkeypatch.setattr(news_engine, 'get_db_session', _fake_db_session)
+    monkeypatch.setattr(news_engine, 'ai_select_articles',
+                        lambda *a, **k: [{'index': 0, 'score': 3, 'reason': 'x'}])
+    pools = _pools_with_tags()
+    _, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+    assert info['hard_supplemented'] == 0
+    assert info['selected'] == 1
 
 
 def test_off_mode_skips_everything(monkeypatch):
