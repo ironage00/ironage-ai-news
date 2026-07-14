@@ -8111,6 +8111,32 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
                 "영향 없으나, AI 선별 신호 자체가 오늘 유독 약했다는 뜻이라 원인 확인 권장.",
             ], severity='warning')
 
+    # 전역 하드 보충 — 재시도로도 목표 미달이면 AI 판단과 무관하게 룰 기반으로
+    # 목표까지 강제 채운다. 구 시스템(main6.93t/6.93f, 1개 단·목표 30개 시절)의
+    # "선별된 뉴스가 30개 미만이면 ICT 필터링된 뉴스로 보충" 로직을 4단 체제(목표
+    # 150개)로 이식(2026-07-14) — score 프롬프트 지침(0.4.15.0)만으로는 AI의
+    # 판단 변동성을 못 이겼음이 실측으로 확인되어, 프롬프트가 아닌 프로그램
+    # 단계에서 확정적으로 보정한다. 하한 보충과 동일하게 품질 게이트
+    # (_is_floor_supplement_eligible)를 거쳐 오매칭 쓰레기는 배제하고, 깨끗한
+    # 후보가 부족하면 목표 미달을 그냥 인정한다(쓰레기 강제 충원 금지 원칙 유지).
+    info['hard_supplemented'] = 0
+    if bool(CONFIG.get('selection_hard_supplement_enabled', True)) and len(selected_map) < target:
+        _hs_gate = bool(CONFIG.get('selection_floor_quality_gate', True))
+        _hs_added = 0
+        for it in candidates:
+            if len(selected_map) >= target:
+                break
+            if it['link'] in selected_map:
+                continue
+            if _hs_gate and not _is_floor_supplement_eligible(it):
+                continue
+            selected_map[it['link']] = {'index': None, 'score': None, 'reason': '하한 보장 보충'}
+            _hs_added += 1
+        info['hard_supplemented'] = _hs_added
+        if _hs_added:
+            log_info(f"[Phase 2.6] 전역 하드 보충: {_hs_added}개 추가 → 선별 {len(selected_map)}개 "
+                     f"(목표의 {len(selected_map) / target:.0%})")
+
     info['selected'] = len(selected_map)
     info['selected_links'] = set(selected_map.keys())
     # 섀도 계측용 — 링크→선별점수(1~5). Phase 3에서 impact_level과 조인해
