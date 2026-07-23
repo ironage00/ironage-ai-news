@@ -35,3 +35,30 @@ def test_hard_junk_excluded_even_with_ict_acronym(title):
 def test_legit_ict_not_flagged_as_hard_junk(title):
     """정상 ICT 뉴스는 하드 정크로 오탐되지 않아야 한다(강한 마커 예외 유지)."""
     assert _reason(title) != 'hard_junk'
+
+
+# ── 2026-07-23: '전파'/'방송' 동음이의어 오탐 (전파네트워크표준단 키워드 오매칭) ──
+# 실제 뉴스레터 유입 사례: 정치인 발언(김장겸 의원), 문화 확산 홍보(CJ 태권도),
+# 방송사 평가 순위(방미통위) 기사가 전파네트워크표준단으로 분류·선별됨.
+
+@pytest.mark.parametrize('title,expected_reason', [
+    ('[전문] 김장겸 "공영방송, 총선 앞두고서는 더 악착같이 편파편향방송할', 'politics_partisan'),
+    ("CJ, 태권도로 베트남에 'K라이프스타일' 전파", 'culture_export_promo'),
+    ('방미통위, 2024 방송평가서 지상파 KBS1·종편 MBN 각각 1위', 'broadcast_industry_rating'),
+    ('KBS1, 지상파 방송평가 1위…종편은 MBN 최고점', 'broadcast_industry_rating'),
+])
+def test_jeonpa_bangsong_homonym_false_positives_now_filtered(title, expected_reason):
+    """'전파'(확산의 뜻)·'방송'(방송산업 자체) 오탐으로 전파네트워크표준단에
+    잘못 유입되던 비ICT 기사가 이제 수집 단계에서 제외된다."""
+    assert _reason(title) == expected_reason
+
+
+@pytest.mark.parametrize('title', [
+    '전파법 개정안 국회 통과, 5G 주파수 재배치 추진',
+    '방송통신위, AI 기반 재난방송 시스템 표준화 추진',
+    '전파진흥원, 전파자원 관리 계획 발표',
+])
+def test_jeonpa_compound_terms_still_pass_as_legit_ict(title):
+    """'전파'가 전파법/전파진흥 등 도메인 복합어로 쓰이면 여전히 정상 통과한다
+    (바레 '전파' 제거가 진짜 전파 관련 기사의 회수율을 해치지 않아야 함)."""
+    assert _reason(title) is None
