@@ -1170,10 +1170,17 @@ _NON_ICT_COLLECT_PATTERNS = {
         r'수출 실적|수출액|수출 증가|수출 감소|수출 호조|수출 부진|수출 목표|수출 역대',
         re.IGNORECASE,
     ),
-    # 2026-07-23 추가: "전파네트워크표준단" 키워드(방송/전파)가 정치 발언·방송
-    # 산업 평가 기사에 오매칭되어 뉴스레터까지 유입된 사례(김장겸 국회의원 발언,
-    # 방미통위 방송평가 순위)를 계기로 신설. 두 카테고리 모두 강한 ICT 마커
-    # (주파수·통신·표준화 등)와 무관하게 정치·방송산업 자체가 주제인 기사만 겨냥.
+}
+
+# 우선순위 비ICT 패턴 — 강한-ICT-마커 예외보다 먼저 판정(HARD_JUNK_OVERRIDE와 동급).
+# 2026-07-23 신설 당시 일반 _NON_ICT_COLLECT_PATTERNS(강한 마커 부재 시에만 적용)에
+# 넣었다가, 2026-07-27 실측으로 무효화 확인: 방송평가 기사는 감독기관 정식명칭
+# "방송통신위원회"를 거의 항상 인용하는데, 여기 포함된 '통신'이 바레 강한 마커라
+# 즉시 조기 반환(None)돼 아래 패턴이 아예 검사되지 않았음(재현: "TBN 교통방송,
+# 방송평가 9년 연속 1위" + "방송통신위원회가 실시한..." → 강한마커=['통신']로 통과).
+# 정치·방송산업·문화확산 주제 자체가 명백히 비ICT이므로, ITU=트라이애슬론과 같은
+# 성격의 강제 우선순위 판정으로 재분류.
+_PRIORITY_NON_ICT_PATTERNS = {
     'politics_partisan': re.compile(
         r'총선|국회의원|여야|정당|공천|탄핵|특검|국민의힘|더불어민주당|'
         r'공영방송.*편파|편파편향',
@@ -1232,6 +1239,12 @@ def _collect_stage_filter_reason(item: Dict) -> Optional[str]:
     # 하드 정크는 강한-ICT-마커 예외보다 먼저 판정 (ITU 트라이애슬론 등 약어 충돌 차단)
     if _HARD_JUNK_OVERRIDE.search(blob):
         return 'hard_junk'
+
+    # 우선순위 비ICT 패턴도 강한 마커보다 먼저 — '방송통신위원회'처럼 정식 명칭에
+    # 강한 마커('통신')가 우연히 포함된 정치·방송평가 기사가 새는 것을 차단.
+    for reason, pattern in _PRIORITY_NON_ICT_PATTERNS.items():
+        if pattern.search(blob):
+            return reason
 
     if any(marker in blob for marker in _COLLECT_STAGE_STRONG_ICT_MARKERS):
         return None

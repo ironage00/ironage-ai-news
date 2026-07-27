@@ -62,3 +62,38 @@ def test_jeonpa_compound_terms_still_pass_as_legit_ict(title):
     """'전파'가 전파법/전파진흥 등 도메인 복합어로 쓰이면 여전히 정상 통과한다
     (바레 '전파' 제거가 진짜 전파 관련 기사의 회수율을 해치지 않아야 함)."""
     assert _reason(title) is None
+
+
+# ── 2026-07-27: 방송평가 필터가 '방송통신위원회' 정식 명칭에 우회당하던 버그 ──
+# 실측 재현: "방송평가" 기사는 감독기관 정식명칭 "방송통신위원회"를 거의 항상
+# 인용하는데, 그 안의 '통신'이 바레 강한 마커라 즉시 조기 반환(None)돼 07-23에
+# 추가한 politics_partisan/broadcast_industry_rating/culture_export_promo가
+# 아예 검사되지 않았음(전파네트워크표준단 풀이 07-24 이후 계속 붕괴한 원인 중 하나).
+# 우선순위 비ICT 패턴(_PRIORITY_NON_ICT_PATTERNS)으로 승격해 하드 정크와 동급으로
+# 강한 마커보다 먼저 판정하도록 수정.
+
+@pytest.mark.parametrize('title,summary,expected_reason', [
+    ('TBN 교통방송, 방송평가 9년 연속 1위',
+     '방송통신위원회가 실시한 2024년도 방송평가에서 라디오 부문 1위를 차지했다',
+     'broadcast_industry_rating'),
+    ('KBS1, 지상파 방송평가 1위',
+     '방송통신위원회 발표에 따르면 종합편성채널 중 MBN이 최고점을 받았다',
+     'broadcast_industry_rating'),
+])
+def test_broadcast_rating_not_bypassed_by_commission_full_name(title, summary, expected_reason):
+    """summary에 '방송통신위원회'(강한 마커 '통신' 포함)가 있어도 방송평가
+    비ICT 판정이 강한 마커 예외에 우회당하지 않는다(우선순위 패턴으로 승격)."""
+    assert _reason(title, summary) == expected_reason
+
+
+@pytest.mark.parametrize('title', [
+    'SKT-KT, 5G 통신망 공동 구축 협력 발표',
+    '방송통신위원회, 5G 주파수 재할당 정책 발표',
+    '통신 3사 요금제 개편, 데이터 무제한 확대',
+    '과기정통부-방송통신위, AI 기반 재난방송 표준화 공동 추진',
+])
+def test_broadcast_priority_patterns_dont_catch_legit_telecom(title):
+    """우선순위 패턴 승격이 '방송통신위원회'를 언급하는 정상 통신·표준 기사까지
+    걸러내지 않아야 한다(politics_partisan/broadcast_rating/culture_export_promo
+    문구가 실제로 없으면 통과)."""
+    assert _reason(title) is None
