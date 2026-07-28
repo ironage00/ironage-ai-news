@@ -97,3 +97,33 @@ def test_broadcast_priority_patterns_dont_catch_legit_telecom(title):
     걸러내지 않아야 한다(politics_partisan/broadcast_rating/culture_export_promo
     문구가 실제로 없으면 통과)."""
     assert _reason(title) is None
+
+
+# ── 2026-07-28: 시상식 은유·제품 마케팅·군사 용어 커버리지 공백/동음이의어 ──
+# 사용자가 실제 뉴스레터 후보에서 발견한 4건. 그 중 2건('주파수'가 시상식
+# 화제성 은유, '전파인증'이 제품 출시 마케팅 부속 정보로 쓰인 경우)은 강한
+# 마커와 충돌해 우선순위 패턴으로 승격 필요했고, 나머지 2건은 순수 커버리지
+# 공백(강한 마커 없음, 기존 카테고리에 매칭 문구 부재)이었다.
+
+@pytest.mark.parametrize('title,expected_reason', [
+    ('"저런 옷입고 방송?" 화제의 기상캐스터 누구', 'culture_entertainment'),
+    ('삼성, 갤럭시 탭 S12·S26 FE 출격 임박…국내 전파인증 완료', 'product_launch_hype'),
+    ("[제5회 BSA] '꿀잼' 송신한 다섯 주파수…'청룡 안테나'가 향할 작품은?", 'entertainment_metaphor'),
+    ('이란 방송 "이라크 서부서 미군 드론 격추"', 'geopolitics_trade'),
+])
+def test_20260728_reported_false_negatives_now_filtered(title, expected_reason):
+    """기상캐스터 가십·제품 마케팅·시상식 은유·군사 드론 보도가 이제 수집
+    단계에서 정확히 제외된다."""
+    assert _reason(title) == expected_reason
+
+
+@pytest.mark.parametrize('title', [
+    '국립전파연구원, 전파인증 제도 개편…규제 완화',
+    'SK텔레콤, 6G 주파수 대역 실증 성공',
+    'ITU-R, 6G 표준 주파수 대역 논의 착수',
+    'KBS, 지상파 UHD 안테나 송출 방식 개선',
+])
+def test_entertainment_and_product_priority_patterns_dont_catch_legit_ict(title):
+    """entertainment_metaphor/product_launch_hype 승격이 진짜 전파·주파수·
+    안테나 정책/기술 기사까지 걸러내지 않아야 한다."""
+    assert _reason(title) is None
