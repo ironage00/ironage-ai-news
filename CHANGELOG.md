@@ -3,6 +3,27 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.20.0] - 2026-07-30
+
+### Added
+- **Phase 2.6 단별 floor 개별 override**: 그동안 `selection_unit_floor`(활성
+  모드에서 단별 최소 보장 기사 수)가 전역 스칼라 하나뿐이라 4개 단에 똑같이
+  적용됐음. 섀도 계측(최근 7일)에서 표준혁신단만 activate 전환 시 반복
+  회귀(4/5일 하락, 07-26 21→10·07-28 29→18로 충족→미달 역전)가 확인돼,
+  단 이름 키 기반 override(`selection_unit_floor_overrides`)를 추가하고
+  표준혁신단(`standards_innovation`)만 20으로 상향(나머지 3개 단은 전역
+  기본값 15 유지). 다른 Phase 2.6 스위치들과 동일하게 CONFIG 딕셔너리
+  값이라 스키마 변경 없이 즉시 롤백 가능.
+  - `_apply_unit_floor()`에 `floor_by_uid` 매개변수 추가 — 지정된 uid는
+    전역 floor 대신 override 값 사용, 나머지는 기존 동작 유지(하위호환).
+  - `run_phase26_selection()`이 `unit_cfgs[uid]['name']`으로 override를
+    조회해 uid 기반 딕셔너리로 변환 후 활성/섀도 두 호출부 모두에 전달.
+  - `tests/test_selection.py`에 override 적용·미스매치·None 케이스 3건
+    추가(전체 통과, 기존 테스트 회귀 없음 — override 대상 unit name을
+    쓰는 기존 테스트가 없어 충돌 없음 확인).
+  - 표준기획단은 이 변경으로 해결되지 않음(원인이 죽은 RSS 피드라 후보
+    자체가 부족 — 별도 조치 필요, 이전 조사 결과 참고).
+
 ## [0.4.19.0] - 2026-07-28
 
 ### Fixed
