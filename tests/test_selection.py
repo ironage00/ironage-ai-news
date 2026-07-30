@@ -125,6 +125,30 @@ def test_floor_multiple_units_independent():
     assert [it['link'] for it in new_pools[2]] == ['c']   # 선별 1개로 하한 충족
 
 
+# ── _apply_unit_floor 단별 floor override (2026-07-30, 표준혁신단 회귀 대응) ──
+
+def test_floor_by_uid_overrides_global_floor_for_target_unit():
+    """floor_by_uid에 있는 단은 전역 floor 대신 override 값을 쓴다."""
+    pools = {1: _pool(*[f'a{i}' for i in range(10)]), 2: _pool(*[f'b{i}' for i in range(10)])}
+    new_pools, _ = _apply_unit_floor(
+        pools, selected_links=set(), floor=5, floor_by_uid={2: 8})
+    assert len(new_pools[1]) == 5    # override 없음 → 전역 floor
+    assert len(new_pools[2]) == 8    # override 적용
+
+
+def test_floor_by_uid_missing_unit_falls_back_to_global_floor():
+    pools = {1: _pool(*[f'a{i}' for i in range(10)])}
+    new_pools, _ = _apply_unit_floor(
+        pools, selected_links=set(), floor=5, floor_by_uid={99: 20})
+    assert len(new_pools[1]) == 5
+
+
+def test_floor_by_uid_none_behaves_like_no_override():
+    pools = {1: _pool(*[f'a{i}' for i in range(10)])}
+    new_pools, _ = _apply_unit_floor(pools, selected_links=set(), floor=5, floor_by_uid=None)
+    assert len(new_pools[1]) == 5
+
+
 # ── _apply_unit_floor 품질 게이트 (구 시스템 has_ict_keyword 이식) ─────────────
 
 def _art(link, title):

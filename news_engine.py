@@ -1662,6 +1662,10 @@ def load_config():
         # (구 시스템 has_ict_keyword 이식). 후보 부족 단이 축구·홈쇼핑·연예 기사로
         # 억지 충원되던 문제 차단. 문제 시 False로 즉시 롤백.
         'selection_floor_quality_gate': True,
+        # 단별 floor override (unit.name 키, 값 없으면 selection_unit_floor 전역값 사용).
+        # 2026-07-30: 섀도 계측에서 표준혁신단이 활성 전환 시 4/5일 회귀(충족→미달,
+        # 예: 21→10, 29→18)로 확인돼 목표치(20)로 상향. 문제 시 빈 dict로 롤백.
+        'selection_unit_floor_overrides': {'standards_innovation': 20},
         # ── 운영 알림 (α) — 관리자 전용 통보 ──────────────────────────────
         'ops_alert_enabled': True,
         'ops_alert_email': 'ironage@tta.or.kr',   # 쉼표 구분으로 복수 지정 가능
@@ -7520,6 +7524,9 @@ def _classify_article_to_units(title: str, unit_kw_map: dict) -> dict:
 #   selection_mode: 'shadow'(기록만, 기본) | 'active'(뉴스레터 반영) | 'off'
 #   daily_global_select_count: 전역 선별 목표 개수 (기본 150 — 단별 배정 후 잔여분은 기타뉴스 활용)
 #   selection_unit_floor: 활성 모드에서 단별 최소 보장 기사 수 (기본 15)
+#   selection_unit_floor_overrides: 단별 floor 개별 override ({unit.name: floor}).
+#     섀도 계측에서 특정 단이 전역 floor로는 반복 미달할 때만 개별 상향
+#     (2026-07-30: standards_innovation=20 — 상세 근거는 함수 본문 주석 참고)
 # ==============================================================================
 
 # AI 선별에 전달할 최대 후보 수. gpt-4o-mini는 input이 저렴하고 컨텍스트 128k라
@@ -7732,12 +7739,15 @@ def _is_floor_supplement_eligible(item: Dict) -> bool:
 
 
 def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int,
-                      quality_gate: bool = False) -> tuple:
+                      quality_gate: bool = False, floor_by_uid: dict = None) -> tuple:
     """활성 모드용 단별 하한 보장 (순수 함수).
 
     각 단 풀을 [선별 기사(원래 순서 유지)] + [하한 미달 시 미선별 기사 보충]으로
     재구성한다. 과거 과압축(258→9) 재발 방지 장치 — 선별이 과하게 걸러도
     단별 최소 floor개(풀이 그보다 작으면 풀 전체)는 항상 남는다.
+
+    floor_by_uid는 {uid: floor} override — 있으면 해당 단은 전역 floor 대신
+    이 값을 쓴다(만성 회귀 단만 개별 상향할 때 사용, 나머지는 전역 floor 유지).
 
     quality_gate=True면 보충 후보에 품질 게이트(_is_floor_supplement_eligible)를
     적용해, 후보가 적은 단에서 floor를 채우려고 키워드 오매칭 쓰레기(축구·홈쇼핑·연예)를
@@ -7747,13 +7757,15 @@ def _apply_unit_floor(unit_pools: dict, selected_links: set, floor: int,
     Returns:
         (new_pools: dict, supplemented_links: set)
     """
+    floor_by_uid = floor_by_uid or {}
     new_pools: dict = {}
     supplemented: set = set()
     for uid, pool in unit_pools.items():
+        _floor = floor_by_uid.get(uid, floor)
         picked = [it for it in pool if it['link'] in selected_links]
-        if len(picked) < floor:
+        if len(picked) < _floor:
             for it in pool:
-                if len(picked) >= floor:
+                if len(picked) >= _floor:
                     break
                 if it['link'] in selected_links:
                     continue
@@ -8115,6 +8127,14 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     target = _safe_int(CONFIG.get('daily_global_select_count', 150), 150, 10, len(candidates))
     # 하한은 최소 1 보장 — floor=0 설정 시 과압축(258→9) 재발 경로가 되살아남
     floor = _safe_int(CONFIG.get('selection_unit_floor', 15), 15, 1, 50)
+    # 단별 floor override(selection_unit_floor_overrides, unit.name 키) — 만성 회귀
+    # 단만 개별 상향. uid로 변환해 _apply_unit_floor에 전달.
+    _floor_overrides_by_name = CONFIG.get('selection_unit_floor_overrides', {}) or {}
+    floor_by_uid = {
+        uid: _safe_int(_floor_overrides_by_name[cfg['name']], floor, 1, 50)
+        for uid, cfg in unit_cfgs.items()
+        if cfg.get('name') in _floor_overrides_by_name
+    }
     log_info(f"[Phase 2.6] 전역 AI 선별 (mode={mode}, 후보 {len(candidates)}개 → 목표 {target}개)")
 
     try:
@@ -8212,7 +8232,8 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     supplemented: set = set()
     if mode == 'active':
         unit_pools, supplemented = _apply_unit_floor(
-            unit_pools, set(selected_map), floor, quality_gate=_floor_gate)
+            unit_pools, set(selected_map), floor, quality_gate=_floor_gate,
+            floor_by_uid=floor_by_uid)
         info['supplemented'] = len(supplemented)
 
     # 섀도/활성 공통: selection_log 기록 (실패해도 파이프라인 영향 없음)
@@ -8245,7 +8266,8 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     # '전환 시 단별로 실제 몇 개가 남는지'를 정직하게 기록 (풀은 변경하지 않음)
     if mode == 'shadow':
         _sim_pools, _sim_supp = _apply_unit_floor(
-            unit_pools, set(selected_map), floor, quality_gate=_floor_gate)
+            unit_pools, set(selected_map), floor, quality_gate=_floor_gate,
+            floor_by_uid=floor_by_uid)
         info['supplemented'] = len(_sim_supp)
         for uid, pool in unit_pools.items():
             picked = sum(1 for it in pool if it['link'] in selected_map)
