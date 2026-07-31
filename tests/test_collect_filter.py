@@ -127,3 +127,27 @@ def test_entertainment_and_product_priority_patterns_dont_catch_legit_ict(title)
     """entertainment_metaphor/product_launch_hype 승격이 진짜 전파·주파수·
     안테나 정책/기술 기사까지 걸러내지 않아야 한다."""
     assert _reason(title) is None
+
+
+# ── 2026-07-31: 라이브커머스 매출 홍보·K팝 음악방송 순위 커버리지 공백 ────────
+# 사용자가 뉴스레터 후보에서 발견해 신고. 둘 다 강한 마커 충돌이 아니라
+# 순수 커버리지 공백('방송'은 강한 마커가 아니라 다른 검사가 아예 안 걸림).
+
+@pytest.mark.parametrize('title,expected_reason', [
+    ("LF몰, 한여름 '역시즌 세일' 적중… 라이브 방송 역대 최고 매출 달성", 'marketing_promo'),
+    ("제니, '레스 댄 어 러버'로 '엠카' 1위⋯방송 출연 없이 음악방송 1위", 'culture_entertainment'),
+])
+def test_20260731_reported_false_negatives_now_filtered(title, expected_reason):
+    """라이브커머스 매출 홍보·K팝 음악방송 순위 기사가 이제 수집 단계에서
+    정확히 제외된다."""
+    assert _reason(title) == expected_reason
+
+
+@pytest.mark.parametrize('title', [
+    'SK텔레콤, 라이브 커머스 플랫폼 T딜 매출 두 배 성장',
+    '네이버, AI 기반 라이브 커머스 추천 시스템 고도화',
+])
+def test_live_commerce_marketing_pattern_requires_bangsong_not_commerce(title):
+    """'라이브 방송'(마케팅 홍보성 표현)만 잡고 '라이브 커머스'(플랫폼 기술
+    기사에 흔한 표현)는 건드리지 않아야 한다."""
+    assert _reason(title) is None
