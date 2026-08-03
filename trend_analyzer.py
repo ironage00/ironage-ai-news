@@ -120,6 +120,54 @@ def _build_title_link_map(articles: List[Dict]) -> Dict[str, str]:
     }
 
 
+def _stratified_daily_sample(
+    articles: List[Dict],
+    per_day_limit: int = 30,
+    date_field: str = 'collected_at',
+) -> List[Dict]:
+    """날짜별로 최대 per_day_limit건씩 뽑아 특정 날짜(주로 최근) 편중을 막는다.
+
+    articles는 date_field 기준 내림차순(최신 우선)으로 정렬돼 들어온다고 가정 —
+    같은 날짜 내에서는 그 순서(최신 우선)를 그대로 유지한 채 앞에서부터 자른다.
+
+    Why: load_news_from_db()가 collected_at DESC로 반환하는데, 기존엔
+    articles[:100]으로 단순 truncate — 하루 100~180건씩 쌓이는 상황에서
+    "최근 100건"이 사실상 최근 1일치뿐이라, 7일 전체를 봐야 할 "핵심 이슈"가
+    최근 1~2일 뉴스에만 편중되는 회귀가 있었다(2026-08-03 발견).
+    """
+    by_day: Dict[str, List[Dict]] = defaultdict(list)
+    order: List[str] = []  # 날짜 최초 등장 순서(최신 날짜부터) 보존
+    for a in articles:
+        raw = a.get(date_field) or a.get('published') or ''
+        day = str(raw)[:10]
+        if day not in by_day:
+            order.append(day)
+        by_day[day].append(a)
+
+    sampled: List[Dict] = []
+    for day in order:
+        sampled.extend(by_day[day][:per_day_limit])
+    return sampled
+
+
+def _build_news_summaries(articles: List[Dict], enriched: set) -> List[str]:
+    """전체 기사를 번호 매겨 나열 — 어떤 기사도 목록에서 빠지지 않는다(제목 단위 전체 커버).
+    enriched(주로 _stratified_daily_sample 결과의 id() 집합)에 포함된 기사만
+    분석 스니펫(최대 500자)을 덧붙여 프롬프트 크기를 관리한다.
+
+    Why: 날짜별 상한만으로 뉴스 목록 자체를 잘라내면(예전 articles[:100]과 동일한
+    문제) 상한 밖 기사의 이슈가 아예 반영될 기회를 잃는다. 제목은 전부 보여주고
+    분석 깊이만 선별하면 "빠지는 이슈 없음"과 "프롬프트 크기 관리"를 동시에 만족.
+    """
+    summaries = []
+    for i, article in enumerate(articles, 1):
+        summary = f"{i}. [{article.get('source', 'Unknown')}] {article.get('title', '')}"
+        if id(article) in enriched and article.get('analysis_result'):
+            summary += f"\n   분석: {article['analysis_result'][:500]}"
+        summaries.append(summary)
+    return summaries
+
+
 def _run_dual_ai_analysis(
     initial_prompt: str,
     validation_prompt_builder,
@@ -169,12 +217,12 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
     stats = generate_statistics_data(articles, period_days=7)
     title_link_map = _build_title_link_map(articles)
 
-    news_summaries = []
-    for i, article in enumerate(articles[:100], 1):
-        summary = f"{i}. [{article.get('source', 'Unknown')}] {article.get('title', '')}"
-        if article.get('analysis_result'):
-            summary += f"\n   분석: {article['analysis_result'][:500]}"
-        news_summaries.append(summary)
+    # 전체 기사를 제목 단위로는 빠짐없이 나열하되(모든 이슈가 반영 기회를 갖도록),
+    # 날짜별 최대 30건까지만 분석 스니펫을 덧붙여 프롬프트 크기를 관리한다.
+    # (articles[:100] 단순 truncate는 최근 1~2일에 편중돼 그 이전 뉴스가 아예
+    # 반영되지 않는 문제가 있었음 — _stratified_daily_sample/_build_news_summaries 참고)
+    enriched_ids = {id(a) for a in _stratified_daily_sample(articles, per_day_limit=30)}
+    news_summaries = _build_news_summaries(articles, enriched_ids)
 
     news_text = "\n".join(news_summaries)
 
