@@ -3,6 +3,30 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.22.0] - 2026-08-04
+
+### Fixed
+- **전파네트워크표준단 ETSI/3GPP 죽은 피드**: 65개 RSS 피드 전수 재점검(17개
+  0건 확인)에서 발견한 2건 처리.
+  - **ETSI 제거**: 기존 Joomla RSS 엔드포인트(`?option=com_obrss&...`)가
+    지금은 홈페이지 HTML을 반환(RSS 아님). 대체 URL(`/news-events/news/rss`)도
+    404, Joomla 표준 패턴(`?format=feed&type=rss`) 여러 경로도 전부 실패,
+    뉴스룸 페이지 HTML에 RSS 링크·아이콘 자체가 없어 ETSI가 사이트 리뉴얼
+    과정에서 RSS를 완전히 없앤 것으로 판단. 대체 URL 없이 제거.
+  - **3GPP 교체**: 기존 항목은 Google Alerts "3GPP" 키워드 구독이었는데
+    지속적으로 0건이라 3GPP 공식 뉴스 RSS(`3gpp.org/news-events/3gpp-news
+    ?format=feed&type=rss`)로 교체. 저장 직전 검증에서 3gpp.org 서버가
+    간헐적 522(오리진 응답 없음)를 보였으나, 최초 확인 시 정상(200, 22건)이었고
+    운영 파이프라인은 매일 재시도하므로 일시적 불안정으로 판단해 그대로 반영.
+  - DB 운영 설정(`user_settings`, 전파네트워크표준단)과 소스 코드의 기본값
+    폴백 목록(`load_config()._default_rss`, config.json 없을 때만 쓰이는
+    비활성 경로) 양쪽 다 반영.
+  - 표준기획단 5개(CEN/CENELEC·JTC 3·Rolling Plan·SC42·StandICT.eu)와
+    AI융합표준단 10개(AI 보안·AI반도체·AI신뢰 안전·CJK·블록체인·빅데이터·
+    생체인식·정보보안·피지컬 AI·한중일 IT 협력)는 전부 Google Alerts
+    구독 자체가 죽은 것으로, Google 계정 UI에서 재구독이 필요해 이번
+    변경 범위 밖(별도 조치 필요).
+
 ## [0.4.21.0] - 2026-07-31
 
 ### Fixed
