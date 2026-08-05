@@ -1613,7 +1613,10 @@ def load_config():
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487599294",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/7282625974461397688",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487600193",
-        "https://www.google.co.kr/alerts/feeds/14299983816346888060/2091321787487600258",
+        # 2026-08-04: 이 자리의 원래 Google Alerts "3GPP" 구독이 0건 고정이라
+        # (전파네트워크표준단 65개 피드 전수 재점검에서 확인) 3GPP 공식 뉴스 RSS로
+        # 교체. DB 운영 설정(user_settings)도 동일하게 교체 완료.
+        "https://www.3gpp.org/news-events/3gpp-news?format=feed&type=rss",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/6144919849490706746",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/13972650129806487379",
         "https://www.google.co.kr/alerts/feeds/14299983816346888060/12348804382892789873",
@@ -1623,7 +1626,9 @@ def load_config():
         "https://www.itu.int/hub/feed/",
         "https://www.itu.int/hub/feed/?cat=itu-t",
         "https://www.itu.int/hub/feed/?cat=itu-r",
-        "https://www.etsi.org/?option=com_obrss&task=feed&id=2:rss-news-press&format=feed&Itemid=1094",
+        # 2026-08-04: 옛 ETSI RSS 엔드포인트(com_obrss)가 지금은 홈페이지 HTML을
+        # 반환(RSS 아님) — ETSI가 사이트 리뉴얼로 RSS 자체를 없앤 것으로 보임.
+        # 대체 URL을 찾지 못해 제거(DB 운영 설정도 동일하게 제거 완료).
         "https://ieeetv.ieee.org/channel_rss/ieee_future_networks/rss",
         "https://ieeetv.ieee.org/channel_rss/series_channel_9/rss",
         "https://api2.fcc.gov/api/exp/v1.0.0/edocspublic/rss/bureaus/SB",
