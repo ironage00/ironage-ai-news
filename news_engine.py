@@ -8315,6 +8315,46 @@ def _impact_at_least(level: Optional[str], min_level: str = 'High') -> bool:
     return lv >= floor
 
 
+# 표준화 연계성 신호용 — 표준기구 언급 탐지 (2026-08-05, 단 내부 노출 순위 재정렬).
+_STANDARD_BODIES = [
+    '3GPP', 'ITU', 'ITU-R', 'ITU-T', 'IEEE', 'ETSI', 'MPEG', 'oneM2M',
+    'IETF', 'ISO', 'IEC', 'ATIS', 'CCSA', 'ARIB', 'TSDSI', 'TTA',
+]
+
+
+def _newsletter_rank_key(article: dict, uid) -> tuple:
+    """단 내부 뉴스레터 노출 순위 키 — (영향등급, 표준화 연계 신호, 룰 점수) 내림차순.
+
+    2026-08-05: 상위 20건 컷이 그동안 Phase 2 룰 점수(제목 키워드 카운트) 순서를
+    그대로 물려받아, impact_level=High로 이미 필터를 통과한 기사도 제목에 단
+    키워드가 한 번만 매칭되면(예: 국제 지정학 기사에 "6G" 한 단어만 포함) 하위로
+    밀려 "추가 수집 뉴스"로 넘어가던 문제 대응(실측: 미중 6G 표준경쟁 기사가
+    룰점수=1로 컷됨). impact_level만으로는 Critical/High 두 단계뿐이라 동일
+    등급 내 변별력이 없어, 표준화기구 언급·TTA 검토과제/표준화 격차 필드
+    실질 기입 여부를 2차 신호로 추가. 룰 점수는 최종 타이브레이커로만 남겨
+    기존 동작을 최대한 보존한다. 새 LLM 호출 없이 이미 분석된 필드만 사용.
+    """
+    impact_rank = _IMPACT_RANK.get(str(article.get('impact_level') or '').strip().lower(), 0)
+
+    _text = ' '.join([
+        str(article.get('title') or ''),
+        str(article.get('tta_action_item') or ''),
+        str(article.get('standardization_gap') or ''),
+        str(article.get('impact_reason') or ''),
+    ]).lower()
+    std_hits = sum(1 for body in _STANDARD_BODIES if body.lower() in _text)
+    _gap = str(article.get('standardization_gap') or '').strip()
+    std_fields = (
+        (1 if str(article.get('tta_action_item') or '').strip() else 0)
+        + (1 if _gap and _gap != '기사에서 표준화 현황 정보 미확인' else 0)
+    )
+    standardization_signal = min(std_hits, 3) + std_fields
+
+    rule_score = (article.get('_unit_tags') or {}).get(uid, 0)
+
+    return (impact_rank, standardization_signal, rule_score)
+
+
 # ==============================================================================
 # --- Level 3 최적화 파이프라인 ---
 # ==============================================================================
@@ -8604,6 +8644,9 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         _pool = unit_pools.get(_uid, [])[:_TOP]
         _analyzed = [analysis_cache[it['link']] for it in _pool if it['link'] in analysis_cache]
         _kept = [a for a in _analyzed if _impact_at_least(a.get('impact_level'), _min_impact)]
+        # 룰 점수(제목 키워드 카운트) 순서 그대로 컷하지 않고, impact_level·표준화
+        # 연계 신호를 우선한 순위로 재정렬 후 상위 20건을 뽑는다(2026-08-05).
+        _kept.sort(key=lambda a, _u=_uid: _newsletter_rank_key(a, _u), reverse=True)
         _all_unit_analyzed[_uid] = _kept[:20]
 
     # Phase 3.6: 키워드 기반 의미적 중복 클러스터링 (타이틀 유사도로 잡히지 않는 동일 주제 제거)

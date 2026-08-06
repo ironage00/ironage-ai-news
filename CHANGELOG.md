@@ -3,6 +3,29 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.23.0] - 2026-08-05
+
+### Fixed
+- **단 내부 뉴스레터 노출 순위가 룰 점수(제목 키워드 카운트)만으로 정해지던
+  문제**: 사용자가 tta-trend-portal의 "Executive Brief"에서는 최상단인 기사가
+  이 시스템에서는 "추가 수집 뉴스"(기타뉴스)로 밀려나 있다고 신고. 추적 결과
+  상위 20건 컷(`_all_unit_analyzed`)이 impact_level≥High 필터를 통과한 기사도
+  `unit_pools[uid][:_TOP]`의 룰 점수 순서를 그대로 물려받아 결정됨을 확인.
+  실측: "[동북아 정세 브리핑] 미중 경쟁, 남중국해·공급망·6G로 확전" 기사는
+  `impact_level=High`로 필터는 통과했지만 제목에 단 키워드가 "6G" 한 번만
+  매칭돼 룰점수=1 → 20위 밖으로 밀려 컷됨.
+  - `_newsletter_rank_key(article, uid)` 추가: `(impact_rank, 표준화_신호,
+    룰점수)` 튜플 내림차순 정렬. tta-trend-portal의 5축 가중합 방식을 검토했으나
+    ICT 관련성·최신성 축은 이미 필터된 후보군엔 변별력이 없고(모두 비슷한 값),
+    긴급도 축은 본문 term-counting이라 지금 고치려는 문제(얕은 키워드 카운트
+    의존)를 본문에서 반복하는 것이라 채택하지 않음. 대신 이미 LLM이 판단한
+    impact_level을 1순위로, 표준화기구 언급·TTA 검토과제/표준화 격차 필드
+    실질 기입 여부를 2차 신호로, 기존 룰 점수는 최종 타이브레이커로만 사용 —
+    가중치 캘리브레이션 부채 없이 기존 동작을 최대한 보존.
+  - `_all_unit_analyzed` 컷 직전에 `_kept.sort(key=_newsletter_rank_key, ...)`
+    추가 (news_engine.py:8642-8650). 새 LLM 호출 없이 이미 분석된 필드만 사용.
+  - `tests/test_newsletter_ranking.py` 신규 7건 — 실측 사례 재현 포함.
+
 ## [0.4.22.0] - 2026-08-04
 
 ### Fixed
