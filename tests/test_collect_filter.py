@@ -143,6 +143,38 @@ def test_20260731_reported_false_negatives_now_filtered(title, expected_reason):
     assert _reason(title) == expected_reason
 
 
+# ── 2026-08-05: K-산업 전파·위성사진 탐사보도·SNS 사건사고·종목 ETF 4건 ──────
+# 전파네트워크표준단 뉴스레터에서 사용자가 발견해 신고. 2건('위성사진'이 세무
+# 탐사보도 증거, '위성'/'통신'이 종목 섹터명)은 강한 마커 충돌이라 우선순위
+# 패턴으로 승격, 나머지 2건은 순수 커버리지 공백.
+
+@pytest.mark.parametrize('title,expected_reason', [
+    ("몽골에 K-가스안전 전파… 민관 합동 가스 산업 '영토 확장'", 'culture_export_promo'),
+    ("[세미콜론] 위성사진에 굴착기는 없었다…확인 한 번에 '법인세 수억원", 'satellite_imagery_investigation'),
+    ('한국 거주 일본인 인플루언서, SNS 라이브 방송 중 사망', 'culture_entertainment'),
+    ('주춤한 우주ETF … 돈 되는 위성통신株로 확장 - 매일경제 마켓', 'stock_sector_etf_play'),
+])
+def test_20260805_reported_false_negatives_now_filtered(title, expected_reason):
+    """K-산업 확산 홍보·위성사진 탐사보도·SNS 사건사고·종목 ETF 기사가 이제
+    수집 단계에서 정확히 제외된다."""
+    assert _reason(title) == expected_reason
+
+
+@pytest.mark.parametrize('title', [
+    '국립전파연구원, 전파인증 제도 개편…규제 완화',
+    '위성통신 사업자, 5G 백홀 구축 확대',
+    '국세청, AI 기반 세무조사 시스템 도입',
+    'SK텔레콤, 6G 주파수 대역 실증 성공',
+    'ITU-R, 6G 표준 주파수 대역 논의 착수',
+    '과기정통부, 저궤도 위성통신 국가 R&D 예산 확대',
+])
+def test_20260805_priority_patterns_dont_catch_legit_ict(title):
+    """satellite_imagery_investigation/stock_sector_etf_play 승격과
+    culture_export_promo/culture_entertainment 확장이 정상 위성통신·전파
+    정책/기술 기사, 세무조사 단독 기사까지 걸러내지 않아야 한다."""
+    assert _reason(title) is None
+
+
 @pytest.mark.parametrize('title', [
     'SK텔레콤, 라이브 커머스 플랫폼 T딜 매출 두 배 성장',
     '네이버, AI 기반 라이브 커머스 추천 시스템 고도화',
