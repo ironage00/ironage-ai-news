@@ -9,8 +9,19 @@
 아예 빠져 여전히 이슈를 놓칠 수 있다는 지적에 따라, _build_news_summaries가
 전체 기사를 제목 단위로는 빠짐없이 나열하고 날짜별 상한 대상만 분석 스니펫을
 덧붙이는 방식으로 보완했다.
+
+2차 수정(_unit_balanced_enriched_ids): 날짜별 상한만으로는 단(unit) 편중을
+막지 못한다 — 뉴스 절대량이 큰 단(AI융합표준단)이 날짜별 상한 안에서도 표본을
+독점해, 위성통신·6G처럼 특정 단(전파네트워크표준단)에 집중된 주제가 실제로는
+매일 보도됐음에도 주간 핵심 이슈에서 통째로 빠지는 회귀가 있었다(2026-08-10
+사용자 리포트로 발견).
 """
-from trend_analyzer import _build_news_summaries, _stratified_daily_sample
+import trend_analyzer
+from trend_analyzer import (
+    _build_news_summaries,
+    _stratified_daily_sample,
+    _unit_balanced_enriched_ids,
+)
 
 
 def _article(day: str, idx: int, **extra) -> dict:
@@ -119,3 +130,97 @@ class TestBuildNewsSummaries:
 
     def test_empty_articles(self):
         assert _build_news_summaries([], enriched=set()) == []
+
+
+def _unit_article(day: str, idx: int, unit_id) -> dict:
+    return {
+        'title': f'{day}-{idx}-u{unit_id}',
+        'collected_at': f'{day} {23 - idx:02d}:00',
+        'unit_id': unit_id,
+    }
+
+
+class TestUnitBalancedEnrichedIds:
+    def _mock_units(self, monkeypatch, ids=(1, 2, 3, 4)):
+        monkeypatch.setattr(trend_analyzer, 'get_all_units', lambda: [{'id': i} for i in ids])
+
+    def test_minority_unit_survives_dominant_unit_same_day(self, monkeypatch):
+        """실제 회귀 재현: 같은 날 안에서 절대량이 큰 단(3)의 기사가 먼저 나열되면
+        날짜별 상한(30)만으로는 소수 단(4)의 기사가 통째로 잘려나간다 —
+        단별 안배가 이를 막아야 한다."""
+        self._mock_units(monkeypatch)
+        day = '2026-08-06'
+        # 단3(AI) 40건이 그날 앞쪽(더 최신)을 모두 차지, 단4(전파망) 5건은 뒤쪽
+        articles = [_unit_article(day, i, unit_id=3) for i in range(40)]
+        articles += [_unit_article(day, i, unit_id=4) for i in range(40, 45)]
+
+        day_only = {id(a) for a in _stratified_daily_sample(articles, per_day_limit=30)}
+        assert not any(a['unit_id'] == 4 for a in articles if id(a) in day_only), \
+            "재현 전제: 날짜별 상한만으로는 단4가 전부 잘려야 함"
+
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=20)
+        unit4_enriched = [a for a in articles if a['unit_id'] == 4 and id(a) in enriched]
+        assert len(unit4_enriched) == 5  # 단4 전체(5건, 20건 미만이라 전부 확보)
+
+    def test_per_unit_cap_enforced_when_unit_has_more_than_min(self, monkeypatch):
+        """fill_per_day_limit=0으로 나머지 채움 단계를 비활성화해 단별 확보
+        단계 자체가 정확히 per_unit건에서 멈추는지만 격리해서 확인한다."""
+        self._mock_units(monkeypatch, ids=(1, 2))
+        articles = [_unit_article('2026-08-06', i, unit_id=1) for i in range(30)]
+        articles += [_unit_article('2026-08-06', i, unit_id=2) for i in range(30, 60)]
+
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=20, fill_per_day_limit=0)
+        unit1 = [a for a in articles if a['unit_id'] == 1 and id(a) in enriched]
+        unit2 = [a for a in articles if a['unit_id'] == 2 and id(a) in enriched]
+        assert len(unit1) == 20
+        assert len(unit2) == 20
+        # 단별 확보분은 그 단 안에서 최신순(가장 이른 idx)이어야 함
+        assert {a['title'] for a in unit1} == {f'2026-08-06-{i}-u1' for i in range(20)}
+
+    def test_remaining_slots_filled_by_daily_stratified_sample(self, monkeypatch):
+        """단별 확보 후 남는 기사는 날짜별 상한으로 채워져야 한다(날짜 편중 방지 유지)."""
+        self._mock_units(monkeypatch, ids=(1,))
+        counts = {'2026-08-01': 50, '2026-08-02': 50}
+        articles = []
+        for day, n in counts.items():
+            articles += [_unit_article(day, i, unit_id=1) for i in range(n)]
+
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=10, fill_per_day_limit=15)
+        enriched_days = {a['collected_at'][:10] for a in articles if id(a) in enriched}
+        assert enriched_days == {'2026-08-01', '2026-08-02'}  # 두 날짜 모두 대표됨
+
+    def test_articles_never_double_counted_between_unit_and_fill_phase(self, monkeypatch):
+        self._mock_units(monkeypatch, ids=(1, 2))
+        articles = [_unit_article('2026-08-06', i, unit_id=1) for i in range(5)]
+        articles += [_unit_article('2026-08-06', i, unit_id=2) for i in range(5, 10)]
+
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=20)
+        # 전체 10건뿐이므로 전부 확보되고, 중복 없이 정확히 10개 id만 존재해야 함
+        assert len(enriched) == 10
+
+    def test_unassigned_unit_id_only_reachable_via_fill_phase(self, monkeypatch):
+        """unit_id가 None(미배정)인 기사는 단별 확보 대상이 아니라 나머지 채움에서만 나온다."""
+        self._mock_units(monkeypatch, ids=(1,))
+        articles = [_unit_article('2026-08-06', i, unit_id=None) for i in range(5)]
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=20)
+        assert len(enriched) == 5
+
+    def test_empty_input(self, monkeypatch):
+        self._mock_units(monkeypatch)
+        assert _unit_balanced_enriched_ids([], per_unit=20) == set()
+
+    def test_end_to_end_all_units_get_analysis_snippet_in_prompt(self, monkeypatch):
+        """실제 프롬프트 조립까지: 소수 단 기사도 '분석:' 스니펫이 붙어야 한다."""
+        self._mock_units(monkeypatch, ids=(3, 4))
+        day = '2026-08-06'
+        articles = [_unit_article(day, i, unit_id=3) for i in range(40)]
+        articles += [_unit_article(day, i, unit_id=4) for i in range(40, 43)]
+        for a in articles:
+            a['analysis_result'] = f"상세분석-{a['title']}"
+
+        enriched = _unit_balanced_enriched_ids(articles, per_unit=20)
+        summaries = _build_news_summaries(articles, enriched)
+        combined = '\n'.join(summaries)
+        for a in articles:
+            if a['unit_id'] == 4:
+                assert f"분석: 상세분석-{a['title']}" in combined
