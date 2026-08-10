@@ -31,6 +31,7 @@ from news_engine import (
     get_claude_client,
     OPENAI_MODEL_DEFAULT,
     CLAUDE_MODEL_DEFAULT,
+    get_all_units,
 )
 
 # ==============================================================================
@@ -168,6 +169,46 @@ def _build_news_summaries(articles: List[Dict], enriched: set) -> List[str]:
     return summaries
 
 
+# 단별 최소 분석 스니펫 확보 건수(최근순)
+WEEKLY_UNIT_MIN_ENRICHED = 20
+
+
+def _unit_balanced_enriched_ids(
+    articles: List[Dict],
+    per_unit: int = WEEKLY_UNIT_MIN_ENRICHED,
+    fill_per_day_limit: int = 30,
+) -> set:
+    """분석 스니펫을 붙일 기사 집합을 단별 안배로 고른다.
+
+    1) 4개 단 각각에서 최근순으로 per_unit건씩 우선 확보한다.
+    2) 남은 기사는 기존 _stratified_daily_sample(날짜별 상한)로 채운다.
+
+    Why: _stratified_daily_sample만으로는 날짜 편중은 막아도 단 편중은 막지
+    못한다 — 뉴스 절대량이 큰 단(AI융합표준단)이 날짜별 상한 안에서도 표본을
+    독점해, 위성통신·6G처럼 특정 단(전파네트워크표준단)에 집중된 주제가 분석
+    스니펫에서 배제되는 문제가 있었다(2026-08-10 발견). 제목 목록 자체는
+    _build_news_summaries가 항상 전체를 보여주므로 이 함수는 "어떤 기사에
+    분석 깊이를 더할지"만 결정한다.
+    """
+    unit_ids = [u['id'] for u in get_all_units()]
+
+    by_unit: Dict[Optional[int], List[Dict]] = defaultdict(list)
+    for a in articles:
+        by_unit[a.get('unit_id')].append(a)
+
+    selected: List[Dict] = []
+    selected_obj_ids = set()
+    for uid in unit_ids:
+        for a in by_unit.get(uid, [])[:per_unit]:
+            selected.append(a)
+            selected_obj_ids.add(id(a))
+
+    remaining = [a for a in articles if id(a) not in selected_obj_ids]
+    selected.extend(_stratified_daily_sample(remaining, per_day_limit=fill_per_day_limit))
+
+    return {id(a) for a in selected}
+
+
 def _run_dual_ai_analysis(
     initial_prompt: str,
     validation_prompt_builder,
@@ -221,7 +262,10 @@ def analyze_weekly_trends(articles: List[Dict]) -> Dict:
     # 날짜별 최대 30건까지만 분석 스니펫을 덧붙여 프롬프트 크기를 관리한다.
     # (articles[:100] 단순 truncate는 최근 1~2일에 편중돼 그 이전 뉴스가 아예
     # 반영되지 않는 문제가 있었음 — _stratified_daily_sample/_build_news_summaries 참고)
-    enriched_ids = {id(a) for a in _stratified_daily_sample(articles, per_day_limit=30)}
+    # 날짜 안배만으로는 뉴스 절대량이 큰 단(AI융합표준단)이 여전히 표본을
+    # 독점해 위성통신·6G 등 특정 단(전파네트워크표준단) 주제가 배제되므로,
+    # 단별 최소 확보를 먼저 하고 남는 슬롯만 날짜별 상한으로 채운다.
+    enriched_ids = _unit_balanced_enriched_ids(articles)
     news_summaries = _build_news_summaries(articles, enriched_ids)
 
     news_text = "\n".join(news_summaries)
