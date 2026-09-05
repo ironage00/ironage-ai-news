@@ -156,15 +156,20 @@ def collect_metrics(days: int) -> dict:
                 .all()
             )
         for lr in log_rows:
-            if not lr.selected:
-                continue
+            # 기록 시점(run_phase26_selection)에서 이미 "AI 선별(selected=True)
+            # 또는 하한 보장 보충(selected=False, reason='하한 보장 보충')"인
+            # 행만 남기고 나머지는 걸러졌으므로, 여기 있는 행은 전부 활성 전환 시
+            # 최종 풀에 남는 기사다. selected=True만 세면 하한 보충분이 통째로
+            # 빠져 '전환 시 단별 최종 건수' 미리보기가 과소 집계된다(2026-08-10
+            # news_engine.py 수정과 짝 — 그쪽에서 섀도 모드도 supplemented를
+            # 채우도록 고쳤으니 여기서도 함께 세야 한다).
             shadow_modes.add(lr.mode)
             date = _kst_date(lr.run_ts)
             uids = _decode_unit_ids(lr.unit_ids_str)
             for uid in (uids or [0]):
                 unit = unit_names.get(uid, '(미배정)' if uid == 0 else f'단#{uid}')
                 shadow_daily[(unit, date)] += 1
-            if lr.reason and lr.score and lr.score >= 4 and len(shadow_reasons) < 3:
+            if lr.selected and lr.reason and lr.score and lr.score >= 4 and len(shadow_reasons) < 3:
                 shadow_reasons.append(f"(score {lr.score}) {_sanitize_md_cell(lr.reason, 80)}")
     except Exception:
         pass  # selection_log 테이블이 없거나 조회 실패 — 섹션 생략

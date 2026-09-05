@@ -8266,14 +8266,27 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     # 하한 보충 품질 게이트 — 후보 부족 단이 floor를 채우려고 오매칭 쓰레기를
     # 끌어오는 것을 차단(구 시스템 has_ict_keyword 이식). 문제 시 CONFIG로 즉시 롤백.
     _floor_gate = bool(CONFIG.get('selection_floor_quality_gate', True))
-    supplemented: set = set()
+    # 하한 보장 계산은 모드에 상관없이 여기서 1회만 수행한다.
+    # 활성 모드는 결과를 풀에 실제로 반영하고, 섀도 모드는 풀은 그대로 둔 채
+    # '전환 시 결과' 시뮬레이션 용도로만 쓴다 — 예전엔 이 계산이 아래 selection_log
+    # 기록 이후(섀도 전용 블록)에서야 이뤄져 supplemented가 그 시점엔 항상 빈
+    # set이었고, 그 결과 섀도 실행의 selection_log에는 하한 보충분이 전혀 남지
+    # 않아 scripts/eval_selection.py의 "전환 시 단별 최종 건수" 미리보기가 AI가
+    # 고른 원본 선별분만 반영한 과소 집계였다(2026-08-10 실측 확인). 계산 시점을
+    # 앞당겨 섀도에서도 supplemented가 채워지도록 수정.
     if mode == 'active':
         unit_pools, supplemented = _apply_unit_floor(
             unit_pools, set(selected_map), floor, quality_gate=_floor_gate,
             floor_by_uid=floor_by_uid)
-        info['supplemented'] = len(supplemented)
+    else:
+        _sim_pools, supplemented = _apply_unit_floor(
+            unit_pools, set(selected_map), floor, quality_gate=_floor_gate,
+            floor_by_uid=floor_by_uid)
+    info['supplemented'] = len(supplemented)
 
-    # 섀도/활성 공통: selection_log 기록 (실패해도 파이프라인 영향 없음)
+    # 섀도/활성 공통: selection_log 기록 (실패해도 파이프라인 영향 없음).
+    # supplemented가 위에서 모드 상관없이 채워지므로, 섀도 로그에도 하한 보충
+    # 시뮬레이션 결과가 함께 남는다(뉴스레터 반영과는 무관 — 계측 전용).
     try:
         with get_db_session() as _s:
             for it in candidates:
@@ -8299,13 +8312,8 @@ def run_phase26_selection(unit_pools: dict, unit_cfgs: dict, ai_model: str) -> t
     except Exception as _loge:
         log_warning(f"[Phase 2.6] selection_log 기록 실패: {_loge}")
 
-    # 섀도 모드 미리보기: 활성 모드와 동일하게 하한 보장까지 시뮬레이션해
-    # '전환 시 단별로 실제 몇 개가 남는지'를 정직하게 기록 (풀은 변경하지 않음)
+    # 섀도 모드 미리보기 로그 — '전환 시 단별로 실제 몇 개가 남는지' (풀은 변경하지 않음)
     if mode == 'shadow':
-        _sim_pools, _sim_supp = _apply_unit_floor(
-            unit_pools, set(selected_map), floor, quality_gate=_floor_gate,
-            floor_by_uid=floor_by_uid)
-        info['supplemented'] = len(_sim_supp)
         for uid, pool in unit_pools.items():
             picked = sum(1 for it in pool if it['link'] in selected_map)
             disp = unit_cfgs.get(uid, {}).get('display', f'단#{uid}')

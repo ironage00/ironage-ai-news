@@ -276,6 +276,59 @@ def test_shadow_mode_never_alters_pools(monkeypatch):
     assert info['mode'] == 'shadow' and info['selected'] == 1
 
 
+class _RecordingSession:
+    """SelectionLog.add() 호출을 기록하는 세션 — query()는 기존 컨벤션대로 차단
+    (호출되더라도 run_phase26_selection의 try/except가 흡수해 add() 기록에는
+    영향 없음)."""
+    def __init__(self):
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def commit(self): pass
+
+    def query(self, *a, **k): raise RuntimeError('테스트에서 DB 조회 금지')
+
+
+def test_shadow_mode_selection_log_includes_floor_supplement(monkeypatch):
+    """섀도 모드에서도 selection_log에 하한 보충분이 함께 기록돼야, scripts/
+    eval_selection.py의 '전환 시 단별 최종 건수' 미리보기가 실제 활성 전환
+    결과를 정확히 반영한다.
+
+    수정 전에는 하한 보장 시뮬레이션이 selection_log 기록 이후(섀도 전용
+    블록)에서야 계산돼 기록 시점의 supplemented가 항상 빈 set이었다 — 그
+    결과 섀도 실행의 selection_log에는 AI가 고른 원본 선별분만 남고 하한
+    보충분은 통째로 누락돼, eval_selection.py 리포트가 실제 전환 시보다
+    적은 건수를 보여주는 과소 집계였다."""
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'shadow')
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_unit_floor', 5)
+    monkeypatch.setitem(news_engine.CONFIG, 'selection_hard_supplement_enabled', False)
+    monkeypatch.setattr(news_engine, 'ai_select_articles',
+                        lambda *a, **k: [{'index': 0, 'score': 5, 'reason': 'x'}])
+    session = _RecordingSession()
+
+    @contextlib.contextmanager
+    def _session_cm():
+        yield session
+
+    monkeypatch.setattr(news_engine, 'get_db_session', _session_cm)
+
+    pools = _pools_with_tags()  # 30개, 전부 ICT 신호 포함 → floor 보충 품질 게이트 통과
+    original_links = [it['link'] for it in pools[1]]
+    new_pools, info = run_phase26_selection(pools, {1: {'display': 'T'}}, 'openai')
+
+    # 섀도 계약: 풀 자체는 절대 불변
+    assert [it['link'] for it in new_pools[1]] == original_links
+    # 선별 1(l0) + 보충 4(l1~l4) = floor 5
+    assert info['supplemented'] == 4
+
+    logged_selected = {row.link for row in session.added if row.selected}
+    logged_supplement_only = {row.link for row in session.added if not row.selected}
+    assert logged_selected == {'l0'}
+    assert logged_supplement_only == {'l1', 'l2', 'l3', 'l4'}
+
+
 def test_ai_failure_keeps_original_pools(monkeypatch):
     """AI 호출 실패 시 graceful fallback — 원본 풀 유지 (과압축 재발 방지)."""
     monkeypatch.setitem(news_engine.CONFIG, 'selection_mode', 'active')
