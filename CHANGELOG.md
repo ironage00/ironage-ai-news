@@ -3,6 +3,30 @@
 이 프로젝트의 주요 변경 사항을 기록합니다.
 형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/), 버전: MAJOR.MINOR.PATCH.MICRO
 
+## [0.4.26.0] - 2026-09-09
+
+### Fixed
+- **Streamlit Cloud 대시보드(`main_app.py`) 배포 완전 실패**: 사용자가 대시보드
+  URL 접속 불가를 신고, Streamlit Cloud 배포 로그를 받아 확인.
+  - 로그: `apt-get update` 단계에서 `packages.microsoft.com/debian/11/prod
+    bullseye` 저장소의 `Release` 파일 만료(`invalid since 1d 9h...`)로
+    `installer returned a non-zero exit code` — 앱이 아예 부팅되지 못함.
+  - 근본 원인: 레포 루트의 `packages.txt`(`libpq-dev` 한 줄)가 원인. 이 파일은
+    2026-06-23(커밋 1d8df1b) 당시 **포털(`TTA Trend Portal/dashboard/`,
+    모노레포 시절)** 배포용으로 추가됐다가 "Streamlit Cloud는 레포 루트만
+    읽는다"는 이유로 루트로 이동(커밋 ef81055)됐음. 2026-07-01 포털이 별도
+    저장소로 분리된 뒤에도 이 파일만 `ironage-ai-news`에 그대로 남아, 의도치
+    않게 `main_app.py` 배포에 적용되고 있었음. 정작 `main_app.py`는
+    `psycopg2-binary`(사전 빌드된 wheel, 빌드 의존성 불필요)를 쓰므로
+    `libpq-dev`가 애초에 필요 없었음 — 있으나 마나 한 apt 요청 하나가
+    Streamlit Cloud 빌드 환경의(우리 쪽 원인이 아닌) 저장소 만료와 겹쳐
+    `apt-get update` 전체를 실패시킨 것.
+  - 수정: 불필요한 `packages.txt` 삭제. apt 의존성이 없으면 Streamlit Cloud가
+    apt 단계 자체를 건너뛰므로 이 저장소 만료 문제를 완전히 우회함.
+    `.devcontainer/devcontainer.json`은 `packages.txt` 존재 여부를 조건부로
+    확인하므로(`[ -f packages.txt ] && ...`) 로컬 Codespaces 개발 흐름에는
+    영향 없음.
+
 ## [0.4.25.0] - 2026-08-10
 
 ### Fixed
