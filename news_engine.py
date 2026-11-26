@@ -1,4 +1,4 @@
-﻿"""
+"""
 IRONAGE AI Analytics System v5.0
 뉴스 수집 및 분석 엔진 (오류 수정 버전)
 """
@@ -5888,7 +5888,7 @@ def send_gmail_report(
         return
     if not actual_receivers:
         log_warning("  ⚠️ 이메일 수신자가 없습니다. 발송 건너뜀.")
-        return
+        return False
 
     _unit_label = unit_display or 'TTA'
     _from_display = (sender_name.strip() if sender_name else '') or f'{_unit_label} AI'
@@ -5912,10 +5912,15 @@ def send_gmail_report(
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
             server.starttls()
             server.login(SENDER_EMAIL, GMAIL_PASSWORD)
-            server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
+            refused = server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
+        if refused:
+            log_error(f"  (오류) 이메일 수신 거부: {len(refused)}명")
+            return False
         log_info(f"  > ✅ 이메일이 {len(actual_receivers)}명의 수신자에게 성공적으로 발송되었습니다.")
+        return True
     except Exception as e:
         log_error(f"  (오류) 이메일 발송에 실패했습니다: {e}")
+        return False
 
 
 # ==============================================================================
@@ -8768,14 +8773,16 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
             _esp = data['email_subject_prefix']; _esub = _subj; _ob = _other_briefs
             # 내러티브는 active 모드일 때만 실제 뉴스레터에 삽입 (shadow=관리자 미리보기만)
             _nt = _unit_narratives.get(uid) if _narrative_mode == 'active' else None
-            safe_execute(
+            _mail_result = safe_execute(
                 lambda rt=_rt, a=_a, du=_du, on=_on, rcv=_rcv, sn=_sn, dp=_dp, esp=_esp, esub=_esub, ob=_ob, nt=_nt:
                     send_gmail_report(rt, a, du, on, receivers=rcv, sender_name=sn,
                         unit_display=dp, email_subject_prefix=esp, email_subject_override=esub,
                         include_daily_brief=True, other_units_briefs=ob, narrative_text=nt),
                 error_msg=f"[{display}] 이메일 실패",
-                default_return=None,
+                default_return=False,
             )
+            if _mail_result is False:
+                unit_result['errors'].append('이메일 발송 실패')
 
         safe_execute(
             lambda a=_a: save_analysis_to_weekly_excel(a),
@@ -8870,6 +8877,11 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
         log_warning(f"   ⚠️ Step Summary 기록 실패 (파이프라인에 영향 없음): {_sum_err}")
 
     return summary
+
+
+def failed_newsletter_units(summary: dict) -> list:
+    return [name for name, result in summary.items()
+            if '이메일 발송 실패' in result.get('errors', [])]
 
 
 def run_all_units_daily(ai_model: str = None, target_unit_id: int = None) -> dict:
@@ -9740,7 +9752,11 @@ if __name__ == "__main__":
             # 기본: 4개 단 통합 파이프라인 (수집→분석→이메일)
             # 치명적 예외는 관리자에게 통보 후 재발생 (Actions에서도 실패로 표시)
             try:
-                run_all_units_daily(ai_model=_args.model)
+                _daily_summary = run_all_units_daily(ai_model=_args.model)
+                _mail_failures = failed_newsletter_units(_daily_summary)
+                if _mail_failures:
+                    log_error(f"뉴스레터 발송 실패: {', '.join(_mail_failures)}")
+                    sys.exit(1)
             except Exception as _fatal:
                 _ops_alert('daily 파이프라인 치명적 오류', [
                     f"파이프라인이 완료되지 못하고 중단됐습니다: {str(_fatal)[:300]}",
