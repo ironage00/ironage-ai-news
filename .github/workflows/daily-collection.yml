@@ -78,3 +78,35 @@ jobs:
             || echo "## ⚠️ score-impact 상관 리포트 실패" >> "$GITHUB_STEP_SUMMARY"
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  # 수집이 끝나면 포털(ironage00/tta-trend-portal)의 daily-pipeline을 바로 호출한다.
+  # 포털의 GitHub schedule은 매일 5.5~10시간 늦게 돌아 오전 수집분이 오후에야 반영됐다(2026-11).
+  # 수집이 실패해도 호출해 포털의 최신성 점검이 즉시 알림을 보내게 한다(포털이 클러스터·스냅샷은 건너뜀).
+  # PORTAL_DISPATCH_TOKEN: tta-trend-portal 전용 fine-grained PAT, 권한 Actions: Read and write.
+  # 미설정이면 안내만 남기고 성공 처리(포털은 백업 schedule로 동작). 설정됐는데 호출이 실패하면 이 잡이 실패한다.
+  notify-portal:
+    needs: collect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger portal daily pipeline
+        env:
+          PORTAL_DISPATCH_TOKEN: ${{ secrets.PORTAL_DISPATCH_TOKEN }}
+          COLLECTION_STATUS: ${{ needs.collect.result }}
+          BACKEND_RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "$PORTAL_DISPATCH_TOKEN" ]; then
+            echo "::notice::PORTAL_DISPATCH_TOKEN 미설정 — 포털 파이프라인 호출을 건너뜁니다(포털 백업 schedule로 동작)."
+            exit 0
+          fi
+          COLLECTION_DATE=$(TZ=Asia/Seoul date +%F)
+          payload=$(printf '{"ref":"main","inputs":{"collection_status":"%s","collection_date":"%s","backend_run_id":"%s"}}' \
+            "$COLLECTION_STATUS" "$COLLECTION_DATE" "$BACKEND_RUN_ID")
+          curl --fail-with-body --retry 3 --retry-all-errors -sS -X POST \
+            -H "Authorization: Bearer $PORTAL_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/ironage00/tta-trend-portal/actions/workflows/daily-pipeline.yml/dispatches \
+            -d "$payload"
+          echo "포털 daily-pipeline 호출 완료 · 수집 결과 $COLLECTION_STATUS · 수집일 $COLLECTION_DATE" >> "$GITHUB_STEP_SUMMARY"
