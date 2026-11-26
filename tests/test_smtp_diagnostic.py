@@ -1,4 +1,7 @@
 import unittest
+import io
+import smtplib
+from contextlib import redirect_stdout
 from unittest.mock import MagicMock
 
 from scripts.diagnose_smtp import diagnose
@@ -30,6 +33,19 @@ class DiagnosticTests(unittest.TestCase):
         smtp = MagicMock()
         self.assertFalse(diagnose('', '', smtp))
         smtp.assert_not_called()
+
+    def test_response_reports_code_without_server_text(self):
+        smtp = MagicMock()
+        server = smtp.return_value.__enter__.return_value
+        server.ehlo.return_value = (250, b'ok')
+        server.esmtp_features = {'auth': 'PLAIN LOGIN'}
+        server.login.side_effect = smtplib.SMTPAuthenticationError(535, b'5.7.8 secret text')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertFalse(diagnose('sender', 'password', smtp))
+        self.assertIn('535', output.getvalue())
+        self.assertIn('5.7.8', output.getvalue())
+        self.assertNotIn('secret text', output.getvalue())
 
 
 if __name__ == '__main__':
