@@ -5913,6 +5913,8 @@ def send_gmail_report(
             server.starttls()
             server.login(SENDER_EMAIL, GMAIL_PASSWORD)
             refused = server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
+            # sendmail이 돌아왔다면 일부 거부(refused)가 있어도 나머지는 이미 받았다 — 중복 발송 방지 가드용.
+            DAILY_RUN_STATE['newsletter_delivered'] += 1
         if refused:
             log_error(f"  (오류) 이메일 수신 거부: {len(refused)}명")
             return False
@@ -8879,6 +8881,86 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     return summary
 
 
+# 일일 실행 중 send_gmail_report의 sendmail이 끝난 횟수(= 누군가는 받았을 수 있음).
+# daily_run_guard가 '실패(재실행 허용)'와 '일부 발송(재실행 금지)'을 가르는 근거.
+DAILY_RUN_STATE = {'newsletter_delivered': 0}
+
+
+def email_disabled() -> bool:
+    """send_gmail_report와 같은 기준의 DISABLE_EMAIL 판정."""
+    return os.environ.get('DISABLE_EMAIL', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def daily_sends_expected() -> bool:
+    """오늘 뉴스레터를 보내야 하는 실행인지. run_all_units_daily_optimized의 주말 판정
+    (datetime.date.today().weekday() >= 5 → 이메일 생략)과 같은 식을 쓴다."""
+    return datetime.date.today().weekday() < 5 and not email_disabled()
+
+
+def daily_run_outcome(delivered: int, mail_failures: list, crashed: bool, sends_expected: bool) -> str:
+    """일일 실행 결과 → daily_run_marker 상태.
+
+    delivered: sendmail이 끝난 횟수(일부 수신 거부여도 나머지는 받았으므로 포함)
+    sends_expected: 평일이고 DISABLE_EMAIL이 아님 — 뉴스레터를 보냈어야 하는 실행
+    - 아무에게도 전달되지 않음 → failed(재실행 허용). 단, 주말처럼 원래 보내지 않는 날의 정상 종료는 completed.
+      DISABLE_EMAIL 시험 실행도 failed로 남겨 같은 날 실제 실행을 막지 않는다.
+    - 일부라도 전달됐는데 실패·중단이 섞임 → partial(중복 발송 위험, force로만 재실행)
+    - 전부 전달 → completed"""
+    from daily_run_guard import COMPLETED, FAILED, PARTIAL
+    if delivered == 0:
+        if not crashed and not sends_expected and not email_disabled():
+            return COMPLETED  # 주말: 발송하지 않는 날의 정상 종료
+        return FAILED
+    if crashed or mail_failures:
+        return PARTIAL
+    return COMPLETED
+
+
+def run_daily_pipeline_guarded(ai_model: str = None, force: bool = False) -> dict:
+    """중복 실행 방지가 걸린 4개 단 일일 파이프라인. CLI(news_engine.py daily)와 관리자 대시보드가 함께 쓴다.
+
+    Returns: {'skipped': bool, 'reason': str, 'summary': dict|None, 'mail_failures': list}
+    치명적 예외는 상태를 기록한 뒤 다시 던진다."""
+    from daily_run_guard import claim_daily_run, finish_daily_run
+    run_date = _now_kst().strftime('%Y-%m-%d')
+    token = None
+    try:
+        proceed, why, token = claim_daily_run(DB_ENGINE, run_date, _now_kst(), force=force)
+    except Exception as guard_err:
+        # 기록 테이블 문제로 하루를 통째로 놓치지 않도록 실행은 계속한다(파이프라인 자체가 DB를 쓰므로
+        # DB 장애라면 아래에서 실패로 드러난다).
+        log_warning(f"⚠️ 중복 실행 확인 실패 — 실행은 계속합니다: {guard_err}")
+        proceed, why = True, "중복 실행 확인 실패"
+    if not proceed:
+        log_info(f"⏭️ {why} — 중복 실행을 건너뜁니다. 다시 돌리려면 force_rerun을 사용하세요.")
+        return {'skipped': True, 'reason': why, 'summary': None, 'mail_failures': []}
+    log_info(f"▶️ 일일 실행 시작: {why}")
+
+    def _mark(status, detail=""):
+        if token is None:
+            return
+        try:
+            if not finish_daily_run(DB_ENGINE, run_date, status, _now_kst(), detail, token):
+                log_warning("⚠️ 일일 실행 기록을 다른 실행이 가져가 상태를 바꾸지 않았습니다.")
+        except Exception as mark_err:
+            log_warning(f"⚠️ 일일 실행 상태 기록 실패: {mark_err}")
+
+    DAILY_RUN_STATE['newsletter_delivered'] = 0
+    sends_expected = daily_sends_expected()
+    try:
+        summary = run_all_units_daily(ai_model=ai_model)
+    except Exception as fatal:
+        delivered = DAILY_RUN_STATE['newsletter_delivered']
+        _mark(daily_run_outcome(delivered, [], crashed=True, sends_expected=sends_expected),
+              f"전달 {delivered}건 · {str(fatal)[:450]}")
+        raise
+    mail_failures = failed_newsletter_units(summary)
+    delivered = DAILY_RUN_STATE['newsletter_delivered']
+    _mark(daily_run_outcome(delivered, mail_failures, crashed=False, sends_expected=sends_expected),
+          f"전달 {delivered}건" + (f" · 실패: {', '.join(mail_failures)}" if mail_failures else ""))
+    return {'skipped': False, 'reason': why, 'summary': summary, 'mail_failures': mail_failures}
+
+
 def failed_newsletter_units(summary: dict) -> list:
     return [name for name, result in summary.items()
             if '이메일 발송 실패' in result.get('errors', [])]
@@ -9751,11 +9833,19 @@ if __name__ == "__main__":
         else:
             # 기본: 4개 단 통합 파이프라인 (수집→분석→이메일)
             # 치명적 예외는 관리자에게 통보 후 재발생 (Actions에서도 실패로 표시)
+            # 같은 날(KST) 이미 완료됐거나 진행 중이면 건너뛴다 — 뉴스레터 중복 발송 방지.
+            # 강제로 다시 돌리려면 FORCE_RERUN=1 (워크플로 입력 force_rerun).
             try:
-                _daily_summary = run_all_units_daily(ai_model=_args.model)
-                _mail_failures = failed_newsletter_units(_daily_summary)
-                if _mail_failures:
-                    log_error(f"뉴스레터 발송 실패: {', '.join(_mail_failures)}")
+                _run = run_daily_pipeline_guarded(
+                    ai_model=_args.model, force=os.environ.get('FORCE_RERUN', '0') == '1')
+                # GitHub Actions: 건너뜀 여부를 출력해 notify-portal이 포털을 다시 호출하지 않게 한다.
+                if os.environ.get('GITHUB_OUTPUT'):
+                    with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as _gh_out:
+                        _gh_out.write(f"daily_skipped={'true' if _run['skipped'] else 'false'}\n")
+                if _run['skipped']:
+                    sys.exit(0)
+                if _run['mail_failures']:
+                    log_error(f"뉴스레터 발송 실패: {', '.join(_run['mail_failures'])}")
                     sys.exit(1)
             except Exception as _fatal:
                 _ops_alert('daily 파이프라인 치명적 오류', [

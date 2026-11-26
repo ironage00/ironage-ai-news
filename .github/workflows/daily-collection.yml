@@ -11,6 +11,14 @@ on:
         options:
           - 'true'
           - 'false'
+      force_rerun:
+        description: '오늘 실행이 이미 완료됐어도 다시 실행 (뉴스레터 중복 발송 주의)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -25,6 +33,9 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    outputs:
+      # 같은 날 이미 완료/진행 중이라 건너뛰었으면 'true' — notify-portal이 포털을 다시 부르지 않게.
+      skipped: ${{ steps.daily.outputs.daily_skipped }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +56,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run daily collection
+        id: daily
         run: python news_engine.py daily
         env:
           DATABASE_URL:           ${{ secrets.DATABASE_URL }}
@@ -57,6 +69,7 @@ jobs:
           GMAIL_SENDER:           ${{ secrets.GMAIL_SENDER }}
           GMAIL_PASSWORD:         ${{ secrets.GMAIL_PASSWORD }}
           DISABLE_EMAIL:          ${{ github.event.inputs.send_email == 'false' && '1' || '0' }}
+          FORCE_RERUN:            ${{ github.event.inputs.force_rerun == 'true' && '1' || '0' }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
 
@@ -86,7 +99,8 @@ jobs:
   # 미설정이면 안내만 남기고 성공 처리(포털은 백업 schedule로 동작). 설정됐는데 호출이 실패하면 이 잡이 실패한다.
   notify-portal:
     needs: collect
-    if: ${{ !cancelled() }}
+    # 중복 트리거로 건너뛴 실행이면 포털을 다시 부르지 않는다(포털은 첫 실행 때 이미 갱신됨).
+    if: ${{ !cancelled() && needs.collect.outputs.skipped != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

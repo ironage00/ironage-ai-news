@@ -82,6 +82,7 @@ try:
         assign_user_unit,
         run_unit_collection,
         run_all_units_daily,
+        run_daily_pipeline_guarded,
         log_user_activity,
         get_activity_logs,
         IMPACT_LEVEL_ORDER,
@@ -120,7 +121,7 @@ except (ImportError, KeyError) as e:
             clear_clients_cache, check_model_health, _get_impact_info,
             load_user_settings, save_user_settings, get_unit_display_name,
             get_all_units, load_unit_settings, assign_user_unit,
-            run_unit_collection, run_all_units_daily,
+            run_unit_collection, run_all_units_daily, run_daily_pipeline_guarded,
             log_user_activity, get_activity_logs,
             IMPACT_LEVEL_ORDER, IMPACT_LEVEL_COLOR_RGB,
             SessionLocal, NewsArticle,
@@ -1138,25 +1139,33 @@ if selected == "🏠 홈":
             if _skip_units:
                 st.warning(f"⚠️ 키워드/RSS 미설정으로 건너뛸 단: **{', '.join(_skip_units)}**\n\n⚙️ 단별 설정에서 키워드를 추가하세요.")
 
+            _home_force = st.checkbox(
+                "오늘 이미 실행됐어도 다시 실행 (구독자에게 뉴스레터가 다시 발송됩니다)",
+                value=False, key="home_full_process_force",
+            )
             if st.button("🚀 4개 단 전체 프로세스 시작", type="primary",
                          use_container_width=True, key="home_full_process_start"):
                 _home_status = st.empty()
                 _home_status.info("⏳ 실행 중... 단별로 순차 처리합니다. 완료까지 수분~수십분 소요될 수 있습니다.")
                 try:
-                    log_user_activity(_user_email, 'daily_run', {'model': _home_model})
-                    _summary = run_all_units_daily(ai_model=_home_model)
+                    log_user_activity(_user_email, 'daily_run', {'model': _home_model, 'force': _home_force})
+                    _run = run_daily_pipeline_guarded(ai_model=_home_model, force=_home_force)
                     _home_status.empty()
-
-                    st.success("🎉 전체 프로세스 완료!")
-                    for _uname, _r in _summary.items():
-                        if _r.get('errors') and not _r.get('analyzed'):
-                            st.warning(f"⚠️ [{_uname}] 건너뜀 — {_r['errors'][0]}")
-                        else:
-                            st.success(
-                                f"✅ [{_uname}] 수집 {_r['collected']}건 / "
-                                f"저장 {_r['saved']}건 / 분석 {_r['analyzed']}건"
-                            )
-                    st.balloons()
+                    if _run['skipped']:
+                        st.info(f"⏭️ {_run['reason']} — 중복 발송을 막기 위해 실행하지 않았습니다. "
+                                "꼭 다시 실행해야 하면 위 체크박스를 켜세요.")
+                    else:
+                        _summary = _run['summary']
+                        st.success("🎉 전체 프로세스 완료!")
+                        for _uname, _r in _summary.items():
+                            if _r.get('errors') and not _r.get('analyzed'):
+                                st.warning(f"⚠️ [{_uname}] 건너뜀 — {_r['errors'][0]}")
+                            else:
+                                st.success(
+                                    f"✅ [{_uname}] 수집 {_r['collected']}건 / "
+                                    f"저장 {_r['saved']}건 / 분석 {_r['analyzed']}건"
+                                )
+                        st.balloons()
                 except Exception as _home_err:
                     st.error(f"❌ 오류: {str(_home_err)}")
                     st.error(traceback.format_exc())
