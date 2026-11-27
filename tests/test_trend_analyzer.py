@@ -224,3 +224,33 @@ class TestUnitBalancedEnrichedIds:
         for a in articles:
             if a['unit_id'] == 4:
                 assert f"분석: 상세분석-{a['title']}" in combined
+
+
+class TestResolveArticleLinks:
+    """AI가 다시 쓴 관련 기사 제목을 원 기사 링크에 맞추는지(2026-11-27: 3번째 이슈부터 링크 누락)."""
+
+    MAP = {
+        'AI 커닝 막으려면 결국 원시시대로?…첨단 시험의 역설 [이슈톡] - YTN': 'https://e.org/ytn',
+        "'AI 부정행위' 원천 봉쇄할 수 있는 해법은?…업계 \"정부·모델사 협력 필요\"": 'https://e.org/dd',
+        '삼성전자, 6G 시연 성공': 'https://e.org/sam',
+    }
+
+    def test_exact_title(self):
+        from trend_analyzer import _resolve_article_links
+        assert _resolve_article_links(['삼성전자, 6G 시연 성공'], self.MAP)[0]['link'] == 'https://e.org/sam'
+
+    def test_reworded_title_with_different_punctuation_and_outlet(self):
+        from trend_analyzer import _resolve_article_links
+        result = _resolve_article_links(
+            ['AI 커닝 막으려면 결국 원시시대로... 첨단 시험의 역설', 'AI 부정행위 원천 봉쇄할 수 있는 해법은? 업계 정부·모델사 협력'],
+            self.MAP,
+        )
+        assert [r['link'] for r in result] == ['https://e.org/ytn', 'https://e.org/dd']
+
+    def test_unrelated_title_gets_no_link(self):
+        from trend_analyzer import _resolve_article_links
+        assert _resolve_article_links(['미국 반도체 수출 규제 강화 발표'], self.MAP)[0]['link'] == ''
+
+    def test_short_title_is_not_guessed(self):
+        from trend_analyzer import _resolve_article_links
+        assert _resolve_article_links(['6G'], self.MAP)[0]['link'] == ''
