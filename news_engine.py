@@ -5889,6 +5889,15 @@ def send_gmail_report(
     if not actual_receivers:
         log_warning("  ⚠️ 이메일 수신자가 없습니다. 발송 건너뜀.")
         return False
+    _shadow = shadow_mode()
+    if _shadow:
+        # 섀도 발송: 구독자 대신 시험 수신자에게만. 주소가 잘못됐으면 구독자로 되돌아가지 않고 멈춘다.
+        _shadow_to = shadow_receivers()
+        if not _shadow_to:
+            log_error("  (오류) SHADOW_RECEIVERS 주소 형식이 잘못되었습니다. 아무에게도 보내지 않습니다.")
+            return False
+        log_info(f"  🕶️ 섀도 발송: 원래 수신자 {len(actual_receivers)}명 대신 시험 수신자 {len(_shadow_to)}명에게만 보냅니다.")
+        actual_receivers = _shadow_to
 
     _unit_label = unit_display or 'TTA'
     _from_display = (sender_name.strip() if sender_name else '') or f'{_unit_label} AI'
@@ -5901,6 +5910,8 @@ def send_gmail_report(
         _subject = f'[TTA {unit_display}] {report_title}'
     else:
         _subject = f'[TTA] {report_title}'
+    if _shadow:
+        _subject = f'[섀도] {_subject}'
     msg = MIMEMultipart("alternative")
     msg["Subject"] = _subject
     msg["From"] = _from_header
@@ -5914,7 +5925,9 @@ def send_gmail_report(
             server.login(SENDER_EMAIL, GMAIL_PASSWORD)
             refused = server.sendmail(SENDER_EMAIL, actual_receivers, msg.as_string())
             # sendmail이 돌아왔다면 일부 거부(refused)가 있어도 나머지는 이미 받았다 — 중복 발송 방지 가드용.
-            DAILY_RUN_STATE['newsletter_delivered'] += 1
+            # 섀도 발송은 구독자가 받은 것이 아니므로 세지 않는다.
+            if not _shadow:
+                DAILY_RUN_STATE['newsletter_delivered'] += 1
         if refused:
             log_error(f"  (오류) 이메일 수신 거부: {len(refused)}명")
             return False
@@ -8663,7 +8676,7 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
     import pytz as _pytz_l4
     _kst_date = datetime.datetime.now(_pytz_l4.timezone('Asia/Seoul')).strftime('%Y년 %m월 %d일')
     _weekday = datetime.date.today().weekday()
-    _skip_email = _weekday >= 5
+    _skip_email = _weekday >= 5 and not shadow_mode()  # 섀도 시험은 주말에도 보낸다
 
     # 뉴스레터 중요도 필터 — Critical/High만 게재(Medium 이하는 위 저장 게이트에서 이미
     # DB 미저장 처리됨). analysis_cache엔 남아 있으므로 여기서 뉴스레터 목록도 한 번 더
@@ -8886,6 +8899,22 @@ def run_all_units_daily_optimized(ai_model: str = None) -> dict:
 DAILY_RUN_STATE = {'newsletter_delivered': 0}
 
 
+_SHADOW_EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+
+
+def shadow_mode() -> bool:
+    """SHADOW_RECEIVERS가 설정된 시험 실행인지(워크플로 입력 shadow_receiver)."""
+    return bool(os.environ.get('SHADOW_RECEIVERS', '').strip())
+
+
+def shadow_receivers() -> list:
+    """SHADOW_RECEIVERS(쉼표 구분)에서 형식이 맞는 주소만. 하나라도 틀리면 빈 목록(= 발송 중단)."""
+    parts = [p.strip() for p in os.environ.get('SHADOW_RECEIVERS', '').split(',') if p.strip()]
+    if not parts or not all(_SHADOW_EMAIL_RE.match(p) for p in parts):
+        return []
+    return list(dict.fromkeys(parts))
+
+
 def email_disabled() -> bool:
     """send_gmail_report와 같은 기준의 DISABLE_EMAIL 판정."""
     return os.environ.get('DISABLE_EMAIL', '').strip().lower() in ('1', 'true', 'yes', 'on')
@@ -8924,6 +8953,13 @@ def run_daily_pipeline_guarded(ai_model: str = None, force: bool = False) -> dic
     from daily_run_guard import claim_daily_run, finish_daily_run
     run_date = _now_kst().strftime('%Y-%m-%d')
     token = None
+    if shadow_mode():
+        # 섀도 시험은 그날의 실행 기록을 건드리지 않는다 — 실제 실행을 막지도, 다시 열지도 않게.
+        log_info("🕶️ 섀도 실행 — 일일 실행 기록(중복 방지)을 건드리지 않습니다.")
+        DAILY_RUN_STATE['newsletter_delivered'] = 0
+        summary = run_all_units_daily(ai_model=ai_model)
+        return {'skipped': False, 'reason': '섀도 실행', 'summary': summary,
+                'mail_failures': failed_newsletter_units(summary)}
     try:
         proceed, why, token = claim_daily_run(DB_ENGINE, run_date, _now_kst(), force=force)
     except Exception as guard_err:

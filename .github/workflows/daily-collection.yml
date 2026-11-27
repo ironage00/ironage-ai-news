@@ -19,6 +19,11 @@ on:
         options:
           - 'false'
           - 'true'
+      shadow_receiver:
+        description: '섀도 시험: 이 주소로만 발송(구독자에게는 안 감). 비우면 정상 발송'
+        required: false
+        default: ''
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -70,6 +75,7 @@ jobs:
           GMAIL_PASSWORD:         ${{ secrets.GMAIL_PASSWORD }}
           DISABLE_EMAIL:          ${{ github.event.inputs.send_email == 'false' && '1' || '0' }}
           FORCE_RERUN:            ${{ github.event.inputs.force_rerun == 'true' && '1' || '0' }}
+          SHADOW_RECEIVERS:       ${{ github.event.inputs.shadow_receiver }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
 
