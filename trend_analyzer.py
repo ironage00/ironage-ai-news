@@ -585,16 +585,45 @@ def _resolve_article_links(titles: List[str], title_link_map: Dict[str, str]) ->
     정확 매칭 우선, 부분 매칭 fallback.
     """
     result = []
+    keyed = None
     for title in titles:
         link = title_link_map.get(title, '')
         if not link:
-            # 부분 매칭
-            for stored_title, stored_link in title_link_map.items():
-                if title[:20] in stored_title or stored_title[:20] in title:
-                    link = stored_link
-                    break
+            if keyed is None:
+                keyed = [(_title_match_key(t), l) for t, l in title_link_map.items() if l]
+            link = _best_link_by_title(title, keyed)
         result.append({'title': title, 'link': link})
     return result
+
+
+def _title_match_key(title: str) -> str:
+    """제목 비교용 키: ' - 매체명' 꼬리, 기호·공백을 지우고 소문자로."""
+    text = re.sub(r'\s+[-|–]\s+[^-|–]{1,25}$', '', str(title or '')).lower()
+    return re.sub(r'[^0-9a-z가-힣]', '', text)
+
+
+def _best_link_by_title(title: str, keyed: List[Tuple[str, str]], threshold: float = 0.6) -> str:
+    """AI가 다시 쓴 기사 제목(말줄임·문장부호·매체명 차이)에 가장 가까운 원 기사 링크.
+    예전엔 앞 20자 포함 여부만 봐서 3번째 이슈부터 링크가 자주 비었다(2026-11-27).
+    1) 정규화 키 일치 2) 한쪽이 다른 쪽을 포함(8자 이상) 3) 유사도 threshold 이상 중 최고점."""
+    from difflib import SequenceMatcher
+
+    key = _title_match_key(title)
+    if len(key) < 6:
+        return ''
+    best_link, best_score = '', 0.0
+    for other, link in keyed:
+        if len(other) < 6:
+            continue
+        if other == key:
+            return link
+        if min(len(key), len(other)) >= 8 and (key in other or other in key):
+            score = 0.95
+        else:
+            score = SequenceMatcher(None, key, other).ratio()
+        if score > best_score:
+            best_link, best_score = link, score
+    return best_link if best_score >= threshold else ''
 
 
 def _bullet_lines(value) -> List[str]:
@@ -1317,8 +1346,7 @@ def track_issue_continuity(
                     continue
 
                 related_json = json.dumps(
-                    [{'title': t, 'link': title_link_map.get(t, '')}
-                     for t in issue.get('related_articles', [])],
+                    _resolve_article_links(issue.get('related_articles', []), title_link_map),
                     ensure_ascii=False
                 )
                 level = issue.get('impact_level', issue.get('importance', '하'))
