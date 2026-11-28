@@ -7,10 +7,37 @@ import sys
 import re
 
 
+def describe_credentials(sender, password):
+    """값은 찍지 않고 모양만 알린다 — 535의 흔한 원인(공백·줄바꿈 포함, 일반 비밀번호 입력, 계정 불일치)을 가리기 위함."""
+    compact = re.sub(r'\s+', '', password)
+    lines = [
+        f'Password length: {len(password)} (without whitespace: {len(compact)})',
+        'Password whitespace: ' + ('none' if compact == password else
+                                   'leading/trailing' if password.strip() == compact else 'inside'),
+        'Password looks like a Google app password (16 lowercase letters): '
+        + ('yes' if re.fullmatch(r'[a-z]{16}', compact) else 'NO'),
+        'Sender whitespace: ' + ('none' if sender == sender.strip() else 'leading/trailing'),
+    ]
+    domain = sender.strip().rpartition('@')[2].lower() if '@' in sender else ''
+    lines.append('Sender domain: ' + ('missing @' if not domain else
+                                      'gmail.com' if domain in ('gmail.com', 'googlemail.com') else
+                                      'custom domain (Google Workspace account)'))
+    return lines
+
+
+def _enhanced(exc):
+    raw = exc.smtp_error
+    message = raw.decode('ascii', errors='ignore') if isinstance(raw, bytes) else str(raw)
+    match = re.search(r'\b[245]\.[0-9]{1,3}\.[0-9]{1,3}\b', message)
+    return match.group() if match else ''
+
+
 def diagnose(sender, password, smtp_factory=smtplib.SMTP):
     if not sender or not password:
         print('Credentials: missing')
         return False
+    for line in describe_credentials(sender, password):
+        print(line)
     stage = 'connection'
     try:
         with smtp_factory('smtp.gmail.com', 587, timeout=20) as server:
@@ -35,6 +62,8 @@ def diagnose(sender, password, smtp_factory=smtplib.SMTP):
                     return original_auth(mechanism, *args, **kwargs)
                 except smtplib.SMTPResponseException as exc:
                     print(f'AUTH response code: {exc.smtp_code}')
+                    if _enhanced(exc):
+                        print(f'AUTH enhanced status code: {_enhanced(exc)}')
                     raise
 
             server.auth = traced_auth
@@ -45,11 +74,8 @@ def diagnose(sender, password, smtp_factory=smtplib.SMTP):
         print(f'{stage}: FAILED ({type(exc).__name__})')
         if isinstance(exc, smtplib.SMTPResponseException):
             print(f'SMTP response code: {exc.smtp_code}')
-            raw = exc.smtp_error
-            message = raw.decode('ascii', errors='ignore') if isinstance(raw, bytes) else str(raw)
-            match = re.search(r'\b[245]\.[0-9]{1,3}\.[0-9]{1,3}\b', message)
-            if match:
-                print(f'Enhanced status code: {match.group()}')
+            if _enhanced(exc):
+                print(f'Enhanced status code: {_enhanced(exc)}')
         return False
 
 
