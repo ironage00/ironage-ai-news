@@ -79,5 +79,18 @@ def diagnose(sender, password, smtp_factory=smtplib.SMTP):
         return False
 
 
+def diagnose_with_retry(sender, password, smtp_factory=smtplib.SMTP):
+    # 등록된 값 그대로 먼저 시도하고, 실패했고 공백이 섞여 있으면 공백을 뺀 값으로 한 번 더 시도한다.
+    # (구글은 앱 비밀번호를 'abcd efgh ijkl mnop'처럼 띄어 보여 준다.) 반환값은 '등록된 값 그대로'의 성공 여부.
+    if diagnose(sender, password, smtp_factory):
+        return True
+    compact = re.sub(r'\s+', '', password or '')
+    if sender and compact and compact != password:
+        print('--- Retry with whitespace removed from the password ---')
+        ok = diagnose(sender.strip(), compact, smtp_factory)
+        print('Retry without whitespace: ' + ('OK - whitespace was the problem' if ok else 'FAILED - whitespace is not the cause'))
+    return False
+
+
 if __name__ == '__main__':
-    sys.exit(0 if diagnose(os.getenv('GMAIL_SENDER'), os.getenv('GMAIL_PASSWORD')) else 1)
+    sys.exit(0 if diagnose_with_retry(os.getenv('GMAIL_SENDER'), os.getenv('GMAIL_PASSWORD')) else 1)
